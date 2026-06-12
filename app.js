@@ -4376,18 +4376,30 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return [rec.a, rec.b];
   }
   // カーソル最寄りの線を画面距離(px)で拾う。近くに線が無ければ null（=部品クリックへ委ねる）
+  // 構築線（±12mの長い線）は片端がカメラ背後に回ると project() の投影が反転して
+  // 当たり判定が壊れるため、視点空間でニアプレーンにクリップしてから投影する。
   function pickAnnAt(cx, cy) {
     if (!annStore.length) return null;
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
-    const proj = p => {
-      const n = modelGroup.localToWorld(p.clone()).project(cam);
-      return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z };
+    cam.updateMatrixWorld();
+    const inv = new THREE.Matrix4().copy(cam.matrixWorld).invert();
+    const toView = p => modelGroup.localToWorld(p.clone()).applyMatrix4(inv);   // カメラ視点空間（前方= -z）
+    const toScr = v => {
+      const n = v.clone().applyMatrix4(cam.projectionMatrix);
+      return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height };
     };
+    const persp = !!cam.isPerspectiveCamera;
+    const nearZ = persp ? -((cam.near || 0.01) + 1e-4) : null;
     let best = null, bestD = ANN_PICK_PX;
     for (const rec of annStore) {
-      const [A, B] = annPickEnds(rec);
-      const pa = proj(A), pb = proj(B);
-      if (pa.z >= 1 && pb.z >= 1) continue;   // 線分が完全にカメラ背面
+      const [Ae, Be] = annPickEnds(rec);
+      let A = toView(Ae), B = toView(Be);
+      if (persp) {
+        if (A.z > nearZ && B.z > nearZ) continue;   // 両端ともカメラ背後
+        if (A.z > nearZ) A.lerp(B, (nearZ - A.z) / (B.z - A.z));        // 背後側の端をニアプレーンへ
+        else if (B.z > nearZ) B.lerp(A, (nearZ - B.z) / (A.z - B.z));
+      }
+      const pa = toScr(A), pb = toScr(B);
       const d = segPixelDist(cx, cy, pa.x, pa.y, pb.x, pb.y);
       if (d <= bestD) { bestD = d; best = rec; }
     }
