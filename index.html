@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>配管3D — SKT-HD ♦</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    font-family: "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif; background: #0d1326; }
+  #viewport { position: fixed; inset: 0; }
+  #viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #toolbar { position: fixed; right: 10px; bottom: 10px; display: flex; gap: 8px; }
+  #toolbar button { padding: 8px 12px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+    background: rgba(255,255,255,.92); color: #1a2540; cursor: pointer; box-shadow: 0 3px 8px rgba(0,0,0,.3); }
+  #toolbar button:active { background: #cfe0fb; }
+  /* 選択部品の脇に浮かぶ高さ入力フォーム（仮配置→高さ入力→確定） */
+  #hForm, #rotForm { position: fixed; display: none; align-items: center; gap: 6px; z-index: 22;
+    background: rgba(20,28,51,.96); border: 1px solid #4a7bd0; border-radius: 8px;
+    padding: 5px 8px; color: #cfe0fb; font-size: 12px; white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+  #hForm input, #rotForm input { width: 58px; background: #0f1830; color: #dbe4f3; border: 1px solid #36436b;
+    border-radius: 5px; padding: 3px 5px; font-size: 12px; }
+  /* 角度欄は他フォームと同じ見た目。スピナーは入力欄右端に小さく縦並び（ネイティブ風） */
+  #rotWrap { position: relative; display: inline-flex; }
+  #rotA { width: 58px; padding-right: 16px; }
+  #rotA::-webkit-inner-spin-button, #rotA::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  #rotBtns { position: absolute; right: 2px; top: 1px; bottom: 1px; width: 13px; display: flex; flex-direction: column; gap: 1px; }
+  #rotBtns button { flex: 1; min-height: 0; width: 13px; padding: 0; font-size: 7px; line-height: 1;
+    border: 1px solid #36436b; border-radius: 2px; background: #16203a; color: #9fb3d6; cursor: pointer; }
+  #rotBtns button:hover { border-color: #7fa8e8; color: #dbe4f3; }
+  /* 補助三角形の脚に出る距離入力欄（X脚・Y脚）。距離フォームと同形式。JSで位置を毎フレーム更新 */
+  .legBox { position: fixed; display: none; align-items: center; gap: 5px; z-index: 21;
+    background: rgba(20,28,51,.96); border: 1px solid #4a7bd0; border-radius: 8px;
+    padding: 5px 8px; color: #cfe0fb; font-size: 12px; white-space: nowrap;
+    font-family: "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
+    box-shadow: 0 4px 14px rgba(0,0,0,.5); }
+  .legBox input { width: 52px; background: #0f1830; color: #dbe4f3; border: 1px solid #36436b;
+    border-radius: 5px; padding: 3px 5px; font-size: 12px; }
+  /* ビューキューブ脇の家アイコン（AutoCAD風・シンプル） */
+  #homeBtn { position: fixed; right: 168px; top: 18px; width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    opacity: .8; user-select: none; }
+  #homeBtn:hover { opacity: 1; }
+  #homeBtn svg { width: 30px; height: 30px; }
+  /* ビューを90°回す円弧矢印ボタン（ビューキューブ脇に固定・ホームボタンと同様） */
+  .rollBtn { position: fixed; width: 30px; height: 30px; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; opacity: .8; user-select: none; }
+  .rollBtn:hover { opacity: 1; }
+  .rollBtn svg { width: 34px; height: 34px; }
+  .rollBtn.disabled { opacity: .25; cursor: default; pointer-events: none; }
+  #rollCCW { right: 122px; top: 16px; }   /* ビューキューブの左上側 */
+  #rollCW  { right: 12px;  top: 16px; }   /* ビューキューブの右上側 */
+  /* 設置アイテム一覧（右側・ビューキューブの下・表形式） */
+  #itemList { position: fixed; right: 10px; bottom: 56px; width: 366px; max-height: 54vh;
+    background: rgba(20,28,51,.94); border: 1px solid #36436b; border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.4); display: flex; flex-direction: column; overflow: hidden; }
+  #itemList .il-head { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
+    padding: 6px 8px; border-bottom: 1px solid #36436b; letter-spacing: 1px; cursor: pointer; user-select: none; }
+  #itemList .il-head:hover { color: #cfe0fb; background: rgba(127,168,232,.10); }
+  #itemList .il-caret { position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+    font-size: 10px; color: #7fa8e8; letter-spacing: 0; }
+  #itemList .il-body { overflow-y: auto; }
+  #itemList table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  #itemList thead th { position: sticky; top: 0; background: #2a3656; color: #b9c7e6;
+    font-weight: 700; text-align: left; padding: 4px 6px; border-bottom: 1px solid #44537a; white-space: nowrap; }
+  #itemList tbody td { padding: 3px 6px; border-bottom: 1px solid #2a3450; color: #c3cee2;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #itemList tbody tr { cursor: pointer; }
+  #itemList tbody tr:hover { background: rgba(127,168,232,.14); }
+  #itemList tbody tr.selected { background: rgba(47,123,255,.30); }
+  #itemList tbody tr.selected td { color: #eaf1ff; }
+  #itemList .il-empty td { color: #6b7a99; text-align: center; padding: 10px 4px; cursor: default; }
+  #itemList .c-no { color: #7f8ba6; width: 20px; text-align: right; }
+  #itemList .c-type { width: 52px; }
+  #itemList .c-size { width: 66px; }
+  #itemList .c-cls { width: 60px; }
+  #itemList .c-qty { width: 30px; text-align: right; }
+  #itemList .c-mat { width: 84px; padding: 2px 4px; }
+  #itemList .c-mat input.mat-input { width: 100%; box-sizing: border-box; background: #1b2540;
+    border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 2px 4px; font-size: 11px; }
+  #itemList .c-mat input.mat-input:focus { outline: none; border-color: #2f7bff; }
+  #itemList .c-mat input.mat-input::placeholder { color: #5c6b8a; }
+  #itemList .c-del { width: 18px; text-align: center; color: #c98; opacity: 0; font-weight: 700; }
+  #itemList tbody tr:hover .c-del { opacity: .85; }
+  #itemList .c-del:hover { color: #ff6b6b; }
+  /* 図面情報フッター（一覧の最下部・スクロールせず固定） */
+  #itemList .il-foot { border-top: 1px solid #36436b; padding: 7px 8px; display: flex; flex-direction: column; gap: 5px; }
+  #itemList .il-foot .dwg-row { display: flex; align-items: center; font-size: 11px; color: #9fb2d6; }
+  #itemList .il-foot .dwg-row > span { width: 64px; flex: none; }
+  #itemList .il-foot input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
+  #itemList .il-foot input:focus { outline: none; border-color: #2f7bff; }
+  #itemList .il-foot input[type=date] { color-scheme: dark; }
+  /* ツールパレット（左側・部品の3Dアイコンを並べる） */
+  #palette { position: fixed; left: 12px; top: 12px; width: 124px;
+    background: rgba(20,28,51,.92); border: 1px solid #36436b; border-radius: 10px;
+    padding: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+  #palette .pal-title { color: #9fb2d6; font-size: 11px; font-weight: 700;
+    text-align: center; margin-bottom: 6px; letter-spacing: 1px; }
+  #palette .pal-select { width: 100%; margin-bottom: 8px; background: #0f1830; color: #dbe4f3;
+    border: 1px solid #36436b; border-radius: 6px; padding: 4px 5px; font-size: 13px; font-weight: 600; }
+  #palette .pal-items { display: flex; flex-direction: column; gap: 8px; }
+  #palette .pal-opts { margin-top: 8px; border-top: 1px solid #36436b; padding-top: 8px;
+    display: flex; flex-direction: column; gap: 6px; }
+  #palette .pal-opts label { display: flex; flex-direction: column; gap: 2px;
+    font-size: 10px; color: #9fb2d6; }
+  #palette .pal-opts select, #palette .pal-opts input { background: #0f1830; color: #dbe4f3; border: 1px solid #36436b;
+    border-radius: 5px; padding: 3px 4px; font-size: 12px; }
+  .pal-tile { background: transparent; border: 1px solid #36436b; border-radius: 8px;
+    padding: 4px 4px 2px; cursor: pointer; user-select: none; text-align: center;
+    transition: background .1s, border-color .1s; }
+  .pal-tile:hover { border-color: #7fa8e8; background: rgba(127,168,232,.12); }
+  .pal-tile:active { background: rgba(127,168,232,.22); }
+  .pal-tile.selected { border-color: #2f7bff; background: rgba(47,123,255,.22); box-shadow: 0 0 0 2px #2f7bff inset; }
+  .pal-tile .pal-name { color: #c3cee2; }
+  .pal-tile canvas { display: block; width: 100%; height: 64px; pointer-events: none; }
+  .pal-tile .pal-name { font-size: 12px; font-weight: 700; color: #e3ebf8; margin-top: 1px; }
+  /* 窓選択（Ctrl+ドラッグ）のラバーバンド矩形 */
+  #selBox { position: fixed; display: none; z-index: 25; pointer-events: none;
+    border: 1px solid #4a9bff; background: rgba(74,155,255,.16); }
+  /* ===== リボン（上部コマンドバー） ===== */
+  #ribbon { position: fixed; bottom: 0; left: 0; right: 0; height: 46px; z-index: 30;
+    display: flex; align-items: stretch; padding: 0 6px;
+    background: linear-gradient(#131b32, #1b2750); border-top: 1px solid #2c3a63;
+    box-shadow: 0 -2px 10px rgba(0,0,0,.45); user-select: none; overflow-x: auto; }
+  #ribbon::-webkit-scrollbar { height: 5px; }
+  #ribbon::-webkit-scrollbar-thumb { background: #36436b; border-radius: 3px; }
+  #ribbon .brand { display: flex; align-items: center; gap: 5px; padding: 0 12px 0 6px;
+    color: #8fd6ff; font-weight: 700; font-size: 14px; border-right: 1px solid #28335a; white-space: nowrap; }
+  #ribbon .brand .dia { color: #6fc0ff; font-size: 15px; }
+  #ribbon .rb-group { display: flex; flex-direction: column; justify-content: center;
+    border-right: 1px solid #26315580; padding: 2px 7px 1px; }
+  #ribbon .rb-btns { display: flex; gap: 3px; }
+  #ribbon .rb-title { font-size: 9px; color: #6b7ba6; text-align: center; margin-top: 1px;
+    letter-spacing: 2px; }
+  #ribbon button { display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 44px; height: 34px; gap: 1px; border: 1px solid transparent; border-radius: 6px;
+    background: transparent; color: #d3ddf2; cursor: pointer; font-size: 10px; font-weight: 600;
+    padding: 2px 5px; white-space: nowrap; font-family: inherit; }
+  #ribbon button .ic { font-size: 15px; line-height: 1; }
+  #ribbon button:hover { background: rgba(127,168,232,.16); border-color: #3c4f7e; }
+  #ribbon button:active { background: rgba(127,168,232,.30); }
+  #ribbon button.active { background: rgba(47,123,255,.32); border-color: #2f7bff; color: #eaf1ff; }
+  #ribbon .rb-right { margin-left: auto; border-right: none; border-left: 1px solid #26315580; }
+  #ribbon #cmdHelp { color: #8fd6ff; }
+  /* ===== ヘルプパネル（使い方ガイド） ===== */
+  #helpBackdrop { position: fixed; inset: 0; z-index: 40; display: none; background: rgba(5,9,20,.5); }
+  #helpPanel { position: fixed; z-index: 41; top: 12px; right: 14px; width: 440px; max-width: calc(100vw - 28px);
+    max-height: calc(100vh - 70px); display: none; flex-direction: column;
+    background: rgba(18,26,48,.99); border: 1px solid #3a4a6e; border-radius: 12px;
+    box-shadow: 0 12px 44px rgba(0,0,0,.6); color: #cfdaf0; }
+  #helpPanel .hp-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 16px; border-bottom: 1px solid #2c3a63; flex: none; }
+  #helpPanel .hp-head .ttl { font-size: 15px; font-weight: 700; color: #8fd6ff; }
+  #helpPanel .hp-close { cursor: pointer; font-size: 22px; color: #9fb2d6; line-height: 1;
+    padding: 0 7px 2px; border-radius: 6px; }
+  #helpPanel .hp-close:hover { background: rgba(255,255,255,.1); color: #fff; }
+  #helpPanel .hp-body { overflow-y: auto; padding: 10px 18px 18px; font-size: 12.5px; line-height: 1.7; }
+  #helpPanel h3 { font-size: 12px; color: #7fd1ff; margin: 15px 0 4px; letter-spacing: 1px;
+    border-bottom: 1px dashed #2c3a63; padding-bottom: 3px; }
+  #helpPanel h3:first-child { margin-top: 2px; }
+  #helpPanel ul { margin: 3px 0; padding-left: 18px; }
+  #helpPanel li { margin: 3px 0; }
+  #helpPanel b { color: #e8eefb; }
+  #helpPanel code { background: #0f1830; border: 1px solid #2c3a63; border-radius: 4px; padding: 0 4px; font-size: 11.5px; color: #bfe0ff; }
+  #helpPanel kbd { background: #0f1830; border: 1px solid #36436b; border-radius: 4px; padding: 0 5px;
+    font-size: 11px; color: #dbe4f3; font-family: inherit; }
+  /* ===== 線分の書式メニュー（右クリック：色・線種・太さ） ===== */
+  #lineFmtMenu { position: fixed; display: none; z-index: 60; left: 0; top: 0; min-width: 190px;
+    background: rgba(20,28,51,.98); border: 1px solid #4a7bd0;
+    border-radius: 9px; box-shadow: 0 8px 26px rgba(0,0,0,.55); padding: 9px 10px; color: #cfe0fb;
+    font: 12px "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif; user-select: none; }
+  #lineFmtMenu .fm-ttl { font-size: 12px; font-weight: 700; color: #8fd6ff; margin-bottom: 6px; }
+  #lineFmtMenu .fm-sec { font-size: 10px; color: #7e8db0; letter-spacing: 1px; margin: 8px 0 4px; }
+  #lineFmtMenu .fm-row { display: flex; align-items: center; gap: 5px; }
+  #lineFmtMenu .fm-wrap { flex-wrap: wrap; }
+  #lineFmtMenu .fm-sw { width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.35);
+    cursor: pointer; padding: 0; }
+  #lineFmtMenu .fm-sw:hover { outline: 2px solid #7fa8e8; }
+  #lineFmtMenu .fm-sw.on { outline: 2px solid #fff; box-shadow: 0 0 0 2px #2f7bff; }
+  #lineFmtMenu .fm-col { width: 26px; height: 22px; padding: 0; border: 1px solid #36436b;
+    background: #0f1830; border-radius: 4px; cursor: pointer; }
+  #lineFmtMenu .fm-bt { background: #0f1830; color: #dbe4f3; border: 1px solid #36436b; border-radius: 6px;
+    padding: 4px 9px; font-size: 11px; cursor: pointer; font-family: inherit; }
+  #lineFmtMenu .fm-bt:hover { border-color: #7fa8e8; background: rgba(127,168,232,.16); }
+  #lineFmtMenu .fm-bt.on { border-color: #2f7bff; background: rgba(47,123,255,.28); color: #eaf1ff; }
+  #lineFmtMenu .fm-wbtns .fm-bt { min-width: 40px; text-align: center; }
+  #lineFmtMenu .fm-ang { width: 56px; background: #0f1830; color: #dbe4f3; border: 1px solid #36436b;
+    border-radius: 6px; padding: 3px 5px; font-size: 11px; font-family: inherit; }
+  #lineFmtMenu .fm-ang:focus { outline: none; border-color: #2f7bff; }
+  #lineFmtMenu .fm-div { height: 1px; background: #2c3a63; margin: 9px 0 8px; }
+  #lineFmtMenu .fm-note { margin-top: 9px; padding-top: 7px; border-top: 1px solid #2c3a63;
+    font-size: 10px; color: #7e8db0; text-align: center; }
+  #lineFmtMenu .fm-del { width: 100%; color: #ffb4b4; border-color: #5a3a4a; }
+  #lineFmtMenu .fm-del:hover { background: rgba(255,90,90,.18); border-color: #ff6b6b; color: #fff; }
+  #lineFmtMenu.is-xline .fm-wsec, #lineFmtMenu.is-xline .fm-wbtns { opacity: .35; pointer-events: none; }
+  /* ===== タッチ用オンスクリーン・コントローラー（iPad/iPhone） ===== */
+  /* 既定は非表示。JS がタッチ端末を検出すると body.tc-on を付与して表示する */
+  #touchCtrl { position: fixed; left: 12px; bottom: 58px; z-index: 28; display: none;
+    flex-direction: column; gap: 9px; }
+  body.tc-on #touchCtrl { display: flex; }
+  #touchCtrl button { width: 54px; height: 54px; border-radius: 50%; border: 1px solid #3c4f7e;
+    background: rgba(20,28,51,.92); color: #dbe4f3; cursor: pointer; user-select: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 1px; box-shadow: 0 3px 10px rgba(0,0,0,.45); font-family: inherit;
+    -webkit-tap-highlight-color: transparent; touch-action: none; }
+  #touchCtrl button:active { background: rgba(47,123,255,.40); border-color: #2f7bff; }
+  #touchCtrl button .ic { font-size: 21px; line-height: 1; }
+  #touchCtrl button .lb { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: #aebfe0; }
+  #touchCtrl .tc-zoom { font-size: 26px; font-weight: 700; }
+</style>
+</head>
+<body>
+  <!-- リボン（上部コマンドバー）：ファイル / 描画 / 編集 / 表示 -->
+  <div id="ribbon">
+    <div class="brand"><span class="dia">♦</span>配管3D</div>
+    <div class="rb-group">
+      <div class="rb-btns">
+        <button id="cmdSave"  title="図面をファイルに保存（.p3d.json）"><span class="ic">💾</span>保存</button>
+        <button id="cmdOpen"  title="保存した図面を開く"><span class="ic">📂</span>開く</button>
+        <button id="cmdPrint" title="図面と部品表を印刷"><span class="ic">🖨</span>印刷</button>
+        <button id="cmdPng"   title="画面をPNG画像で書き出し"><span class="ic">🖼</span>画像</button>
+      </div>
+      <div class="rb-title">ファイル</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-btns">
+        <button id="cmdLine"  title="線分を引く（2点クリック）"><span class="ic">／</span>線分</button>
+        <button id="cmdXline" title="構築線（レーザー）を引く（2点で方向指定・無限長）"><span class="ic">⌁</span>構築線</button>
+        <button id="cmdDim"   title="寸法線（2点間の距離を測って表示）"><span class="ic">↔</span>寸法線</button>
+      </div>
+      <div class="rb-title">描画</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-btns">
+        <button id="cmdDup"    title="選択中のアイテムを複製"><span class="ic">⧉</span>複製</button>
+        <button id="cmdMirror" title="選択中のアイテムを左右反転（鏡）"><span class="ic">◧</span>鏡</button>
+        <button id="cmdDel"    title="選択中のアイテムを削除"><span class="ic">🗑</span>削除</button>
+      </div>
+      <div class="rb-title">編集</div>
+    </div>
+    <div class="rb-group">
+      <div class="rb-btns">
+        <button id="cmdZoom" title="全体（または選択）が収まるようズーム"><span class="ic">⛶</span>範囲ズーム</button>
+        <button id="cmdHome" title="視点を初期位置へ戻す"><span class="ic">⌂</span>ホーム</button>
+      </div>
+      <div class="rb-title">表示</div>
+    </div>
+    <div class="rb-group rb-right">
+      <div class="rb-btns">
+        <button id="cmdHelp" title="使い方・機能の説明を開く"><span class="ic">❔</span>ヘルプ</button>
+      </div>
+      <div class="rb-title">？</div>
+    </div>
+  </div>
+  <div id="viewport"></div>
+
+  <!-- ヘルプ：使い方・機能の説明（ヘルプボタンで開閉） -->
+  <div id="helpBackdrop"></div>
+  <div id="helpPanel">
+    <div class="hp-head">
+      <span class="ttl">♦ 配管3D ― 使い方ガイド</span>
+      <span id="helpClose" class="hp-close" title="閉じる（Esc）">×</span>
+    </div>
+    <div class="hp-body">
+      <h3>視点（カメラ）操作</h3>
+      <ul>
+        <li>何もない所から<b>ドラッグ＝回転</b>（床下まで回り込めます）</li>
+        <li><b>ホイールを回す＝拡大／縮小</b>、<b>ホイール押し込みドラッグ＝画面移動</b>、<b>右ドラッグ＝画面移動</b></li>
+        <li>右上の<b>ビューキューブ</b>の面をクリック＝正面・側面など真正面から見る（平行投影）。平行投影中は脇の<b>円弧矢印</b>で画面を90°回転</li>
+        <li><b>ホーム（⌂）</b>＝最初の視点へ戻る</li>
+      </ul>
+      <h3>タッチ操作（iPad / iPhone）</h3>
+      <ul>
+        <li><b>1本指ドラッグ＝回転</b>／<b>2本指ドラッグ＝画面移動</b>／<b>ピンチ＝拡大縮小</b>／<b>タップ＝選択</b></li>
+        <li>左下の<b>コントローラー</b>でマウス専用の操作を代替：<b>＋／−＝拡大縮小</b>、<b>向き＝向きを送る</b>（右クリック相当）、<b>ひねり</b>（Shift＋右クリック相当）、<b>取消</b>（Esc相当）</li>
+        <li>細かい採寸作業は<b>Bluetoothマウスを接続</b>するとPCと同じく右クリック・カーソル吸着が使えます</li>
+      </ul>
+      <h3>部品を置く（パレット）</h3>
+      <ul>
+        <li>左のパレットで種別を選び、<b>タイルをクリック</b>すると部品がカーソルに付いてきます → 3D空間を<b>クリックして仮置き</b>（起点が近くの機点へスナップ）</li>
+        <li>仮置き後、脇に出る<b>高さ／COP</b>欄に数値を入れ<kbd>Enter</kbd>で確定</li>
+        <li>最初の1個は原点(0,0,0)が基準点になります</li>
+        <li>フランジ＝タイプ→呼び径→クラス→フェイス（＋Sch）／継手＝タイプBW・呼び径・Sch／パイプ＝呼び径・Sch・長さ</li>
+      </ul>
+      <h3>部品を動かす・向きを変える</h3>
+      <ul>
+        <li>部品を<b>ドラッグ＝45°方向へ測って移動</b>（距離が脇に表示・数値入力可）</li>
+        <li><b>ダブルクリック＝自由移動</b>（機点スナップあり）</li>
+        <li><b>右クリック＝向きを送る</b>（Z軸45°×8→X軸45°×8）／<b>Shift＋右クリック＝ひねり</b>（45°×8）</li>
+        <li>パイプ＝選択して端の点をクリックで起点選択 → 「長さ」入力かドラッグで伸縮（選んだ端が固定）</li>
+        <li><kbd>Esc</kbd>＝取消／<kbd>Del</kbd>＝削除</li>
+      </ul>
+      <h3>まとめて選ぶ</h3>
+      <ul>
+        <li><b>Ctrl＋クリック＝複数選択</b>（トグル）、<b>Ctrl＋ドラッグ＝窓選択</b>（囲んだものをまとめて選択）</li>
+        <li>右のアイテムリストの<b>行クリック</b>でも同じ仕様をまとめて選択できます</li>
+      </ul>
+      <h3>リボン：ファイル</h3>
+      <ul>
+        <li><b>保存</b>＝図面を <code>.p3d.json</code> で保存（部品・向き・材質・図面情報・注釈をまるごと）</li>
+        <li><b>開く</b>＝保存した図面を読み込み（現在の内容は置き換わります）</li>
+        <li><b>印刷</b>＝3D画像＋部品表＋図面情報をA4横で印刷／<b>画像</b>＝画面をPNG書き出し</li>
+      </ul>
+      <h3>リボン：描画</h3>
+      <ul>
+        <li><b>線分</b>＝起点で<b>押す→ドラッグ→離して終点</b>（離すと確定し、脇の入力欄で長さを微調整可）／<b>構築線</b>＝方向を決め両側へ無限／<b>寸法線</b>＝2点間の距離(mm)</li>
+        <li>起点・終点は<b>部品の機点や他の線・寸法線の端点へスナップ</b>（吸着すると<b>緑の印</b>が出て、そこへ引き寄せられます）</li>
+        <li>斜めに引くと<b>補助三角形</b>が出て、<b>X方向・Z方向</b>の脚に長さ(mm)欄が表示。数値を入れて<kbd>Enter</kbd>で正確な寸法に確定（部品の方向移動と同じ操作）</li>
+        <li><kbd>Shift</kbd>を押しながら＝<b>Y方向（鉛直）に引く</b>（入力欄は「Y」）。水平角は<b>45°刻み固定</b>で拘束されます</li>
+        <li>描画中：<b>右クリック／<kbd>Esc</kbd>＝取消・解除</b>、<kbd>Del</kbd>＝直近の注釈を取消／<b>右ドラッグ＝移動</b>・<b>ホイール＝拡大</b></li>
+        <li>リボンの<b>線分／構築線／寸法線アイコンを右クリック</b>＝<b>線種を選ぶだけ</b>（色は線種で固定：<b>実線＝白／破線＝黒／点線＝青／一点鎖線＝赤</b>。太さは極細・角度は45°刻み固定）。閉じる時は<b>空間で一度クリック</b>→以降は押し下げで起点</li>
+        <li>描き終えた線は（描画モードでない時）<b>クリックで選択</b>＝<b>本体ドラッグで移動</b>／<b>端の青ハンドルをドラッグで長さ変更</b>（脚・L欄で数値確定も可）。<kbd>Del</kbd>で削除、<kbd>Esc</kbd>で選択解除</li>
+      </ul>
+      <h3>リボン：編集 / 表示</h3>
+      <ul>
+        <li><b>複製</b>＝選択を100mm斜めにずらしてコピー／<b>鏡</b>＝選択範囲の中心で左右反転／<b>削除</b></li>
+        <li><b>範囲ズーム</b>＝全体（選択があれば選択）が画面に収まるよう視点を移動</li>
+      </ul>
+    </div>
+  </div>
+  <!-- ツールパレット：部品の3Dアイコンを並べる -->
+  <div id="palette">
+    <div class="pal-title">アイテム</div>
+    <select id="partSelect" class="pal-select"></select>
+    <div class="pal-items" id="palItems"></div>
+    <div class="pal-opts" id="flangeOptsUI">
+      <label>タイプ<select id="optType"></select></label>
+      <label>呼び径<select id="optSize"></select></label>
+      <label>クラス<select id="optClass"></select></label>
+      <label>フェイス<select id="optFace"></select></label>
+      <label id="optSchWrap">Sch<select id="optSch"></select></label>
+    </div>
+    <div class="pal-opts" id="pipeOptsUI" style="display:none">
+      <label>呼び径<select id="optPipeSize"></select></label>
+      <label>Sch<select id="optPipeSch"></select></label>
+      <label>長さ(mm)<input id="optPipeLen" type="number" step="10" min="1"></label>
+    </div>
+    <div class="pal-opts" id="fittingOptsUI" style="display:none">
+      <label>タイプ<select id="optFitType"></select></label>
+      <label>呼び径<select id="optFitSize"></select></label>
+      <label id="optFitSizeBWrap" style="display:none">小径<select id="optFitSizeB"></select></label>
+      <label>Sch<select id="optFitSch"></select></label>
+    </div>
+  </div>
+  <!-- 設置アイテム一覧（右側・表形式） -->
+  <div id="itemList">
+    <div class="il-head" id="ilHead" title="クリックで折りたたみ">アイテムリスト<span class="il-caret" id="ilCaret">▾</span></div>
+    <div class="il-body" id="ilBodyWrap">
+      <table>
+        <thead><tr><th class="c-no">#</th><th>種別</th><th class="c-type">タイプ</th><th class="c-size">サイズ</th><th class="c-cls">クラス</th><th class="c-qty">数量</th><th class="c-mat">材質</th><th class="c-del"></th></tr></thead>
+        <tbody id="ilBody"></tbody>
+      </table>
+    </div>
+    <!-- 図面情報（作成年月日・場所・名称・図番） -->
+    <div class="il-foot">
+      <div class="dwg-row"><span>作成年月日</span><input id="dwgDate" type="date"></div>
+      <div class="dwg-row"><span>場所</span><input id="dwgPlace" type="text"></div>
+      <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
+      <div class="dwg-row"><span>図番</span><input id="dwgNo" type="text"></div>
+    </div>
+  </div>
+  <!-- 選択部品の脇に出る高さ入力フォーム（高さ/COP を入れて Enter で確定） -->
+  <div id="hForm"><span id="hLabel">高さ</span><input id="hY" type="number" step="1" placeholder="—">mm</div>
+  <!-- 右クリック長押しで出る角度スピナー（線を任意角度で回転）。自前の▲▼で0.5°刻み＋360°折り返し。見た目は他フォームと統一 -->
+  <div id="rotForm"><span id="rotLabel">角度</span><span id="rotWrap"><input id="rotA" type="number" step="0.5" value="0"><span id="rotBtns"><button id="rotUp" type="button" title="+0.5°">▲</button><button id="rotDn" type="button" title="−0.5°">▼</button></span></span><span id="rotUnit">°</span></div>
+  <!-- 方向移動中、補助三角形のX脚・Y脚の値の位置に出る入力欄（距離フォームと同形式） -->
+  <div id="legXBox" class="legBox">X<input id="legX" type="number" step="1">mm</div>
+  <div id="legZBox" class="legBox">Z<input id="legZ" type="number" step="1">mm</div>
+  <!-- 線分の描画中に出る補助三角形の脚（X方向・Z方向・Y方向）と、本線の距離入力欄 -->
+  <div id="lnXBox" class="legBox">X<input id="lnX" type="number" step="1">mm</div>
+  <div id="lnZBox" class="legBox">Z<input id="lnZ" type="number" step="1">mm</div>
+  <div id="lnYBox" class="legBox">Y<input id="lnY" type="number" step="1">mm</div>
+  <div id="lnDBox" class="legBox">L<input id="lnD" type="number" step="1" min="0">mm</div>
+  <!-- タッチ用オンスクリーン・コントローラー（右クリック/ホイール/Escの代替・左側） -->
+  <div id="touchCtrl">
+    <button id="tcZoomIn"  title="拡大（ホイール上）"><span class="ic tc-zoom">＋</span></button>
+    <button id="tcZoomOut" title="縮小（ホイール下）"><span class="ic tc-zoom">−</span></button>
+    <button id="tcOrient"  title="向きを送る（右クリック相当）"><span class="ic">🧭</span><span class="lb">向き</span></button>
+    <button id="tcTwist"   title="ひねり（Shift＋右クリック相当）"><span class="ic">↻</span><span class="lb">ひねり</span></button>
+    <button id="tcEsc"     title="取消・選択解除（Esc相当）"><span class="ic">⎋</span><span class="lb">取消</span></button>
+  </div>
+  <div id="homeBtn" title="視点を初期位置に戻す（ホーム）">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#c9d0dc" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M3 11 L12 3 L21 11"/>
+      <path d="M5 9.5 V20 H19 V9.5"/>
+      <rect x="10" y="14" width="4" height="6"/>
+    </svg>
+  </div>
+  <!-- 画面を90°回す円弧矢印（太い帯＋大きな矢じり・画面外側に固定） -->
+  <div id="rollCW" class="rollBtn" title="画面を右に90°回転">
+    <svg viewBox="0 0 40 40" fill="#c9d3e3">
+      <!-- 帯：上(12時)→右(3時)へ時計回り。矢じりは右下端で下向き -->
+      <path d="M18.6 4.1 A16 16 0 0 1 31.6 16.9 L27.7 17.9 A8 8 0 0 0 19.3 12.0 Z"/>
+      <polygon points="33.9 25.6 38.4 15.1 24.8 18.7"/>
+    </svg>
+  </div>
+  <div id="rollCCW" class="rollBtn" title="画面を左に90°回転">
+    <svg viewBox="0 0 40 40" fill="#c9d3e3">
+      <!-- 帯：上(12時)→左(9時)へ反時計回り。左右反転 -->
+      <path d="M21.4 4.1 A16 16 0 0 0 8.4 16.9 L12.3 17.9 A8 8 0 0 1 20.7 12.0 Z"/>
+      <polygon points="6.1 25.6 1.6 15.1 15.2 18.7"/>
+    </svg>
+  </div>
+
+  <script src="lib/three.min.js"></script>
+  <script src="lib/OrbitControls.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
