@@ -2488,7 +2488,11 @@ if (hYInput) {
   hYInput.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       if (dirActive()) { applyDistInput(); dirDrag = null; clearMarkers(); updateForm(); }   // 距離確定→ロック解除・補助線消去
-      else if (lineElRef()) { window.__lineApplyEl(parseFloat(hYInput.value) || 0); updateForm(); }   // 線分EL確定（起点指定の有無で全体/片側）
+      else if (lineElRef()) {
+        window.__lineApplyEl(parseFloat(hYInput.value) || 0); updateForm();   // 線分EL確定（起点指定の有無で全体/片側）
+        // 構築線：EL決定の後に方位角スピナーを出し、角度も続けて変更できるようにする（2026-06-12 社長指示）
+        if (window.__annSelIsXline && window.__annSelIsXline()) { hYInput.blur(); startRotSpin(true, 0, 0); }
+      }
       else if (selectedParts.size > 1) { applyHeightInput(); updateForm(); }  // 複数選択EL一括確定（選択は維持）
       else if (pipeSelected()) { applyPipeCOP(); updateForm(); }              // パイプCOP確定（端選択＝傾け／未選択＝全体。長さはドラッグ）
       else { applyHeightInput(); selectPart(null); }                          // フランジCOP確定→選択解除
@@ -3617,10 +3621,49 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
+    if (type === 'xline') updateXlinePts();
   }
   function clearAnnotations() {
     for (const r of annStore) { annGroup.remove(r.obj); disposeObj(r.obj); }
     annStore.length = 0;
+    updateXlinePts();
+  }
+
+  // ---- 構築線どうしの交点（CADの交点スナップ）。同一EL（±0.5mm）で交差する2線の交点を
+  //      黄色マーカーで常時表示し、作図・移動のスナップ候補にも加える ----
+  const XPT_COLOR = 0xffd84d;
+  const xptGroup = new THREE.Group();
+  modelGroup.add(xptGroup);
+  let xlinePts = [];                          // 交点（modelローカル）の一覧
+  function xlineIntersections() {
+    const xs = annStore.filter(r => r.type === 'xline');
+    const out = [];
+    const L = 12, tolY = 0.0005;              // 描画範囲±12m／EL一致とみなす許容0.5mm
+    for (let i = 0; i < xs.length; i++) for (let j = i + 1; j < xs.length; j++) {
+      const r1 = xs[i], r2 = xs[j];
+      if (Math.abs(r1.a.y - r2.a.y) > tolY) continue;       // ELが違う＝交わらない
+      const d1 = r1.b.clone().sub(r1.a), d2 = r2.b.clone().sub(r2.a);
+      const l1 = Math.hypot(d1.x, d1.z), l2 = Math.hypot(d2.x, d2.z);
+      if (l1 < 1e-9 || l2 < 1e-9) continue;                 // 水平成分なし（垂直）は対象外
+      const u1x = d1.x / l1, u1z = d1.z / l1, u2x = d2.x / l2, u2z = d2.z / l2;
+      const den = u1x * u2z - u1z * u2x;
+      if (Math.abs(den) < 1e-9) continue;                   // 平行
+      const wx = r2.a.x - r1.a.x, wz = r2.a.z - r1.a.z;
+      const t = (wx * u2z - wz * u2x) / den;                // r1中心からの符号付き距離
+      const u = (wx * u1z - wz * u1x) / den;                // r2中心からの符号付き距離（範囲判定のみに使用）
+      if (Math.abs(t) > L || Math.abs(u) > L) continue;     // レーザーの描画範囲外
+      out.push(new V3(r1.a.x + u1x * t, (r1.a.y + r2.a.y) / 2, r1.a.z + u1z * t));
+    }
+    return out;
+  }
+  function updateXlinePts() {
+    while (xptGroup.children.length) { const c = xptGroup.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
+    xlinePts = xlineIntersections();
+    for (const p of xlinePts) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 12, 10),
+        new THREE.MeshBasicMaterial({ color: XPT_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
+      m.position.copy(p); m.renderOrder = 998; xptGroup.add(m);
+    }
   }
 
   // ---- 描画モードの状態 ----
@@ -3675,6 +3718,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       for (const local of connsOf(p)) test(connModelPos(p, local));
     }
     for (const r of annStore) { if (r === drawState.editRec) continue; test(r.a); test(r.b); }   // 他の線・寸法線の両端（編集中の線自身は除外＝自己吸着で飛ぶのを防ぐ）
+    for (const p of xlinePts) test(p);   // 構築線どうしの交点（CADの交点スナップ）
     return best;
   }
   // 起点 P1 から水平面上の点に角度刻み angleStep を適用（0=自由）
@@ -3866,6 +3910,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     annGroup.remove(rec.obj); disposeObj(rec.obj);
     rec.obj = buildAnn(rec.type, rec.a, rec.b, rec.style);
     annGroup.add(rec.obj);
+    if (rec.type === 'xline') updateXlinePts();   // 構築線が動いたら交点を引き直す
   }
   function clearDrawTemp() {    // 描画途中の状態を全消去（線は残す）
     drawState.first = null; drawState.cur = null; drawState.vert = false;
@@ -4074,8 +4119,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const gp = gripPt();
     const moving = !!(lineDrag && lineDrag.mode === 'sel' && lineDrag.moved);   // 平行移動(sel)中のみ橙に戻す。伸縮(end)は緑のまま
     // 既定・平行移動中＝橙(0xff8a3c)・小。端を選択した静止状態／伸縮中の起点＝緑(0x39ff8a)・少し大。部品マーカーと同色・同形
-    // 構築線は起点を中心(a)ひとつだけ表示（向き点bはハンドルにしない）
-    for (const rec of selAnns) for (const p of (rec.type === 'xline' ? [rec.a] : [rec.a, rec.b])) {
+    // 構築線は起点マーカー不要（2026-06-12 社長指示）。線分のみ両端を表示
+    for (const rec of selAnns) for (const p of (rec.type === 'xline' ? [] : [rec.a, rec.b])) {
       const chosen = (p === gp) && !moving;
       const m = new THREE.Mesh(new THREE.SphereGeometry(chosen ? 0.0028 : 0.0015, 16, 12),
         new THREE.MeshBasicMaterial({ color: chosen ? 0x39ff8a : 0xff8a3c, depthTest: false, transparent: true, opacity: 0.92 }));
@@ -4329,6 +4374,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     selAnns.clear(); clearAnnHi();
     lineSel = null; clearGrip(); clearLineHandles();   // 起点(grip)参照と残った端点ハンドル(起点マーカー)を消す
     if (typeof clearMarkers === 'function') clearMarkers();   // 移動中マーカーの取り残しも消す
+    updateXlinePts();                                  // 構築線が消えたら交点も引き直す
     if (typeof updateForm === 'function') updateForm();
     return n;
   };
@@ -4456,6 +4502,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     };
     for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal) continue; for (const local of connsOf(p)) test(connModelPos(p, local)); }
     for (const r of annStore) { if (exAnns.has(r)) continue; test(r.a); test(r.b); }
+    for (const pt of xlinePts) test(pt);   // 構築線どうしの交点へも吸着
     return best;
   }
   // 移動中の起点(橙)・他アイテムの機点(青/吸着は緑)マーカー。部品の showInteractionMarkers と同じ見た目
