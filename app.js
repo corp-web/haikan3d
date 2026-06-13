@@ -3298,8 +3298,6 @@ function zoomStep(factor) {
     btn.addEventListener('pointercancel', stop);
     btn.addEventListener('contextmenu', e => e.preventDefault());
   };
-  bindHold('tcZoomIn',  () => zoomStep(0.88), true);
-  bindHold('tcZoomOut', () => zoomStep(1.0 / 0.88), true);
   bindHold('tcOrient',  () => orientStep(false), false);
   bindHold('tcTwist',   () => orientStep(true),  false);
   bindHold('tcEsc',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })), false);
