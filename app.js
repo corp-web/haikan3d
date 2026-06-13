@@ -3303,6 +3303,7 @@ function zoomStep(factor) {
   bindHold('tcOrient',  () => orientStep(false), false);
   bindHold('tcTwist',   () => orientStep(true),  false);
   bindHold('tcEsc',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })), false);
+  bindHold('tcDel',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })), false);
   // Shift／Ctrl＝タッチ用の仮想モディファイア（PCのShift/Ctrl押下と同じ挙動を再現するトグル）
   const bindMod = (id, get, set, after) => {
     const btn = document.getElementById(id); if (!btn) return;
