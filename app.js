@@ -836,11 +836,16 @@ function makeFlange(opts) {
     const tipOR  = boreR;                          // 先端の外半径(=管外径)
     const innerR = flowR;                          // 管内径(中空)＝流路穴と同径
     const yTip = back - neckH;
+    // 先端は管と突合せ溶接する開先端(BE)：他継手と同じ30°面取り＋1mmルートフェイス
+    const tW = Math.max(tipOR - innerR, 0);
+    const fW = Math.min(WELD_ROOT_FACE, tW * 0.5);
+    const hW = Math.max(tW - fW, 0) * Math.tan(WELD_BEVEL_DEG * Math.PI / 180);   // 開先の軸方向深さ
     // 断面プロファイル(外側を上→先端→内側を戻る)で中空のWN首を一体成形
     const prof = [
       [rootOR, back],          // 根元 外周（板側）
-      [tipOR,  yTip],          // 先端 外周（テーパで細る）
-      [innerR, yTip],          // 先端 内縁
+      [tipOR,  yTip + hW],     // 先端 外周（開先で hW だけ後退）
+      [innerR + fW, yTip],     // 開先斜面→ルートフェイス外縁
+      [innerR, yTip],          // ルートフェイス内縁（管内径・端面）
       [innerR, back],          // 内側 板側（中空穴の壁）
     ].map(p => new THREE.Vector2(Math.max(p[0], 0.0005), p[1]));
     const wnGeo = new THREE.LatheGeometry(prof, 56);
@@ -943,9 +948,14 @@ function makeStubEnd(opts) {
     const a = Math.PI / 2 + (i / segs) * (Math.PI / 2);
     prof.push(new THREE.Vector2(outR + R + R * Math.cos(a), (yLapBack - R) + R * Math.sin(a)));
   }
-  prof.push(new THREE.Vector2(outR, yEnd));   // 管外周→端
-  prof.push(new THREE.Vector2(inR, yEnd));    // 端面
-  prof.push(new THREE.Vector2(inR, yFace));   // ボア→面側
+  // 管端は配管と突合せ溶接する開先端(BE)：他継手と同じ30°面取り＋1mmルートフェイス
+  const tS = Math.max(outR - inR, 0);
+  const fS = Math.min(WELD_ROOT_FACE, tS * 0.5);
+  const hS = Math.max(tS - fS, 0) * Math.tan(WELD_BEVEL_DEG * Math.PI / 180);   // 開先の軸方向深さ
+  prof.push(new THREE.Vector2(outR, yEnd + hS));   // 管外周（開先で hS だけ後退）
+  prof.push(new THREE.Vector2(inR + fS, yEnd));    // 開先斜面→ルートフェイス外縁
+  prof.push(new THREE.Vector2(inR, yEnd));         // ルートフェイス内縁（端面・ボア）
+  prof.push(new THREE.Vector2(inR, yFace));        // ボア→面側
   prof.push(new THREE.Vector2(lapOR, yFace)); // 面(ガスケット面)で閉じる
   const geo = new THREE.LatheGeometry(prof, 72);
   geo.computeVertexNormals();
@@ -1676,23 +1686,25 @@ function nearestAxisSnap(part, anchorW, axis, clientX, clientY) {
   const perpTol = Math.max(ro * 0.25, 0.0015);   // 軸線からの許容ズレ（ほぼ同一線上のみ）
   const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
   let best = null, bestD = SNAP_PX;              // 移動時と同じ距離感（画面18px）
+  const testPos = (mpos) => {
+    const v = mpos.clone().sub(anchorW);
+    const along = v.dot(axis);                   // 固定端からの軸方向距離
+    if (along <= 0.003) return;                  // 固定端より手前/同位置は対象外
+    const perp = v.clone().sub(axis.clone().multiplyScalar(along)).length();
+    if (perp > perpTol) return;                  // 軸線から外れている＝同じ通りでない→拾わない
+    const ndc = modelGroup.localToWorld(mpos.clone()).project(cam);
+    if (ndc.z >= 1) return;
+    const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
+    const sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+    const d = Math.hypot(sx - clientX, sy - clientY);   // 画面距離（移動スナップと同基準）
+    if (d < bestD) { bestD = d; best = along; }
+  };
   for (const p of placedParts) {
     if (p === part || !p.userData.faceLocal) continue;
-    for (const local of connsOf(p)) {
-      const mpos = connModelPos(p, local);
-      const v = mpos.clone().sub(anchorW);
-      const along = v.dot(axis);                 // 固定端からの軸方向距離
-      if (along <= 0.003) continue;              // 固定端より手前/同位置は対象外
-      const perp = v.clone().sub(axis.clone().multiplyScalar(along)).length();
-      if (perp > perpTol) continue;              // 軸線から外れている＝同じ通りでない→拾わない
-      const ndc = modelGroup.localToWorld(mpos.clone()).project(cam);
-      if (ndc.z >= 1) continue;
-      const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
-      const sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
-      const d = Math.hypot(sx - clientX, sy - clientY);   // 画面距離（移動スナップと同基準）
-      if (d < bestD) { bestD = d; best = along; }
-    }
+    for (const local of connsOf(p)) testPos(connModelPos(p, local));
   }
+  // 線分・寸法線の端点、構築線どうしの交点にも吸着（2026-06-13 社長指示：線分にマッチ）
+  if (window.__annSnapPoints) for (const mpos of window.__annSnapPoints()) testPos(mpos);
   return best;
 }
 // スライド（ドラッグ）でパイプを伸縮。選択(緑)端 pipeEndSel がマウスに追従して動き、反対端を固定。
@@ -2047,7 +2059,9 @@ function moveExistingPart(clientX, clientY) {
   if (!movingPart) return;
   const rect = renderer.domElement.getBoundingClientRect();
   if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return;
-  orientRotation(movingPart, movingOrient, movingRoll);
+  // 注意：ここで orientRotation を再適用してはならない。右クリック45°やスピナーで自由回転させた
+  // 部品の向きが「向き番号テーブル」へ巻き戻されてしまう（2026-06-13 修正：移動前の向きを維持）。
+  // 移動中の向き送りは cycleMoveOrientation が明示的に適用する。
   const curY = originModelPos(movingPart).y;                  // 現在の高さを保持して平行移動
   const tgt = resolveTarget(clientX, clientY, movingPart, curY);
   if (!tgt) return;
@@ -2376,7 +2390,10 @@ function updateForm() {
 // フォームを部品の画面範囲の「脇」に置く（毎フレーム）。どの視点でも部品と重ならない。
 function positionHeightForm() {
   if (!hForm) return;
+  if (window.__mirrorActive && window.__mirrorActive()) { hForm.style.display = 'none'; return; }   // 鏡モード中は入力フォームを出さない
   if (rotForm && rotForm.style.display === 'flex') { hForm.style.display = 'none'; return; }   // 角度スピナー中はEL非表示
+  // 寸法線（単独選択）の「値」フォームは専用のテキスト入力（__positionDimValueForm）が担う
+  if (!selectedPart && selectedParts.size === 0 && window.__dimValueSel && window.__dimValueSel()) { hForm.style.display = 'none'; return; }
   const lref = lineElRef();                     // 線分選択中＝起点側にELフォームを出す
   if (lref) {
     const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
@@ -2486,12 +2503,26 @@ if (hYInput) {
   hYInput.addEventListener('input', applyHY);    // スピナー長押し・連続増減でも追従
   hYInput.addEventListener('change', applyHY);
   hYInput.addEventListener('keydown', e => {
+    // 線選択中のEL欄（構築線は自動フォーカス）：Delete＝選択中の線を削除／Escape＝閉じる（選択解除）
+    // Delete は構築線選択時のみ（線分のEL編集中の文字削除を誤爆させない）
+    if (lineElRef()) {
+      if (e.key === 'Delete' && window.__annSelIsXline && window.__annSelIsXline()) {
+        e.preventDefault(); e.stopPropagation(); hYInput.blur();
+        if (window.__annDeleteSelected) window.__annDeleteSelected();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation(); hYInput.blur();
+        if (window.__annDeselect) window.__annDeselect();
+        return;
+      }
+    }
     if (e.key === 'Enter') {
       if (dirActive()) { applyDistInput(); dirDrag = null; clearMarkers(); updateForm(); }   // 距離確定→ロック解除・補助線消去
       else if (lineElRef()) {
         window.__lineApplyEl(parseFloat(hYInput.value) || 0); updateForm();   // 線分EL確定（起点指定の有無で全体/片側）
-        // 構築線：EL決定の後に方位角スピナーを出し、角度も続けて変更できるようにする（2026-06-12 社長指示）
-        if (window.__annSelIsXline && window.__annSelIsXline()) { hYInput.blur(); startRotSpin(true, 0, 0); }
+        // 構築線：EL決定の後に方位角スピナーを出し、角度Enterで選択ごと閉じる（2026-06-13 社長指示）
+        if (window.__annSelIsXline && window.__annSelIsXline()) { _xlineChainClose = true; hYInput.blur(); startRotSpin(true, 0, 0); }
       }
       else if (selectedParts.size > 1) { applyHeightInput(); updateForm(); }  // 複数選択EL一括確定（選択は維持）
       else if (pipeSelected()) { applyPipeCOP(); updateForm(); }              // パイプCOP確定（端選択＝傾け／未選択＝全体。長さはドラッグ）
@@ -2689,6 +2720,16 @@ function refreshItemList() {
     if (listId) matInp.setAttribute('list', listId);
     // 入力欄の操作は行選択・移動を誘発させない
     ['click', 'mousedown', 'dblclick'].forEach(ev => matInp.addEventListener(ev, e => e.stopPropagation()));
+    // 再選択しやすいよう、フォーカス時に値を一旦空にして候補一覧を全件表示する。
+    // （datalist は入力済み文字で候補を絞り込むため、選択済みだと他が出なくなる）
+    // 現在値は placeholder へ退避し、何も選ばず離れたら元へ戻す（誤消去防止）。
+    matInp.addEventListener('focus', () => {
+      if (matInp.value) { matInp.dataset.prev = matInp.value; matInp.placeholder = matInp.value; matInp.value = ''; }
+    });
+    matInp.addEventListener('blur', () => {
+      if (matInp.value.trim() === '' && matInp.dataset.prev) matInp.value = matInp.dataset.prev;
+      matInp.placeholder = '—'; delete matInp.dataset.prev;
+    });
     // 確定（change＝Enter/フォーカス喪失/候補選択）でグループ全部品へ材質を反映し再集計
     matInp.addEventListener('change', e => {
       e.stopPropagation();
@@ -2957,26 +2998,95 @@ function rotSpinPivot() { return pipeRotateSpinActive() ? pipeRotateSpinPivot() 
 function canRotSpin() { return pipeRotTarget() || (window.__annHasSel && window.__annHasSel() && !selectedPart); }
 // 右クリック微調整のモード：'angle'＝一般の回転スピナー／'move'＝構築線の平行移動（mm）／'heading'＝構築線の方位角（絶対°）
 let _nudgeMode = 'angle';
+// 構築線の「EL→角度→閉じ」連鎖中フラグ：方位角スピナーをEnterで確定したら選択も閉じる（2026-06-13 社長指示）
+let _xlineChainClose = false;
+// EL入力欄へ即フォーカス（クリック不要で Enter 決定できるように）。フォーム表示の1フレーム後に当てる
+function focusElInputSoon() {
+  setTimeout(() => {
+    if (hForm) hForm.style.display = 'flex';
+    if (hYInput) { hYInput.focus(); hYInput.select(); }
+  }, 60);
+}
 function nudgeApply(v) {
   if (_nudgeMode === 'move') { if (window.__annMoveSpinApply) window.__annMoveSpinApply(v); }
   else if (_nudgeMode === 'heading') { if (window.__annHeadingSpinApply) window.__annHeadingSpinApply(v); }
+  else if (_nudgeMode === 'dimdir') { if (window.__dimDirSpinApply) window.__dimDirSpinApply(v); }
+  else if (_nudgeMode === 'dimoff') { if (window.__dimOffSpinApply) window.__dimOffSpinApply(v); }
+  else if (_nudgeMode === 'dimskew') { if (window.__dimSkewSpinApply) window.__dimSkewSpinApply(v); }
+  else if (_nudgeMode === 'dimroll') { if (window.__dimRollSpinApply) window.__dimRollSpinApply(v); }
   else rotSpinApply(v);
 }
 function nudgeActive() {
   if (_nudgeMode === 'move') return !!(window.__annMoveSpinActive && window.__annMoveSpinActive());
   if (_nudgeMode === 'heading') return !!(window.__annHeadingSpinActive && window.__annHeadingSpinActive());
+  if (_nudgeMode === 'dimdir') return !!(window.__dimDirSpinActive && window.__dimDirSpinActive());
+  if (_nudgeMode === 'dimoff') return !!(window.__dimOffSpinActive && window.__dimOffSpinActive());
+  if (_nudgeMode === 'dimskew') return !!(window.__dimSkewSpinActive && window.__dimSkewSpinActive());
+  if (_nudgeMode === 'dimroll') return !!(window.__dimRollSpinActive && window.__dimRollSpinActive());
   return rotSpinActive();
 }
 function nudgePivot() {
   if (_nudgeMode === 'move') return window.__annMoveSpinPivot && window.__annMoveSpinPivot();
   if (_nudgeMode === 'heading') return window.__annHeadingSpinPivot && window.__annHeadingSpinPivot();
+  if (_nudgeMode === 'dimdir') return window.__dimDirSpinPivot && window.__dimDirSpinPivot();
+  if (_nudgeMode === 'dimoff') return window.__dimOffSpinPivot && window.__dimOffSpinPivot();
+  if (_nudgeMode === 'dimskew') return window.__dimSkewSpinPivot && window.__dimSkewSpinPivot();
+  if (_nudgeMode === 'dimroll') return window.__dimRollSpinPivot && window.__dimRollSpinPivot();
   return rotSpinPivot();
 }
-function nudgeStep() { return _nudgeMode === 'move' ? 1 : 0.5; }   // 移動=1mm刻み／角度・方位=0.5°刻み
+function nudgeStep() { return (_nudgeMode === 'move' || _nudgeMode === 'dimoff') ? 1 : 0.5; }   // 移動・逃げ=1mm刻み／角度・方位=0.5°刻み
 function setNudgeLabel() {                                          // フォームの見出し・単位をモードで切替
   const lab = document.getElementById('rotLabel'), unit = document.getElementById('rotUnit');
-  if (lab) lab.textContent = _nudgeMode === 'move' ? '移動' : _nudgeMode === 'heading' ? '方位' : '角度';
-  if (unit) unit.textContent = _nudgeMode === 'move' ? 'mm' : '°';
+  if (lab) lab.textContent = _nudgeMode === 'move' ? '移動' : _nudgeMode === 'dimoff' ? '逃げ' : _nudgeMode === 'dimskew' ? '斜め' : _nudgeMode === 'dimroll' ? '回転' : (_nudgeMode === 'heading' || _nudgeMode === 'dimdir') ? '方位' : '角度';
+  if (unit) unit.textContent = (_nudgeMode === 'move' || _nudgeMode === 'dimoff') ? 'mm' : '°';
+}
+// 逃げ方向の回転スピナー（Shift+右クリックの直後に呼ばれる）
+function startDimRollSpin(rec) {
+  if (!(window.__dimRollSpinStart && window.__dimRollSpinStart(rec))) return;
+  _nudgeMode = 'dimroll';
+  setNudgeLabel();
+  rotAInput.value = window.__dimRollSpinStartDeg ? window.__dimRollSpinStartDeg().toFixed(1) : '0';
+  positionRotForm(0, 0);
+  rotForm.style.display = 'flex';
+  rotAInput.focus(); rotAInput.select();
+  if (typeof updateForm === 'function') updateForm();
+}
+// スライド寸法の角度スピナー（右クリック切替の直後に呼ばれる）
+function startDimSkewSpin(rec) {
+  if (!(window.__dimSkewSpinStart && window.__dimSkewSpinStart(rec))) return;
+  _nudgeMode = 'dimskew';
+  setNudgeLabel();
+  rotAInput.value = window.__dimSkewSpinStartDeg ? window.__dimSkewSpinStartDeg().toFixed(1) : '0';
+  positionRotForm(0, 0);
+  rotForm.style.display = 'flex';
+  rotAInput.focus(); rotAInput.select();
+  if (typeof updateForm === 'function') updateForm();
+}
+// 寸法線スピナーの連鎖対象。next='dir'（配置直後：立面なら方位スピナーへ）／'el'（再選択：EL調整へ）
+let _dimChainRec = null, _dimChainNext = null;
+// 寸法線の逃げ量スピナー（配置確定直後・再選択時に呼ばれる）
+function startDimOffSpin(rec, next) {
+  if (!(window.__dimOffSpinStart && window.__dimOffSpinStart(rec))) return;
+  _nudgeMode = 'dimoff';
+  _dimChainRec = rec;
+  _dimChainNext = next || 'dir';
+  setNudgeLabel();
+  rotAInput.value = window.__dimOffSpinStartMm ? String(window.__dimOffSpinStartMm()) : '0';
+  positionRotForm(0, 0);
+  rotForm.style.display = 'flex';
+  rotAInput.focus(); rotAInput.select();
+  if (typeof updateForm === 'function') updateForm();
+}
+// 立面寸法線の逃げ方位スピナー（逃げ量スピナーの後に呼ばれる）
+function startDimDirSpin(rec) {
+  if (!(window.__dimDirSpinStart && window.__dimDirSpinStart(rec))) return;
+  _nudgeMode = 'dimdir';
+  setNudgeLabel();
+  rotAInput.value = window.__dimDirSpinStartDeg ? window.__dimDirSpinStartDeg().toFixed(1) : '0';
+  positionRotForm(0, 0);
+  rotForm.style.display = 'flex';
+  rotAInput.focus(); rotAInput.select();
+  if (typeof updateForm === 'function') updateForm();
 }
 function positionRotForm(cx, cy) {
   const rect = renderer.domElement.getBoundingClientRect();
@@ -3005,11 +3115,40 @@ function startRotSpin(shift, cx, cy) {
   if (typeof updateForm === 'function') updateForm();   // スピナー表示中はEL入力を隠す
 }
 function endRotSpin(commit) {
+  const wasHeading = _nudgeMode === 'heading';
+  const wasDimOff = _nudgeMode === 'dimoff';
+  const wasDimDir = _nudgeMode === 'dimdir';
   if (_nudgeMode === 'move') { if (commit) { if (window.__annMoveSpinEnd) window.__annMoveSpinEnd(); } else if (window.__annMoveSpinCancel) window.__annMoveSpinCancel(); }
   else if (_nudgeMode === 'heading') { if (commit) { if (window.__annHeadingSpinEnd) window.__annHeadingSpinEnd(); } else if (window.__annHeadingSpinCancel) window.__annHeadingSpinCancel(); }
+  else if (_nudgeMode === 'dimdir') { if (commit) { if (window.__dimDirSpinEnd) window.__dimDirSpinEnd(); } else if (window.__dimDirSpinCancel) window.__dimDirSpinCancel(); }
+  else if (_nudgeMode === 'dimoff') { if (commit) { if (window.__dimOffSpinEnd) window.__dimOffSpinEnd(); } else if (window.__dimOffSpinCancel) window.__dimOffSpinCancel(); }
+  else if (_nudgeMode === 'dimskew') { if (commit) { if (window.__dimSkewSpinEnd) window.__dimSkewSpinEnd(); } else if (window.__dimSkewSpinCancel) window.__dimSkewSpinCancel(); }
+  else if (_nudgeMode === 'dimroll') { if (commit) { if (window.__dimRollSpinEnd) window.__dimRollSpinEnd(); } else if (window.__dimRollSpinCancel) window.__dimRollSpinCancel(); }
   else { if (commit) rotSpinEnd(); else rotSpinCancel(); }
   if (rotForm) rotForm.style.display = 'none';
   _nudgeMode = 'angle';
+  // 構築線のEL→角度連鎖：角度をEnterで確定したら選択も閉じる（Esc取消なら選択を維持してELへ戻る）
+  if (_xlineChainClose) {
+    _xlineChainClose = false;
+    if (commit && wasHeading && window.__annDeselect) { window.__annDeselect(); return; }
+  }
+  // 寸法線の連鎖：逃げ量スピナーを確定したら、立面寸法は続けて方位スピナーへ。
+  // 連鎖が終わったら寸法線を選択状態にし、「値」フォームで数字を任意に変えられるようにする
+  if (_dimChainRec) {
+    const r = _dimChainRec;
+    _dimChainRec = null; _dimChainNext = null;
+    if (commit && wasDimOff) {
+      const dx = r.b.x - r.a.x, dz = r.b.z - r.a.z;
+      if (dx * dx + dz * dz < 1e-9 && r.style.dimOff && r.style.dimDir) {
+        startDimDirSpin(r);
+        _dimChainRec = r;   // 方位スピナーの確定後にも「値」フォームへつなぐ
+        return;
+      }
+      if (window.__annSelectRec) window.__annSelectRec(r);   // 確定後＝選択して「値」フォームを出す
+    } else if (commit && wasDimDir) {
+      if (window.__annSelectRec) window.__annSelectRec(r);
+    }
+  }
   if (typeof updateForm === 'function') updateForm();   // スピナーを閉じたらEL入力等を出し直す
 }
 renderer.domElement.addEventListener('pointerdown', e => {
@@ -3038,13 +3177,20 @@ function orientStep(shift) {
   else if (isFreeRotPart(selectedPart)) pipeRotate(shift);   // パイプ・エルボは線分と同じ回転（起点まわり45°）
   else if (selectedPart) cycleSelectedOrientation(shift);   // その他の部品は従来の向き送り
   else if (window.__annHasSel && window.__annHasSel()) {
+    // 寸法線（単独選択）：右クリック＝スライド寸法（+45°→−45°→0°→繰返し）／Shift+右クリック＝逃げ方向をAB軸まわりに45°回転
+    if (window.__annSelIsSingleDim && window.__annSelIsSingleDim()) {
+      if (shift) { const r = window.__dimRollStep(); if (r) startDimRollSpin(r); }
+      else { const r = window.__dimSkewToggle(); if (r) startDimSkewSpin(r); }
+    }
     // 構築線は短い右クリックでは回転させない（微調整は右クリック長押し＝平行移動/Shiftで角度）。線分は従来どおり45°回転
-    if (!(window.__annSelIsXline && window.__annSelIsXline())) window.__annRotate(shift);
+    else if (!(window.__annSelIsXline && window.__annSelIsXline())) window.__annRotate(shift);
   }
 }
 if (rotAInput) {
-  // 角度=0〜360未満/方位=0〜180未満（いずれも0.5°刻みで折り返し）／移動=mm整数（折り返し無し・負値可）
-  const wrap = a => _nudgeMode === 'move' ? Math.round(a)
+  // 角度=0〜360未満/方位=0〜180未満（いずれも0.5°刻みで折り返し）／移動・逃げ=mm整数（折り返し無し・負値可）
+  // 斜め（スライド寸法）=−85〜+85°（折り返さずクランプ・0.5°刻み・負値可）
+  const wrap = a => (_nudgeMode === 'move' || _nudgeMode === 'dimoff') ? Math.round(a)
+    : _nudgeMode === 'dimskew' ? Math.max(-85, Math.min(85, Math.round(a * 2) / 2))
     : _nudgeMode === 'heading' ? (Math.round((((a % 180) + 180) % 180) * 2) / 2)
     : (Math.round((((a % 360) + 360) % 360) * 2) / 2);
   const setRot = v => { rotAInput.value = v; nudgeApply(v); };
@@ -3054,6 +3200,15 @@ if (rotAInput) {
     e.stopPropagation();
     if (e.key === 'Enter') { e.preventDefault(); applyRot(); endRotSpin(true); }
     else if (e.key === 'Escape') { e.preventDefault(); endRotSpin(false); }
+    else if (e.key === 'Delete' &&
+             (_nudgeMode === 'dimoff' || _nudgeMode === 'dimdir' || _nudgeMode === 'dimskew' || _nudgeMode === 'dimroll' || _nudgeMode === 'heading')) {
+      // 寸法線・構築線のスピナーにフォーカスが入ったままでも Delete で対象を削除できる
+      e.preventDefault();
+      const chainRec = _dimChainRec; _dimChainRec = null; _dimChainNext = null;
+      endRotSpin(false);
+      if (window.__annHasSel && window.__annHasSel()) { if (window.__annDeleteSelected) window.__annDeleteSelected(); }
+      else if (chainRec && window.__annDeleteRec) window.__annDeleteRec(chainRec);
+    }
   });
   // 自前の▲▼：角度0.5°／移動1mm刻み・長押しで連続。dir=+1/-1
   const stepRot = dir => setRot(wrap((parseFloat(rotAInput.value) || 0) + dir * nudgeStep()));
@@ -3138,6 +3293,8 @@ let prevT = performance.now();
   renderAxisGizmo();           // 左下の座標軸インジケータ
   positionHeightForm();        // 選択部品の脇に高さ入力フォームを追従させる
   positionLegInputs();         // 方向移動中、三角形の脚に距離入力欄を追従させる
+  if (window.__updateDimTextFacing) window.__updateDimTextFacing();   // 寸法文字の裏表をカメラに合わせて補正
+  if (window.__positionDimValueForm) window.__positionDimValueForm(); // 選択中の寸法線の「値」フォームを追従
   if (window.__posLineGuide) window.__posLineGuide();   // 線分描画中、三角形の脚にX/Z/Y入力欄を追従
   // パレットのサムネイル（静止表示）。非表示の部品は描画しない。
   for (const t of palThumbs) {
@@ -3267,7 +3424,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ================= 編集：複製 =================
   function duplicate() {
     const src = [...selectedParts];
-    if (!src.length) return;
+    const annSrc = [...selAnns];                  // 線分・構築線・寸法線も複製対象（2026-06-13 社長指示）
+    if (!src.length && !annSrc.length) return;
     const off = new V3(0.1, 0, 0.1);   // 100mm 斜めにずらして重ならないように
     const copies = [];
     for (const s of src) {
@@ -3280,24 +3438,156 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       registerPart(obj, s);
       copies.push(obj);
     }
-    if (copies.length) selectMany(copies);
+    const annCopies = [];
+    for (const r of annSrc) {
+      const dst = Object.assign({}, r.style);
+      if (dst.angP2) dst.angP2 = [dst.angP2[0] + off.x, dst.angP2[1] + off.y, dst.angP2[2] + off.z];   // 角度のP2も同じだけずらす
+      addAnnotation(r.type, r.a.clone().add(off), r.b.clone().add(off), dst);
+      annCopies.push(annStore[annStore.length - 1]);
+    }
+    if (copies.length) selectMany(copies);        // 部品コピーを選択（線選択はここで一旦クリアされる）
+    if (annCopies.length) {                       // 線コピーも選択に加える
+      if (!copies.length) { selAnns.clear(); clearAnnHi(); lineSel = null; }
+      for (const r of annCopies) selAnns.add(r);
+      if (!copies.length) lineSel = annCopies[annCopies.length - 1];
+      refreshAnnHi(); refreshHandles();
+      if (typeof updateForm === 'function') updateForm();
+    }
   }
 
-  // ================= 編集：鏡（左右反転） =================
-  // 選択範囲の中心を通る「世界X軸に垂直な平面」で反転する。幾何学的に正確な鏡像。
-  // ※反転後のアイテムを後から回転/移動すると向き情報(dir/roll)で再計算され鏡像が解けるため、暫定仕様。
+  // ================= 編集：鏡（対話式・2026-06-13 社長指示の新フロー） =================
+  // 選択 → 鏡ボタン → ①反転軸の起点をクリック（機点・交点へ吸着）
+  //                  → ②方向をクリック（45°刻み・ガイド表示）
+  //                  → 「元のオブジェクトを削除するか」を選択 → 実行。
+  // 部品だけでなく線分・構築線・寸法線も反転できる。
+  let mirrorMode = null;   // { parts:[], anns:[], p1:V3|null }
+  const mirrorGuide = new THREE.Group();
+  modelGroup.add(mirrorGuide);
+  function clearMirrorGuide() {
+    while (mirrorGuide.children.length) { const c = mirrorGuide.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
+  }
+  function endMirrorMode() {
+    mirrorMode = null; clearMirrorGuide();
+    renderer.domElement.style.cursor = '';
+  }
+  window.__mirrorActive = () => !!mirrorMode;   // 鏡モード中は各種入力フォームを隠す用
+  // 点 p を通り法線 n（単位・水平）の鉛直面で反転する行列
+  function reflectMatrixAbout(p, n) {
+    const m = new THREE.Matrix4().set(
+      1 - 2 * n.x * n.x, -2 * n.x * n.y, -2 * n.x * n.z, 0,
+      -2 * n.y * n.x, 1 - 2 * n.y * n.y, -2 * n.y * n.z, 0,
+      -2 * n.z * n.x, -2 * n.z * n.y, 1 - 2 * n.z * n.z, 0,
+      0, 0, 0, 1);
+    return new THREE.Matrix4().makeTranslation(p.x, p.y, p.z).multiply(m)
+      .multiply(new THREE.Matrix4().makeTranslation(-p.x, -p.y, -p.z));
+  }
   function mirror() {
-    const src = [...selectedParts];
-    if (!src.length) return;
-    const box = new THREE.Box3();
-    for (const s of src) box.expandByObject(s);
-    if (box.isEmpty()) return;
-    const cx = box.getCenter(new V3()).x;
-    const refl = new THREE.Matrix4().makeTranslation(cx, 0, 0)
-      .multiply(new THREE.Matrix4().makeScale(-1, 1, 1))
-      .multiply(new THREE.Matrix4().makeTranslation(-cx, 0, 0));
+    if (mirrorMode) { endMirrorMode(); return; }          // もう一度押す＝取消
+    const parts = [...selectedParts], anns = [...selAnns];
+    if (!parts.length && !anns.length) return;
+    mirrorMode = { parts, anns, p1: null };
+    renderer.domElement.style.cursor = 'crosshair';       // モード表示はカーソルのみ（メッセージ画面は出さない）
+  }
+  // 鏡の変換行列を求める。カーソルが指す方向（45°刻み）へ反転（鉛直面での鏡映）。
+  // ※Shift の特殊機能は廃止（2026-06-13 社長指示）
+  function mirrorXformFrom(cx, cy) {
+    const p1 = mirrorMode.p1;
+    const step = Math.PI / 4;
+    const hit = planeHitAt(cx, cy, p1.y);
+    if (!hit) return null;
+    const vx = hit.x - p1.x, vz = hit.z - p1.z;
+    if (Math.hypot(vx, vz) < 1e-6) return null;
+    const ang = Math.round(Math.atan2(vz, vx) / step) * step;   // カーソル方位（45°刻み）
+    const n = new V3(Math.cos(ang), 0, Math.sin(ang));          // カーソルが指す方向へ反転
+    if (n.x < -1e-6 || (Math.abs(n.x) < 1e-6 && n.z < 0)) n.negate();   // ±は同じ面＝符号を正規化
+    return { M: reflectMatrixAbout(p1, n), key: 'mir:' + n.x.toFixed(3) + ',' + n.z.toFixed(3) };
+  }
+  // 方向プレビュー：補助線は出さず、鏡像そのもの（半透明ゴースト）を表示する。refl＝変換行列（鏡映/立てる回転）
+  function buildMirrorPreview(refl) {
+    clearMirrorGuide();
+    const p1 = mirrorMode.p1;
+    const reflDirV = v => v.clone().transformDirection(refl);
+    for (const s of mirrorMode.parts) {
+      s.updateMatrixWorld(true);
+      const g = s.clone(true);
+      const m = new THREE.Matrix4().multiplyMatrices(refl, s.matrix);
+      const pos = new V3(), quat = new THREE.Quaternion(), scl = new V3();
+      m.decompose(pos, quat, scl);
+      g.position.copy(pos); g.quaternion.copy(quat); g.scale.copy(scl);
+      g.traverse(o => {
+        if (o.isMesh && o.material) {
+          o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.4;
+          o.material.depthWrite = false; o.material.side = THREE.DoubleSide;
+          if (o.material.color) o.material.color.lerp(new THREE.Color(0x4d8fff), 0.5);   // 青味のゴースト＝その場反転でも見分けられる
+        }
+      });
+      mirrorGuide.add(g);
+    }
+    for (const r of mirrorMode.anns) {
+      const a2 = r.a.clone().applyMatrix4(refl), b2 = r.b.clone().applyMatrix4(refl);
+      const st = Object.assign({}, r.style);
+      if (st.dimDir) { const d2 = reflDirV(new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z)); st.dimDir = { x: d2.x, y: d2.y, z: d2.z }; }
+      if (st.angP2) { const p2 = new V3(st.angP2[0], st.angP2[1], st.angP2[2]).applyMatrix4(refl); st.angP2 = [p2.x, p2.y, p2.z]; }
+      const g = buildAnn(r.type, a2, b2, st);
+      g.traverse(o => { if (o.material) { o.material.transparent = true; o.material.opacity = Math.min(o.material.opacity != null ? o.material.opacity : 1, 0.4); } });
+      mirrorGuide.add(g);
+    }
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.003, 12, 10), new THREE.MeshBasicMaterial({ color: 0x6fd2ff, depthTest: false, transparent: true }));
+    dot.position.copy(p1); dot.renderOrder = 998;
+    mirrorGuide.add(dot);
+  }
+  // 「オブジェクトを削除しますか？ はい／いいえ」の小パネル（オブジェクトの手元に表示）
+  const mirrorAsk = document.createElement('div');
+  mirrorAsk.style.cssText = 'position:fixed;z-index:90;display:none;flex-direction:column;gap:6px;padding:8px 12px;font:13px Meiryo,sans-serif;color:#e8eef7;background:rgba(16,24,42,.95);border:1px solid #3a4a6e;border-radius:8px';
+  const mirrorAskText = document.createElement('div');
+  mirrorAskText.textContent = 'オブジェクトを削除しますか？';
+  mirrorAsk.appendChild(mirrorAskText);
+  const mirrorAskBtns = document.createElement('div');
+  mirrorAskBtns.style.cssText = 'display:flex;gap:8px;justify-content:center';
+  const mkAskBtn = (label) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'min-width:56px;padding:3px 10px;font:13px Meiryo,sans-serif;cursor:pointer;background:#22305a;color:#e8eef7;border:1px solid #41538a;border-radius:5px';
+    return b;
+  };
+  const mirrorAskYes = mkAskBtn('はい'), mirrorAskNo = mkAskBtn('いいえ');
+  mirrorAskBtns.appendChild(mirrorAskYes); mirrorAskBtns.appendChild(mirrorAskNo);
+  mirrorAsk.appendChild(mirrorAskBtns);
+  document.body.appendChild(mirrorAsk);
+  let _mirrorAskCtx = null;   // { parts, anns, copies, annCopies }
+  function finishMirrorAsk(del) {
+    mirrorAsk.style.display = 'none';
+    const ctx = _mirrorAskCtx; _mirrorAskCtx = null;
+    if (!ctx) return;
+    if (del) {
+      // 削除対象は「鏡の元オブジェクト」に固定（パネル表示中に選択が変わっても誤削除しない）
+      for (const part of ctx.parts) {
+        modelGroup.remove(part);
+        const i = placedParts.indexOf(part);
+        if (i >= 0) placedParts.splice(i, 1);
+        part.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+        selectedParts.delete(part);
+        if (selectedPart === part) selectedPart = null;
+      }
+      for (const r of ctx.anns) { if (window.__annDeleteRec) window.__annDeleteRec(r); }
+      refreshItemList();
+    }
+    if (ctx.copies.length) selectMany(ctx.copies);
+    if (ctx.annCopies.length) {
+      if (!ctx.copies.length) { selAnns.clear(); clearAnnHi(); lineSel = null; }
+      for (const r of ctx.annCopies) selAnns.add(r);
+      if (!ctx.copies.length) lineSel = ctx.annCopies[ctx.annCopies.length - 1];
+      refreshAnnHi(); refreshHandles();
+      if (typeof updateForm === 'function') updateForm();
+    }
+  }
+  mirrorAskYes.onclick = () => finishMirrorAsk(true);
+  mirrorAskNo.onclick = () => finishMirrorAsk(false);
+  function execMirror(refl) {  // refl＝変換行列（鏡映 or 立てる回転。mirrorXformFrom が生成）
+    const p1 = mirrorMode.p1;
+    const reflDir = v => v.clone().transformDirection(refl);   // 方向ベクトル用（線形部のみ）
     const copies = [];
-    for (const s of src) {
+    for (const s of mirrorMode.parts) {
       const obj = makeSpecPart(s.userData);
       if (!obj) continue;
       s.updateMatrixWorld(true);
@@ -3313,8 +3603,69 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       registerPart(obj, s);
       copies.push(obj);
     }
-    if (copies.length) selectMany(copies);
+    const annCopies = [];
+    for (const r of mirrorMode.anns) {
+      const a2 = r.a.clone().applyMatrix4(refl), b2 = r.b.clone().applyMatrix4(refl);
+      const st = Object.assign({}, r.style);
+      if (st.dimDir) { const d2 = reflDir(new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z)); st.dimDir = { x: d2.x, y: d2.y, z: d2.z }; }
+      if (st.angP2) { const p2 = new V3(st.angP2[0], st.angP2[1], st.angP2[2]).applyMatrix4(refl); st.angP2 = [p2.x, p2.y, p2.z]; }
+      addAnnotation(r.type, a2, b2, st);
+      annCopies.push(annStore[annStore.length - 1]);
+    }
+    // 元を削除するかは、オブジェクトの手元の小パネル（はい／いいえ）で選ぶ
+    _mirrorAskCtx = { parts: mirrorMode.parts, anns: mirrorMode.anns, copies, annCopies };
+    const box = new THREE.Box3();
+    for (const s of mirrorMode.parts) box.expandByObject(s);
+    for (const r of mirrorMode.anns) { box.expandByPoint(r.a); box.expandByPoint(r.b); }
+    const c = box.isEmpty() ? p1.clone() : box.getCenter(new V3());
+    const rect = renderer.domElement.getBoundingClientRect();
+    const ndc = modelGroup.localToWorld(c).project(activeCam());
+    const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+    mirrorAsk.style.display = 'flex';
+    mirrorAsk.style.left = Math.round(Math.min(Math.max(sx + 12, rect.left + 8), rect.right - 190)) + 'px';
+    mirrorAsk.style.top = Math.round(Math.min(Math.max(sy - 20, rect.top + 8), rect.bottom - 90)) + 'px';
+    endMirrorMode();
   }
+  // 鏡モード中のポインタ・キー操作（他のハンドラより先に捕捉して横取りを防ぐ）
+  window.addEventListener('pointerdown', e => {
+    if (!mirrorMode || e.button !== 0) return;
+    if (e.target !== renderer.domElement) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    if (!mirrorMode.p1) {                                  // ①起点（各アイテムの機点・線端点・交点へ吸着）
+      let p = drawSnapPoint(e.clientX, e.clientY);
+      if (!p) { const t = resolveTarget(e.clientX, e.clientY, null, 0); p = t ? t.point.clone() : null; }
+      if (!p) return;
+      mirrorMode.p1 = p;
+      mirrorMode.previewKey = 'mir:1.000,0.000';
+      buildMirrorPreview(reflectMatrixAbout(p, new V3(1, 0, 0)));   // 初期＝X方向へ反転
+    } else {                                               // ②方向 → 実行
+      const r = mirrorXformFrom(e.clientX, e.clientY);
+      if (r) execMirror(r.M);
+    }
+  }, true);
+  window.addEventListener('pointermove', e => {
+    if (!mirrorMode) return;
+    if (!mirrorMode.p1) {                                  // 起点選択中：吸着候補を緑マーカーで可視化
+      clearMirrorGuide();
+      const p = drawSnapPoint(e.clientX, e.clientY);
+      if (p) {
+        const dot = new THREE.Mesh(new THREE.SphereGeometry(0.0042, 12, 10),
+          new THREE.MeshBasicMaterial({ color: 0x39ff8a, depthTest: false, transparent: true, opacity: 0.95 }));
+        dot.position.copy(p); dot.renderOrder = 999;
+        mirrorGuide.add(dot);
+      }
+      return;
+    }
+    const r = mirrorXformFrom(e.clientX, e.clientY);
+    if (r && mirrorMode.previewKey !== r.key) {            // 変換が変わった時だけプレビューを作り直す（45°刻み）
+      mirrorMode.previewKey = r.key;
+      buildMirrorPreview(r.M);
+    }
+  }, true);
+  window.addEventListener('keydown', e => {
+    if (mirrorMode && e.key === 'Escape') { e.stopImmediatePropagation(); endMirrorMode(); }
+  }, true);
+  // ※右クリックは視点パンに使うため取消には割り当てない（取消＝Esc または 鏡ボタン再押下）
 
   // ================= 表示：範囲ズーム =================
   function zoomExtents() {
@@ -3501,15 +3852,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function ltypeColor(lt) { return LTYPE_COLOR[lt] != null ? LTYPE_COLOR[lt] : 0xffffff; }
   const MENU_LTYPES = ['solid', 'dashed', 'dotted', 'dashdot'];   // メニューに出す線種（選ぶだけ）
   function defaultStyle(type) {
-    const ltype = (type === 'xline') ? 'dashed' : (type === 'dim') ? 'solid' : 'dashdot';   // 線分の既定＝一点鎖線（赤）
+    const ltype = (type === 'xline') ? 'dashed' : (type === 'dim') ? 'solid' : 'dashdot';   // 線分・円の既定＝一点鎖線（赤）
     const color = (type === 'xline') ? XLINE_COLOR : ltypeColor(ltype);   // 構築線はレーザー色固定
     return { color, ltype, width: 0.0006 };   // 太さ＝極細固定・色＝線種で決定
   }
   // 描画ツールごとの既定書式（リボンのアイコン右クリックで設定）。新規に引く線はこれを継承。
-  const toolStyle = { line: defaultStyle('line'), xline: defaultStyle('xline'), dim: defaultStyle('dim') };
+  const toolStyle = { line: defaultStyle('line'), xline: defaultStyle('xline'), dim: defaultStyle('dim'), circle: defaultStyle('circle') };
+  // 寸法の現在の種別（リボン「寸法」右クリックで選択）。平行=現行の2点間距離。
+  //   parallel=平行／angle=角度／radius=半径／diameter=直径／leader=引出。操作の基本仕様は全種別とも平行と同じ。
+  let dimKind = 'parallel';
+  const DIM_KIND_LABEL = { parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出' };
   function styleFor(type) {
     const s = toolStyle[type] || defaultStyle(type);
-    return { color: s.color, ltype: s.ltype, width: s.width };
+    const out = { color: s.color, ltype: s.ltype, width: s.width };
+    if (type === 'dim') out.dimKind = dimKind;   // 描画中の寸法に現在の種別を載せる
+    return out;
   }
   function hexCss(h) { return '#' + ('000000' + (h >>> 0).toString(16)).slice(-6); }
 
@@ -3594,6 +3951,116 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     sp.renderOrder = 1000;
     return sp;
   }
+  // ---- 寸法線専用：文字と線の色 ----
+  const DIM_YELLOW = 0xffee00;        // 補助線・寸法線本体・矢印＝明るい黄色
+  const DIM_TEXT_CSS = '#ff4040';     // 寸法文字＝赤
+  // 寸法文字：枠・背景なしの赤文字スプライト。常にカメラ正対なので裏表・潰れが起きない。
+  // 向きと位置は毎フレーム __updateDimTextFacing が画面投影に合わせて調整する
+  // （画面上で寸法線と平行に回転し、画面で見て線の「上側」に出る）。
+  function dimTextSprite(text, A2, B2, vUp) {
+    const fs = 44, pad = 6;
+    const meas = document.createElement('canvas').getContext('2d');
+    meas.font = `bold ${fs}px Meiryo, sans-serif`;
+    const tw = Math.ceil(meas.measureText(text).width);
+    const cv = document.createElement('canvas');
+    cv.width = tw + pad * 2; cv.height = fs + pad * 2;
+    const c = cv.getContext('2d');
+    c.font = `bold ${fs}px Meiryo, sans-serif`;
+    c.fillStyle = DIM_TEXT_CSS; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(text, cv.width / 2, cv.height / 2 + 2);
+    const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
+    const s = 0.0011;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    sp.scale.set(cv.width * s, cv.height * s, 1);
+    sp.userData.dimText = { a: A2.clone(), b: B2.clone(), vUp: vUp.clone(), h: cv.height * s };
+    sp.position.copy(A2.clone().add(B2).multiplyScalar(0.5)).addScaledVector(vUp, (cv.height * s) / 2 + 0.004);
+    sp.renderOrder = 1000;
+    return sp;
+  }
+  // 毎フレーム：寸法文字を「画面上で寸法線と平行・線の上側」に合わせる（常に読める向き）
+  window.__updateDimTextFacing = () => {
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: (n.x * 0.5 + 0.5) * rect.width, y: (-n.y * 0.5 + 0.5) * rect.height }; };
+    for (const rec of annStore) {
+      if (rec.type !== 'dim') continue;
+      rec.obj.traverse(o => {
+        const dt = o.userData.dimText;
+        if (!dt || !o.material) return;
+        const pa = scr(dt.a), pb = scr(dt.b);
+        let ang = Math.atan2(-(pb.y - pa.y), pb.x - pa.x);   // 画面上の寸法線の向き
+        if (ang > Math.PI / 2) ang -= Math.PI;               // 上下逆さにならない範囲（±90°）へ折返し
+        else if (ang < -Math.PI / 2) ang += Math.PI;
+        o.material.rotation = ang;
+        const mid = dt.a.clone().add(dt.b).multiplyScalar(0.5);
+        const pm = scr(mid), pu = scr(mid.clone().addScaledVector(dt.vUp, 0.01));
+        const sgn = (pu.y <= pm.y) ? 1 : -1;                 // 画面で見て上側へ
+        o.position.copy(mid).addScaledVector(dt.vUp, sgn * (dt.h / 2 + 0.004));
+      });
+    }
+  };
+  // 円/楕円の半径(rx=X半径, rz=Z半径)。style.rx/rz があればそれ、無ければ中心→bの水平距離（真円）。
+  function circleRadii(style, a, b) {
+    const rx = (style && style.rx != null) ? style.rx : Math.hypot(b.x - a.x, b.z - a.z);
+    const rz = (style && style.rz != null) ? style.rz : rx;
+    return { rx, rz };
+  }
+  // 円/楕円の向き（中心まわりの回転）。style.quat={x,y,z,w} があればそれ、無ければ水平（恒等）。
+  function quatFromStyle(style) {
+    const c = style && style.quat;
+    return c ? new THREE.Quaternion(c.x, c.y, c.z, c.w) : new THREE.Quaternion();
+  }
+  // 折れ線(pts)を線種パターン(pat:ワールド長[描く,空ける,…]／null=実線)に沿って太さ付きで描く。曲線=細分済の点列で渡す。
+  function dashPolyline(pts, pat, width, mat, grp) {
+    if (!pat || pts.length < 2) { for (let i = 0; i < pts.length - 1; i++) { const m = cylSeg(pts[i], pts[i + 1], width, mat); if (m) grp.add(m); } return; }
+    const cum = [0]; for (let i = 1; i < pts.length; i++) cum[i] = cum[i - 1] + pts[i].distanceTo(pts[i - 1]);
+    const L = cum[cum.length - 1]; if (L < 1e-9) return;
+    const pointAt = s => { if (s <= 0) return pts[0].clone(); if (s >= L) return pts[pts.length - 1].clone(); let i = 1; while (cum[i] < s) i++; const t = (s - cum[i - 1]) / (cum[i] - cum[i - 1]); return pts[i - 1].clone().lerp(pts[i], t); };
+    let s = 0, k = 0, guard = 0;
+    while (s < L - 1e-9 && guard++ < 20000) {
+      const seg = pat[k % pat.length]; const s2 = Math.min(s + seg, L);
+      if (k % 2 === 0 && seg > 0) {                      // 描く区間：頂点で分割して曲率を保つ
+        let a = pointAt(s), i = 1; while (i < pts.length && cum[i] <= s) i++;
+        while (i < pts.length && cum[i] < s2) { const m = cylSeg(a, pts[i], width, mat); if (m) grp.add(m); a = pts[i]; i++; }
+        const m = cylSeg(a, pointAt(s2), width, mat); if (m) grp.add(m);
+      }
+      s = s2; k++;
+    }
+  }
+  // 寸法の実測表示文字（上書きが無いときに出る値）。種別ごと：平行=数値／半径=R＋値／直径=φ＋値／角度=度／引出=注記
+  function dimMeasuredStr(a, b, style) {
+    const kind = (style && style.dimKind) || 'parallel';
+    const mm = Math.round(a.distanceTo(b) * 1000);
+    if (kind === 'angle') {
+      const V = a, P1 = b, P2 = (style && style.angP2) ? new V3(style.angP2[0], style.angP2[1], style.angP2[2]) : b;
+      const d1 = P1.clone().sub(V), d2 = P2.clone().sub(V);
+      let deg = (d1.lengthSq() > 1e-12 && d2.lengthSq() > 1e-12) ? d1.angleTo(d2) * 180 / Math.PI : 0;
+      if (style && style.angReflex) deg = 360 - deg;
+      return deg.toFixed(1) + '°';
+    }
+    if (kind === 'radius') return 'R' + mm;
+    if (kind === 'diameter') return 'φ' + mm;
+    if (kind === 'leader') return '';   // 引出は既定文字なし（入力した文字だけ表示）
+    return String(mm);
+  }
+  // 角度寸法の幾何（頂点V・両方向の単位ベクトル・円弧半径R・円弧点列）を返す。buildAnn と当たり判定で共用。
+  function angleArcGeom(a, b, style, N) {
+    const V = a.clone(), P1 = b.clone(), P2 = (style && style.angP2) ? new V3(style.angP2[0], style.angP2[1], style.angP2[2]) : b.clone();
+    let d1 = P1.clone().sub(V), d2 = P2.clone().sub(V);
+    const l1 = d1.length(), l2 = d2.length();
+    if (l1 > 1e-9) d1.multiplyScalar(1 / l1); else d1.set(1, 0, 0);
+    if (l2 > 1e-9) d2.multiplyScalar(1 / l2); else d2.set(0, 0, 1);
+    const R = (style && style.arcR != null) ? style.arcR : Math.min(l1, l2) * 0.6;
+    let nrm = d1.clone().cross(d2);
+    if (nrm.lengthSq() < 1e-9) { nrm = d1.clone().cross(new V3(0, 1, 0)); if (nrm.lengthSq() < 1e-9) nrm = d1.clone().cross(new V3(1, 0, 0)); }
+    nrm.normalize();
+    const ang0 = Math.acos(Math.max(-1, Math.min(1, d1.dot(d2))));
+    const sweep = (style && style.angReflex) ? (2 * Math.PI - ang0) : ang0;
+    const sgn = (style && style.angReflex) ? -1 : 1;
+    N = N || Math.max(10, Math.round(sweep / (Math.PI / 90)));
+    const arc = [];
+    for (let i = 0; i <= N; i++) { const q = new THREE.Quaternion().setFromAxisAngle(nrm, sgn * sweep * (i / N)); arc.push(V.clone().addScaledVector(d1.clone().applyQuaternion(q), R)); }
+    return { V, d1, d2, l1, l2, R, arc, N };
+  }
   function buildAnn(type, a, b, style) {
     style = style || styleFor(type);
     const grp = new THREE.Group();
@@ -3605,19 +4072,145 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const L = 12;
       grp.add(xlineSeg(a.clone().addScaledVector(dir, -L), a.clone().addScaledVector(dir, L), style));
     } else if (type === 'dim') {
-      grp.add(styledSeg(a, b, style));
-      const mm = Math.round(a.distanceTo(b) * 1000);
-      const sp = labelSprite(mm + ' mm', hexCss(col));
-      sp.position.copy(a.clone().add(b).multiplyScalar(0.5));
-      grp.add(sp);
+      // 寸法線：a/b＝測定した2つの起点。style.dimOff/dimDir があれば逃げた位置に寸法線を引き、
+      // 起点から補助線（寸法線の2mm先まで）を伸ばす。style.dimSkew(°)があれば補助線を斜めに倒す
+      // （スライド寸法）。寸法値は常に起点間距離。
+      const kind = style.dimKind || 'parallel';
+      const isLeader = kind === 'leader';
+      // 表示する値：任意の値（style.dimText）があれば最優先（引出の注記入力もこれで上書き）、無ければ種別ごとの実測
+      const shown = String((style.dimText != null && style.dimText !== '') ? style.dimText : dimMeasuredStr(a, b, style));
+      // 寸法線本体（アイテムと並行の線）の両端の矢印：先端が tip、羽根は toward（内側）を向く
+      const mkArrow = (tip, toward) => {
+        const dir = toward.clone().sub(tip);
+        if (dir.lengthSq() < 1e-12) return;
+        dir.normalize();
+        const len = 0.008, rad = 0.0026;
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 10),
+          new THREE.MeshBasicMaterial({ color: DIM_YELLOW, depthTest: false, transparent: true, opacity: 0.95 }));
+        cone.quaternion.setFromUnitVectors(new V3(0, 1, 0), dir.clone().negate());   // 円錐の頂点を tip 側へ
+        cone.position.copy(tip.clone().addScaledVector(dir, len / 2));
+        cone.userData.baseColor = DIM_YELLOW;
+        cone.renderOrder = 998;
+        grp.add(cone);
+      };
+      // 補助線・寸法線本体＝発光する黄色（レーザー調：光暈＋明るい芯）
+      const glowSeg = (p0, p1) => {
+        const g = new THREE.Group();
+        g.add(laserTube(p0, p1, 0.0008, DIM_YELLOW, 0.18));   // 光暈（細め）
+        g.add(laserTube(p0, p1, 0.00026, 0xfff6a8, 0.95));    // 芯（極細）
+        return g;
+      };
+      if (isLeader) {
+        // 引出線：a=矢印先端（指す点）／b=肘(knee)。bから水平に棚（横線）を自動で伸ばし、その上に注記文字を置く。
+        grp.add(glowSeg(a, b));            // 斜めの引出線
+        mkArrow(a, b);                      // 先端aに矢印（bからaを向く）
+        // 棚の向き＝肘の水平変位の向きへ自動。水平成分がほぼ無い（ほぼ真上）時は画面の横方向(カメラ右)を水平化して使う
+        let h = new V3(b.x - a.x, 0, b.z - a.z);
+        if (h.lengthSq() < 1e-6) {
+          const cr = new V3().setFromMatrixColumn(activeCam().matrixWorld, 0); cr.y = 0;
+          h = (cr.lengthSq() > 1e-9) ? cr : new V3(1, 0, 0);
+        }
+        h.normalize();
+        const sp = (shown !== '') ? dimTextSprite(shown, b, b.clone().add(h), new V3(0, 1, 0)) : null;   // 文字（空なら作らない）
+        const w = Math.max(sp ? sp.scale.x : 0, 0.04);   // 棚の長さ＝文字幅（空でも最小幅で表示）
+        const shelfEnd = b.clone().addScaledVector(h, w);
+        grp.add(glowSeg(b, shelfEnd));     // 水平棚（文字の下線）
+        if (sp) {
+          const dt = sp.userData.dimText; dt.a.copy(b); dt.b.copy(shelfEnd);   // 文字を棚に沿わせ中央上に
+          sp.position.copy(b.clone().add(shelfEnd).multiplyScalar(0.5)).addScaledVector(new V3(0, 1, 0), dt.h / 2 + 0.004);
+          grp.add(sp);
+        }
+      } else if (kind === 'angle') {
+        // 角度寸法：a=頂点V／b=P1／style.angP2=P2。Vから両方向へ補助線を出し、半径 arcR の円弧＋矢印＋度数を描く。
+        const g = angleArcGeom(a, b, style);
+        const V = g.V, d1 = g.d1, d2 = g.d2, R = g.R, arc = g.arc, N = g.N;
+        // 補助線：対象直線と重なる区間(頂点〜直線の到達距離 angReach)は描かず、その外側〜円弧の少し外だけ描く
+        const reach = style.angReach || [0, 0];
+        const ext = (dir, rch) => { const s = Math.max(rch || 0, 0), e = R * 1.08; if (e > s + 1e-4) grp.add(glowSeg(V.clone().addScaledVector(dir, s), V.clone().addScaledVector(dir, e))); };
+        ext(d1, reach[0]); ext(d2, reach[1]);
+        for (let i = 0; i < N; i++) grp.add(glowSeg(arc[i], arc[i + 1]));   // 円弧本体
+        mkArrow(arc[0], arc[1]); mkArrow(arc[N], arc[N - 1]);               // 円弧両端に矢印
+        const mid = arc[Math.floor(N / 2)];
+        const outward = mid.clone().sub(V); if (outward.lengthSq() > 1e-9) outward.normalize(); else outward.set(0, 1, 0);
+        const tan = arc[Math.min(N, Math.floor(N / 2) + 1)].clone().sub(arc[Math.max(0, Math.floor(N / 2) - 1)]);
+        if (tan.lengthSq() > 1e-9) tan.normalize(); else tan.copy(d1);
+        const Tp = mid.clone().addScaledVector(outward, 0.006);
+        grp.add(dimTextSprite(shown, Tp.clone().addScaledVector(tan, -0.004), Tp.clone().addScaledVector(tan, 0.004), outward));
+      } else if (kind === 'radius' || kind === 'diameter') {
+        // 円/楕円の半径(R)・直径(φ)。radius: a=中心,b=縁／diameter: a,b=中心を通る両縁。
+        // style.dimLead＝中心から値までの距離。縁より外なら補助線(リーダー)を縁から値まで伸ばす。
+        const C = (kind === 'radius') ? a.clone() : a.clone().add(b).multiplyScalar(0.5);
+        const E = b.clone();
+        const dir = E.clone().sub(C); const Rdir = dir.length();
+        if (Rdir > 1e-9) dir.multiplyScalar(1 / Rdir); else dir.set(1, 0, 0);
+        const lead = (style.dimLead != null) ? style.dimLead : Rdir * 0.55;
+        const P = C.clone().addScaledVector(dir, lead);          // 値の位置（中心から dir 方向に lead）
+        if (kind === 'radius') { grp.add(glowSeg(C, E)); mkArrow(E, C); }            // 中心→縁＋縁に外向き矢印
+        else { grp.add(glowSeg(a, b)); mkArrow(a, b); mkArrow(b, a); }                // 両縁＋両端矢印
+        if (lead > Rdir + 1e-6) grp.add(glowSeg(E, P));          // 外側＝縁から値まで補助線（リーダー）を伸ばす
+        let vUp = new V3(0, 1, 0).addScaledVector(dir, -dir.y);
+        if (vUp.lengthSq() < 1e-6) vUp.set(-dir.z, 0, dir.x);
+        if (vUp.lengthSq() < 1e-6) vUp.set(1, 0, 0);
+        vUp.normalize();
+        const eps = 0.004;
+        grp.add(dimTextSprite(shown, P.clone().addScaledVector(dir, -eps), P.clone().addScaledVector(dir, eps), vUp));
+      } else {
+      const ends = dimLineEnds(a, b, style);
+      if (ends) {
+        const A2 = ends.A2, B2 = ends.B2;
+        const e1 = A2.clone().sub(a).normalize().multiplyScalar(0.002);
+        const e2 = B2.clone().sub(b).normalize().multiplyScalar(0.002);
+        grp.add(glowSeg(a, A2.clone().add(e1)));             // 補助線（起点1）
+        grp.add(glowSeg(b, B2.clone().add(e2)));             // 補助線（起点2）
+        grp.add(glowSeg(A2, B2));                            // 寸法線本体（矢印の付く線）
+        mkArrow(A2, B2); if (!isLeader) mkArrow(B2, A2);     // 両端の矢印（引出は指す側=A2のみ）
+        const dd2 = style.dimDir;
+        const vUp = new V3(dd2.x, dd2.y, dd2.z).multiplyScalar((style.dimOff || 0) >= 0 ? 1 : -1).normalize();
+        grp.add(dimTextSprite(shown, A2, B2, vUp));
+      } else {
+        grp.add(glowSeg(a, b));
+        mkArrow(a, b); if (!isLeader) mkArrow(b, a);          // 直書きでも両端に矢印（引出は片側のみ）
+        const uN = b.clone().sub(a);
+        if (uN.lengthSq() > 1e-12) uN.normalize(); else uN.set(1, 0, 0);
+        let vUp = new V3(0, 1, 0).addScaledVector(uN, -uN.y);   // uに直交する上向き
+        if (vUp.lengthSq() < 1e-6) vUp.set(-uN.z, 0, uN.x);     // 垂直線はクロス水平方向
+        if (vUp.lengthSq() < 1e-6) vUp.set(1, 0, 0);
+        vUp.normalize();
+        grp.add(dimTextSprite(shown, a, b, vUp));
+      }
+      }
+    } else if (type === 'circle') {
+      // 円/楕円：a=中心。半径(rx=X半径, rz=Z半径)＋向き(quat)で配置。真円は rx=rz・既定は水平。
+      // 線種・色は線分と同じ書式（style.ltype/color）に従う。
+      const { rx, rz } = circleRadii(style, a, b);
+      const q = quatFromStyle(style);
+      const mat = new THREE.MeshBasicMaterial({ color: col, depthTest: false, transparent: true, opacity: 0.98 });
+      const N = 160, pts = [];
+      for (let i = 0; i <= N; i++) {
+        const t = (i / N) * Math.PI * 2;
+        pts.push(a.clone().add(new V3(Math.cos(t) * rx, 0, Math.sin(t) * rz).applyQuaternion(q)));
+      }
+      dashPolyline(pts, (LTYPES[style.ltype] || LTYPES.solid).pat, style.width || 0.0006, mat, grp);
     } else {
       grp.add(styledSeg(a, b, style));
     }
     grp.userData.annType = type;
     return grp;
   }
+  // 寸法線本体の両端（逃げ dimOff/dimDir ＋ スライド dimSkew 込み）。逃げ無しなら null
+  function dimLineEnds(a, b, style) {
+    const off = (style && style.dimOff) || 0;
+    const dd = style && style.dimDir;
+    if (!off || !dd) return null;
+    const dv = new V3(dd.x, dd.y, dd.z).multiplyScalar(off);
+    const ab = b.clone().sub(a), l = ab.length();
+    const u = l > 1e-9 ? ab.multiplyScalar(1 / l) : new V3(1, 0, 0);
+    const skew = ((style.dimSkew || 0) * Math.PI) / 180;
+    const k = Math.abs(skew) > 1e-6 ? Math.abs(off) * Math.tan(skew) : 0;   // 斜めの分だけAB方向へ滑らせる
+    return { A2: a.clone().add(dv).addScaledVector(u, k), B2: b.clone().add(dv).addScaledVector(u, k) };
+  }
   function addAnnotation(type, a, b, style) {
-    const st = style ? { color: style.color, ltype: style.ltype, width: style.width } : styleFor(type);
+    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, rx: style.rx, rz: style.rz, quat: style.quat } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
@@ -3695,11 +4288,187 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     updateDrawButtons();
   }
   function updateDrawButtons() {
-    [['line', 'cmdLine'], ['xline', 'cmdXline'], ['dim', 'cmdDim']].forEach(([m, id]) => {
+    [['line', 'cmdLine'], ['xline', 'cmdXline'], ['circle', 'cmdCircle'], ['dim', 'cmdDim']].forEach(([m, id]) => {
       const b = $(id); if (b) b.classList.toggle('active', drawState.mode === m);
     });
   }
   // ---- 描画用スナップ＆点決め ----
+  // 注釈レコードのスナップ点（起点）。線分＝端点＋中点／円＝中心＋四半円点(±X,±Z)／寸法ほか＝両端。
+  // 構築線は対象外（交点のみ別途）。
+  function annSnapPoints(rec) {
+    if (rec.type === 'xline') return [];
+    if (rec.type === 'circle') {
+      const c = rec.a, { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+      const P = (lx, lz) => c.clone().add(new V3(lx, 0, lz).applyQuaternion(q));
+      return [c.clone(), P(rx, 0), P(-rx, 0), P(0, rz), P(0, -rz)];   // 中心＋四半円点(±X,±Z・向き込み)
+    }
+    if (rec.type === 'line') return [rec.a.clone(), rec.b.clone(), rec.a.clone().add(rec.b).multiplyScalar(0.5)];   // 端点＋中点
+    return [rec.a.clone(), rec.b.clone()];
+  }
+  // 半径/直径寸法用：カーソル光線が「乗っている円/楕円」を探す。
+  // 返り値 {rec, edgeWorld, inside}（edgeWorld=カーソル方向の縁／inside=カーソルが円の内側か） or null。
+  function pickCircleForDim(cx, cy) {
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    placeNdc.x = ((cx - rect.left) / rect.width) * 2 - 1;
+    placeNdc.y = -((cy - rect.top) / rect.height) * 2 + 1;
+    placeRay.setFromCamera(placeNdc, cam);
+    const O = modelGroup.worldToLocal(placeRay.ray.origin.clone());
+    const D = modelGroup.worldToLocal(placeRay.ray.origin.clone().addScaledVector(placeRay.ray.direction, 1)).sub(O).normalize();
+    let best = null, bestD = Infinity;
+    for (const rec of annStore) {
+      if (rec.type !== 'circle') continue;
+      const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+      const n = new V3(0, 1, 0).applyQuaternion(q);               // 円の面の法線
+      const denom = D.dot(n); if (Math.abs(denom) < 1e-9) continue;
+      const t = rec.a.clone().sub(O).dot(n) / denom; if (t <= 0) continue;
+      const hit = O.clone().addScaledVector(D, t);                // 円の面上の交点（modelローカル）
+      const local = hit.clone().sub(rec.a).applyQuaternion(q.clone().invert());
+      const lx = local.x, lz = local.z;
+      const rho = Math.hypot(lx / rx, lz / rz);                   // 1=縁・<1内側・>1外側
+      if (rho > 1.35) continue;                                   // 円から離れすぎ＝対象外
+      const sc = modelGroup.localToWorld(rec.a.clone()).project(cam);
+      const sd = Math.hypot(rect.left + (sc.x * .5 + .5) * rect.width - cx, rect.top + (-sc.y * .5 + .5) * rect.height - cy);
+      if (sd < bestD) {
+        const tt = Math.atan2(lz / rz, lx / rx);                  // カーソル方向の離心角
+        const edgeWorld = rec.a.clone().add(new V3(Math.cos(tt) * rx, 0, Math.sin(tt) * rz).applyQuaternion(q));
+        best = { rec, edgeWorld, inside: rho <= 1.0 };
+        bestD = sd;
+      }
+    }
+    return best;
+  }
+  // ロック済みの円 rec に対し、カーソル位置から半径/直径寸法の a,b,lead を求める。
+  // 向き＝中心→カーソル方向（四半円方向へスナップ）／lead＝値の位置（中心・四半円点・機点・縁へスナップ）。
+  function circleDimFromCursor(rec, cx, cy) {
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    placeNdc.x = ((cx - rect.left) / rect.width) * 2 - 1;
+    placeNdc.y = -((cy - rect.top) / rect.height) * 2 + 1;
+    placeRay.setFromCamera(placeNdc, cam);
+    const O = modelGroup.worldToLocal(placeRay.ray.origin.clone());
+    const D = modelGroup.worldToLocal(placeRay.ray.origin.clone().addScaledVector(placeRay.ray.direction, 1)).sub(O).normalize();
+    const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+    const qi = q.clone().invert();
+    const C = rec.a.clone(), n = new V3(0, 1, 0).applyQuaternion(q);
+    const denom = D.dot(n); if (Math.abs(denom) < 1e-9) return null;
+    const t = C.clone().sub(O).dot(n) / denom; if (t <= 0) return null;
+    const hit = O.clone().addScaledVector(D, t);                 // 円の面上のカーソル点
+    // スナップ点（機点・中心・四半円点・交点）をカーソル近傍から拾う
+    const snap = drawSnapPoint(cx, cy);
+    const isCenterSnap = snap && snap.distanceTo(C) < 1e-4;
+    // 向きの基準点：スナップ点（中心以外）優先、無ければカーソルの面上点
+    const dirRef = (snap && !isCenterSnap) ? snap : hit;
+    let local = dirRef.clone().sub(C).applyQuaternion(qi);
+    let tt = Math.atan2(local.z / rz, local.x / rx);
+    if (dirRef === hit) {                                        // 自由カーソル時のみ四半円方向（0/90/180/270°）へスナップ
+      const k = Math.round(tt / (Math.PI / 2)) * (Math.PI / 2);
+      let diff = tt - k; while (diff > Math.PI) diff -= 2 * Math.PI; while (diff < -Math.PI) diff += 2 * Math.PI;
+      if (Math.abs(diff) < 9 * Math.PI / 180) tt = k;
+    }
+    const E = C.clone().add(new V3(Math.cos(tt) * rx, 0, Math.sin(tt) * rz).applyQuaternion(q));   // その方向の縁（四半円点）
+    const dir = E.clone().sub(C); const Rdir = dir.length(); if (Rdir > 1e-9) dir.multiplyScalar(1 / Rdir); else dir.set(1, 0, 0);
+    // lead（値の位置）：スナップ点があればその射影、無ければカーソル射影＋縁スナップ
+    const refPt = snap ? snap : hit;
+    let lead = refPt.clone().sub(C).dot(dir);
+    if (!snap && Math.abs(lead - Rdir) < 0.006) lead = Rdir;     // 縁の近くは縁へ吸着
+    lead = Math.max(0.001, lead);
+    const a = (dimKind === 'radius') ? C : C.clone().addScaledVector(dir, -Rdir);   // 直径は反対側の縁
+    const st = Object.assign({}, styleFor('dim'), { dimKind, dimLead: lead });
+    return { a, b: E, st, snapPt: snap || null };
+  }
+  // ===== 角度寸法（3点間／2直線間）=====
+  const ANG_PICK_COLOR = 0x39ff8a;   // 角度の対象として選択した直線のハイライト色（緑）
+  // カーソル光線と「点Vを通り法線nの平面」の交点（modelローカル）
+  function rayPlanePoint(Vp, n, cx, cy) {
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    placeNdc.x = ((cx - rect.left) / rect.width) * 2 - 1;
+    placeNdc.y = -((cy - rect.top) / rect.height) * 2 + 1;
+    placeRay.setFromCamera(placeNdc, cam);
+    const O = modelGroup.worldToLocal(placeRay.ray.origin.clone());
+    const D = modelGroup.worldToLocal(placeRay.ray.origin.clone().addScaledVector(placeRay.ray.direction, 1)).sub(O).normalize();
+    const denom = D.dot(n); if (Math.abs(denom) < 1e-9) return null;
+    const t = Vp.clone().sub(O).dot(n) / denom; if (t <= 0) return null;
+    return O.addScaledVector(D, t);
+  }
+  // V,P1,P2 が張る平面上のカーソル点（平面が決まらなければ水平面）
+  function angleCursorPt(Vp, P1, P2, cx, cy) {
+    let n = P1.clone().sub(Vp).cross(P2.clone().sub(Vp));
+    if (n.lengthSq() < 1e-9) n.set(0, 1, 0); n.normalize();
+    return rayPlanePoint(Vp, n, cx, cy) || Vp.clone();
+  }
+  // 2直線（無限延長）の最接近点の中点＝交点とみなす
+  function lineLineClosest(p1, p2, p3, p4) {
+    const d1 = p2.clone().sub(p1), d2 = p4.clone().sub(p3), r = p1.clone().sub(p3);
+    const a = d1.dot(d1), b = d1.dot(d2), c = d2.dot(d2), d = d1.dot(r), e = d2.dot(r);
+    const den = a * c - b * b;
+    const s = Math.abs(den) < 1e-9 ? 0 : (b * e - c * d) / den;
+    const t = Math.abs(c) < 1e-9 ? 0 : (b * s + e) / c;
+    return p1.clone().addScaledVector(d1, s).add(p3.clone().addScaledVector(d2, t)).multiplyScalar(0.5);
+  }
+  // 線レコード上の、カーソルに最も近い点（向きの基準に使う）
+  function clickPtOnLine(rec, cx, cy) {
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    const [Ae, Be] = annPickEnds(rec);
+    const pr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height }; };
+    const sa = pr(Ae), sb = pr(Be), vx = sb.x - sa.x, vy = sb.y - sa.y, vv = vx * vx + vy * vy;
+    const t = vv > 1e-9 ? ((cx - sa.x) * vx + (cy - sa.y) * vy) / vv : 0;
+    return Ae.clone().lerp(Be, t);
+  }
+  // カーソル近傍の線分/構築線レコード（角度の対象オブジェクト用）
+  function pickAnnLineAt(cx, cy) { const r = pickAnnAt(cx, cy); return (r && (r.type === 'line' || r.type === 'xline')) ? r : null; }
+  // 確定済みの半径/直径/角度寸法を再選択して、逃げ（リーダー長／円弧半径・優劣角）をカーソルで再調整する
+  function dimReadjustApply(rec, cx, cy) {
+    const s = rec.style, kind = s.dimKind;
+    const snap = drawSnapPoint(cx, cy);
+    if (kind === 'radius' || kind === 'diameter') {
+      const C = kind === 'radius' ? rec.a.clone() : rec.a.clone().add(rec.b).multiplyScalar(0.5);
+      const dir = rec.b.clone().sub(C); const Rd = dir.length(); if (Rd > 1e-9) dir.multiplyScalar(1 / Rd); else dir.set(1, 0, 0);
+      const ref = snap ? snap.clone() : axisStretchPoint(cx, cy, C, dir);
+      if (ref) { let lead = ref.clone().sub(C).dot(dir); if (!snap && Math.abs(lead - Rd) < 0.006) lead = Rd; s.dimLead = Math.max(0.001, lead); }
+    } else if (kind === 'angle') {
+      const V = rec.a.clone(), P1 = rec.b.clone(), P2 = new V3(s.angP2[0], s.angP2[1], s.angP2[2]);
+      const cur = snap ? snap.clone() : angleCursorPt(V, P1, P2, cx, cy);
+      s.arcR = Math.max(0.005, cur.distanceTo(V));
+      const d1 = P1.clone().sub(V).normalize(), d2 = P2.clone().sub(V).normalize();
+      const bis = d1.clone().add(d2); if (bis.lengthSq() > 1e-9) { bis.normalize(); const cd = cur.clone().sub(V); if (cd.lengthSq() > 1e-9) s.angReflex = cd.normalize().dot(bis) < 0; }
+    }
+    rebuildAnn(rec); refreshAnnHi();
+    return snap;
+  }
+  // 頂点Vから方向dirへ、対象直線recが届く距離（＝補助線でこの距離までは直線と重なるので描かない）
+  function lineReach(rec, V, dir) {
+    const e = annPickEnds(rec);
+    return Math.max(0, e[0].clone().sub(V).dot(dir), e[1].clone().sub(V).dot(dir));
+  }
+  // 収集中の角度状態＋カーソルから、寸法レコードの a(=V),b(=P1),style を作る
+  function angleDimFrom(ang, cx, cy) {
+    if (ang.mode === 'obj') {
+      // 2直線間：頂点Vと各直線の向き u1,u2。カーソルのある象限に合わせて各直線の「カーソル側の半直線」を選ぶ
+      // → その2半直線のなす角（θ または 180−θ）を測る（AutoCAD と同じ）。
+      const V = ang.V, u1 = ang.u1, u2 = ang.u2;
+      const snap = drawSnapPoint(cx, cy);              // 機点・端点・交点・中点へスナップ
+      const cur = snap ? snap.clone() : angleCursorPt(V, V.clone().add(u1), V.clone().add(u2), cx, cy);
+      const R = Math.max(0.005, cur.distanceTo(V));
+      const cv = cur.clone().sub(V);
+      const s1 = (cv.dot(u1) < 0) ? -1 : 1;            // カーソル側へ向く半直線
+      const s2 = (cv.dot(u2) < 0) ? -1 : 1;
+      const d1 = u1.clone().multiplyScalar(s1), d2 = u2.clone().multiplyScalar(s2);
+      const P1 = V.clone().addScaledVector(d1, R), P2 = V.clone().addScaledVector(d2, R);
+      const reach = [lineReach(ang.lines[0], V, d1), lineReach(ang.lines[1], V, d2)];   // 補助線で重なりを隠す境界
+      const st = Object.assign({}, styleFor('dim'), { dimKind: 'angle', angP2: [P2.x, P2.y, P2.z], arcR: R, angReflex: false, angReach: reach });
+      return { a: V.clone(), b: P1, st, snapPt: snap || null };
+    }
+    // 3点間：V=頂点・P1・P2＝指定2方向。カーソルが劣角側か優角側かで挟角/優角を測る
+    const V = ang.pts[0], P1 = ang.pts[1], P2 = ang.pts[2];
+    if (!V || !P1 || !P2) return null;
+    const cur = angleCursorPt(V, P1, P2, cx, cy);
+    const R = Math.max(0.005, cur.distanceTo(V));
+    const d1 = P1.clone().sub(V), d2 = P2.clone().sub(V);
+    let reflex = false;
+    const bis = d1.clone().normalize().add(d2.clone().normalize());
+    if (bis.lengthSq() > 1e-9) { bis.normalize(); const cd = cur.clone().sub(V); if (cd.lengthSq() > 1e-9) reflex = cd.normalize().dot(bis) < 0; }
+    const st = Object.assign({}, styleFor('dim'), { dimKind: 'angle', angP2: [P2.x, P2.y, P2.z], arcR: R, angReflex: reflex });
+    return { a: V.clone(), b: P1.clone(), st };
+  }
   // 部品の機点＋既存の線/寸法線の両端点（画面距離 SNAP_PX 以内の最近傍）
   function drawSnapPoint(clientX, clientY) {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -3717,7 +4486,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!p.userData.faceLocal) continue;
       for (const local of connsOf(p)) test(connModelPos(p, local));
     }
-    for (const r of annStore) { if (r === drawState.editRec) continue; test(r.a); test(r.b); }   // 他の線・寸法線の両端（編集中の線自身は除外＝自己吸着で飛ぶのを防ぐ）
+    for (const r of annStore) { if (r === drawState.editRec) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）
     for (const p of xlinePts) test(p);   // 構築線どうしの交点（CADの交点スナップ）
     return best;
   }
@@ -3823,7 +4592,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ---- 脚の数値入力欄（X方向・Z方向・Y方向）＋本線の距離。部品移動と同じ placeLegInput を流用 ----
   const lnXBox = $('lnXBox'), lnX = $('lnX'), lnZBox = $('lnZBox'), lnZ = $('lnZ'),
         lnYBox = $('lnYBox'), lnY = $('lnY'), lnDBox = $('lnDBox'), lnD = $('lnD');
-  function hideLineBoxes() { [lnXBox, lnZBox, lnYBox, lnDBox].forEach(b => { if (b) b.style.display = 'none'; }); hideXlineAngle(); }
+  function hideLineBoxes() { [lnXBox, lnZBox, lnYBox, lnDBox].forEach(b => { if (b) b.style.display = 'none'; }); hideXlineAngle(); hideDimOffLabel(); if (typeof hideCircleR === 'function') hideCircleR(); }
   function showLeg(box, inp, mid, outDir, mm) { placeLegInput(box, inp, mid, outDir, mm); }
   // ---- 構築線の角度ラベル（寸法は出さず、置いた方位角だけ表示） ----
   const xlineAngleEl = document.createElement('div');
@@ -3843,13 +4612,51 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const p = a.clone().add(b).multiplyScalar(0.5).project(cam);
     if (p.z >= 1) { hideXlineAngle(); return; }
     const sx = rect.left + (p.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-p.y * 0.5 + 0.5) * rect.height;
-    xlineAngleEl.textContent = '∠ ' + xlineAngleDeg(a, b).toFixed(1) + '°';
+    xlineAngleEl.textContent = '方位 ' + xlineAngleDeg(a, b).toFixed(1) + '°';   // 方位角スピナーと同じ表記・同じ値（0〜180°）
     xlineAngleEl.style.display = 'block';
     xlineAngleEl.style.left = Math.round(sx - xlineAngleEl.offsetWidth / 2) + 'px';
     xlineAngleEl.style.top = Math.round(sy - 26) + 'px';
   }
+  // ---- 寸法線の逃げ量ラベル（調整中に寸法線本体の中点脇へ表示） ----
+  const dimOffEl = document.createElement('div');
+  dimOffEl.id = 'dimOffLabel';
+  dimOffEl.style.cssText = 'position:fixed;z-index:60;display:none;padding:1px 6px;font:bold 12px Meiryo,sans-serif;color:#ffd9a0;background:rgba(26,18,6,.82);border:1px solid #8a6a2e;border-radius:4px;pointer-events:none;white-space:nowrap';
+  document.body.appendChild(dimOffEl);
+  function hideDimOffLabel() { dimOffEl.style.display = 'none'; }
+  function showDimOffLabel() {
+    if (!drawState.dimAdjust || !drawState.dimDir) { hideDimOffLabel(); return; }
+    const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
+    const dd = drawState.dimDir, off = drawState.dimOff || 0;
+    const mid = a.clone().add(b).multiplyScalar(0.5).add(new V3(dd.x, dd.y, dd.z).multiplyScalar(off));
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const p = mid.project(cam);
+    if (p.z >= 1) { hideDimOffLabel(); return; }
+    const sx = rect.left + (p.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-p.y * 0.5 + 0.5) * rect.height;
+    dimOffEl.textContent = '逃げ ' + Math.round(Math.abs(off) * 1000) + ' mm';
+    dimOffEl.style.display = 'block';
+    dimOffEl.style.left = Math.round(sx - dimOffEl.offsetWidth / 2) + 'px';
+    dimOffEl.style.top = Math.round(sy - 26) + 'px';
+  }
   function placeDistanceBox(a, b) {   // 本線（斜辺）の距離 mm を中点に表示
     if (lnDBox) placeLegInput(lnDBox, lnD, a.clone().add(b).multiplyScalar(0.5), new V3(0, 1, 0), Math.round(a.distanceTo(b) * 1000));
+  }
+  // ---- 円の半径ラベル（描画中・編集中に R○mm を追従表示） ----
+  const circleREl = document.createElement('div');
+  circleREl.id = 'circleRLabel';
+  circleREl.style.cssText = 'position:fixed;z-index:60;display:none;padding:1px 6px;font:bold 12px Meiryo,sans-serif;color:#dbe4f3;background:rgba(20,28,51,.86);border:1px solid #3a4a6e;border-radius:4px;pointer-events:none;white-space:nowrap';
+  document.body.appendChild(circleREl);
+  function hideCircleR() { circleREl.style.display = 'none'; }
+  function showCircleR(center, edge) {
+    const r = center.distanceTo(edge);
+    if (r < 1e-4) { hideCircleR(); return; }
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const mid = center.clone().add(edge).multiplyScalar(0.5).project(cam);
+    if (mid.z >= 1) { hideCircleR(); return; }
+    const sx = rect.left + (mid.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-mid.y * 0.5 + 0.5) * rect.height;
+    circleREl.textContent = 'R ' + Math.round(r * 1000) + ' mm';
+    circleREl.style.display = 'block';
+    circleREl.style.left = Math.round(sx - circleREl.offsetWidth / 2) + 'px';
+    circleREl.style.top = Math.round(sy - 24) + 'px';
   }
   // 毎フレーム：脚入力欄を三角形の脚の位置へ追従（カメラ移動対応）。描画/確定待ち時のみ表示。
   function positionLineBoxes() {
@@ -3865,6 +4672,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (lnYBox) lnYBox.style.display = 'none';
       if (Math.abs(dx) > 1e-4 && Math.abs(dz) > 1e-4) placeDistanceBox(start, end);   // 斜め時だけ距離L。軸方向のみの時は重なるので隠す
       else if (lnDBox) lnDBox.style.display = 'none';
+      return;
+    }
+    if (lineDrag && lineDrag.mode === 'circleaxis') {   // 円/楕円の半径変更中：掴んだ軸の半径ラベルを表示
+      const rec = lineDrag.rec, c = rec.a, { rx, rz } = circleRadii(rec.style, rec.a, rec.b);
+      const v = lineDrag.axis === 'x' ? rx : rz;
+      [lnXBox, lnZBox, lnYBox, lnDBox].forEach(b => { if (b) b.style.display = 'none'; }); hideXlineAngle(); hideDimOffLabel();
+      showCircleR(c, c.clone().addScaledVector(lineDrag.dir, v));
+      return;
+    }
+    if (drawState.dimAdjust) { hideLineBoxes(); showDimOffLabel(); return; }   // 寸法線の逃げ調整中は入力フォームを出さず、逃げ量ラベルだけ追従表示
+    if (drawState.mode === 'dim') { hideLineBoxes(); return; }   // 寸法線の1→2点目中も小窓（脚入力欄）は出さない（2026-06-13 社長指示）
+    // 円：脚X/Z/Yは出さず、中心→半径点の半径ラベルだけ追従表示
+    if (drawState.mode === 'circle' || (drawState.editRec && drawState.editRec.type === 'circle')) {
+      [lnXBox, lnZBox, lnYBox, lnDBox].forEach(b => { if (b) b.style.display = 'none'; }); hideXlineAngle(); hideDimOffLabel();
+      if (drawState.first && drawState.cur && drawState.first.distanceTo(drawState.cur) >= 0.003) showCircleR(drawState.first, drawState.cur);
+      else hideCircleR();
       return;
     }
     if (!drawState.first || !drawState.cur) { hideLineBoxes(); return; }
@@ -3915,6 +4738,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function clearDrawTemp() {    // 描画途中の状態を全消去（線は残す）
     drawState.first = null; drawState.cur = null; drawState.vert = false;
     drawState.locked = false; drawState.editRec = null; drawState.snapped = false;
+    drawState.dimAdjust = null; drawState.dimOff = 0; drawState.dimDir = null;   // 寸法線の逃げ調整状態も解除
+    drawState.circDim = null;   // 半径/直径：ロック中の円も解除
+    drawState.dimReadjust = null;   // 寸法の逃げ再調整も解除
+    if (drawState.angle && drawState.angle.lines) for (const ln of drawState.angle.lines) paintAnn(ln, selAnns.has(ln));   // 角度の選択ハイライト(緑)を戻す
+    drawState.angle = null;     // 角度：収集中の点/直線も解除
     clearPreview();
     if (typeof clearLineGuide === 'function') clearLineGuide();
     if (typeof hideLineBoxes === 'function') hideLineBoxes();
@@ -3923,6 +4751,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const finishGuide = clearDrawTemp;      // 確定待ちを終える（線は確定済みなので残る）
   function commitGuideToStore() {         // first→cur を実体の注釈として作成し、そのレコードを返す
     if (!drawState.first || !drawState.cur || drawState.cur.distanceTo(drawState.first) <= 1e-6) return null;
+    if (drawState.mode === 'circle') {    // 円：半径＝中心→カーソルの水平距離。真円(rx=rz)で起票
+      const r = Math.hypot(drawState.cur.x - drawState.first.x, drawState.cur.z - drawState.first.z);
+      if (r < 1e-4) return null;
+      const st = Object.assign({}, styleFor('circle'), { rx: r, rz: r });
+      addAnnotation('circle', drawState.first.clone(), drawState.cur.clone(), st);
+      return annStore[annStore.length - 1];
+    }
     addAnnotation(drawState.mode, drawState.first, drawState.cur);
     return annStore[annStore.length - 1];
   }
@@ -3997,16 +4832,81 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   //  ② 押す→ドラッグ→離す：1ジェスチャで起点～終点を確定。
   // どちらも確定後は確定待ち(locked)になり、脚入力で寸法を編集できる。
   let drawDown = null, drawRDown = null;
+  // ---- 寸法線の「逃げ」（補助線の長さ）調整 ----
+  // 2点目確定後、カーソル移動で寸法線を起点から離す距離を決め、3回目のクリックで確定する。
+  function startDimAdjust() {
+    if (!drawState.first || !drawState.cur || drawState.cur.distanceTo(drawState.first) <= 1e-6) { abortDrawPoint(); return; }
+    drawState.dimAdjust = { a: drawState.first.clone(), b: drawState.cur.clone() };
+    drawState.dimOff = 0; drawState.dimDir = null;
+    hideLineBoxes(); clearLineGuide();
+  }
+  // カーソル位置 → 逃げ量(off, m)と方向(dir)。
+  //  平面の寸法（ABに水平成分あり）：通常＝ABの水平直交へ／Shift＝縦（上下）へ
+  //  立面の寸法（ABが垂直）       ：水平へ逃がす。通常＝方向45°刻み／Shift＝斜め（自由角度）
+  function dimOffsetFromCursor(cx, cy, A, B, shift) {
+    const ab = B.clone().sub(A);
+    const isVertAB = ab.x * ab.x + ab.z * ab.z < 1e-9;
+    if (!isVertAB && shift) {                     // 平面の寸法＋Shift＝縦方向：カメラに正対する鉛直面で高さを拾う
+      const rect = renderer.domElement.getBoundingClientRect();
+      placeNdc.x = ((cx - rect.left) / rect.width) * 2 - 1;
+      placeNdc.y = -((cy - rect.top) / rect.height) * 2 + 1;
+      placeRay.setFromCamera(placeNdc, activeCam());
+      const Aw = modelGroup.localToWorld(A.clone());
+      const n = new V3().subVectors(activeCam().position, Aw); n.y = 0;
+      if (n.lengthSq() < 1e-9) n.set(0, 0, 1);
+      n.normalize();
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, Aw);
+      const hitV = new V3();
+      if (!placeRay.ray.intersectPlane(plane, hitV)) return null;
+      modelGroup.worldToLocal(hitV);
+      return { off: hitV.y - A.y, dir: { x: 0, y: 1, z: 0 } };
+    }
+    const hit = planeHitAt(cx, cy, A.y);
+    if (!hit) return null;
+    if (!isVertAB) {                              // 平面の寸法（通常）＝ABの水平直交へ
+      const u = new V3(-ab.z, 0, ab.x).normalize();
+      const off = (hit.x - A.x) * u.x + (hit.z - A.z) * u.z;
+      return { off, dir: { x: u.x, y: 0, z: u.z } };
+    }
+    const vx = hit.x - A.x, vz = hit.z - A.z;     // 立面の寸法：水平へ逃がす
+    const l = Math.hypot(vx, vz);
+    if (l < 1e-9) return null;
+    if (shift) return { off: l, dir: { x: vx / l, y: 0, z: vz / l } };   // Shift＝斜め（自由角度）
+    const step = Math.PI / 4;                     // 通常＝45°刻みでスナップ
+    const ang = Math.round(Math.atan2(vz, vx) / step) * step;
+    const ux = Math.cos(ang), uz = Math.sin(ang);
+    return { off: Math.max(0, vx * ux + vz * uz), dir: { x: ux, y: 0, z: uz } };
+  }
+  function commitDimWithOffset() {                      // 3回目クリック＝逃げを確定して寸法線を作る
+    const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
+    const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff || 0, dimDir: drawState.dimDir || null });
+    addAnnotation('dim', a, b, st);
+    const rec = annStore[annStore.length - 1];
+    clearDrawTemp();
+    cancelDraw();   // ツールを抜ける（構築線と同様、以後クリックや窓で再選択できる）
+    // 確定直後に逃げ量スピナー（mm・1mm刻み）。立面寸法はその確定後に方位スピナー（0.5°刻み）が続く
+    if (rec.style.dimDir) startDimOffSpin(rec);
+  }
+  function commitLeader() {                             // 引出：a=矢印先端(1点目)・b=肘(2点目)で確定。棚と文字はbから自動生成
+    if (!drawState.first || !drawState.cur || drawState.cur.distanceTo(drawState.first) <= 1e-6) { clearDrawTemp(); return; }
+    const st = Object.assign({}, styleFor('dim'), { dimKind: 'leader' });
+    addAnnotation('dim', drawState.first.clone(), drawState.cur.clone(), st);
+    const rec = annStore[annStore.length - 1];
+    cancelDraw();   // ツールを抜ける
+    // そのまま注記の入力へ：レコードを選択し、入力フォームを開いてフォーカス（新規入力＝ラベル「入力」）
+    selectLine(rec);
+    if (window.__openDimValueForm) window.__openDimValueForm(false);
+    if (window.__focusDimValueInput) window.__focusDimValueInput();
+  }
   function commitGuide() {                              // first→cur を確定し、確定待ち(locked)へ
     const rec = commitGuideToStore();
     if (rec) {
-      if (rec.type === 'xline') {                    // 構築線：ツールを抜けて選択（中心1点）→角度スピナー→決定後にEL入力
+      if (rec.type === 'xline') {                    // 構築線：ツールを抜けて選択 → まずEL入力(フォーカス済) → Enterで方位角 → Enterで閉じる
         cancelDraw();                                // ツールを抜ける（以後クリックで再選択できる）
         selectLine(rec);
-        const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
-        const n = modelGroup.localToWorld(rec.a.clone()).project(cam);
-        const sx = rect.left + (n.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-n.y * 0.5 + 0.5) * rect.height;
-        startRotSpin(true, sx, sy);                  // 構築線選択中の Shift 相当＝方位角スピナー。閉じるとEL入力が出る
+        focusElInputSoon();                          // EL欄へ即フォーカス（2026-06-13 社長指示：EL→角度の順）
+      } else if (rec.type === 'circle') {             // 円：確定したら脚編集に入らず、その場で次の円を描けるようにする
+        clearDrawTemp();
       } else { drawState.editRec = rec; drawState.locked = true; clearPreview(); }
     }
     return rec;
@@ -4020,19 +4920,67 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof maybeCloseFmtMenu === 'function' && maybeCloseFmtMenu()) { e.stopImmediatePropagation(); drawDown = null; return; }
     const rect = renderer.domElement.getBoundingClientRect();
     if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;   // ビューキューブは通す
+    if (drawState.mode === 'dim' && dimKind === 'angle') {   // 角度：2直線をそれぞれ選択して測る（直線オブジェクト以外は無視）
+      const ang = drawState.angle;
+      const placing = ang && ang.V;
+      if (placing) {                                    // 確定クリック（円弧位置で確定）
+        const r = angleDimFrom(ang, e.clientX, e.clientY);
+        if (r) addAnnotation('dim', r.a, r.b, r.st);
+        cancelDraw();                                   // ツールを抜ける（clearDrawTempでプレビュー消去・緑ハイライト復元・状態解除）
+      } else if (!ang) {                                // 1本目：直線をクリックで選択（緑ハイライト）。空間クリックは何もしない
+        const ln = pickAnnLineAt(e.clientX, e.clientY);
+        if (ln) { drawState.angle = { mode: 'obj', lines: [ln] }; paintAnn(ln, true, ANG_PICK_COLOR); }
+      } else {                                          // 2本目の直線 → 交点を頂点に・各直線の向きを保持
+        const ln = pickAnnLineAt(e.clientX, e.clientY);
+        if (ln && ln !== ang.lines[0]) {
+          ang.lines.push(ln); paintAnn(ln, true, ANG_PICK_COLOR);
+          const e0 = annPickEnds(ang.lines[0]), e1 = annPickEnds(ang.lines[1]);
+          ang.V = lineLineClosest(e0[0], e0[1], e1[0], e1[1]);
+          ang.u1 = e0[1].clone().sub(e0[0]).normalize();
+          ang.u2 = e1[1].clone().sub(e1[0]).normalize();
+        }
+      }
+      drawDown = null; e.stopImmediatePropagation();
+      return;
+    }
+    if (drawState.mode === 'dim' && (dimKind === 'radius' || dimKind === 'diameter')) {
+      if (drawState.circDim) {                          // 2クリック目＝この位置（内外・補助線長）で確定
+        const r = circleDimFromCursor(drawState.circDim.rec, e.clientX, e.clientY);
+        if (r) addAnnotation('dim', r.a, r.b, r.st);
+        drawState.circDim = null; clearPreview();
+        cancelDraw();                                   // ツールを抜ける（以後クリックで選択・値クリックで編集できる）
+      } else {                                          // 1クリック目＝対象の円/楕円をロックし、その場で寸法を出す
+        const hit = pickCircleForDim(e.clientX, e.clientY);
+        if (hit) {
+          drawState.circDim = { rec: hit.rec };
+          const r = circleDimFromCursor(hit.rec, e.clientX, e.clientY);
+          if (r) { clearPreview(); drawState.preview = buildAnn('dim', r.a, r.b, r.st); drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; }); annGroup.add(drawState.preview); }
+        }
+      }
+      drawDown = null; e.stopImmediatePropagation();
+      return;
+    }
+    if (drawState.mode === 'dim' && drawState.dimAdjust) {   // 寸法線：3回目クリック＝補助線の長さ（逃げ）を確定
+      commitDimWithOffset();
+      drawDown = null;
+      e.stopImmediatePropagation();
+      return;
+    }
     if (drawState.locked) finishGuide();                // 直前の確定待ちを終え、新しい線を始める
     const hadFirst = !!drawState.first;
     if (!hadFirst) {                                    // ①の1回目／②の押下＝起点を決める
       const r = pickFirstPoint(e.clientX, e.clientY);
       if (r.p) {
-        drawState.first = r.p; drawState.cur = r.p.clone(); drawState.vert = e.shiftKey;
+        drawState.first = r.p; drawState.cur = r.p.clone(); drawState.vert = e.shiftKey && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし
         drawState.snapped = r.snapped; drawState.locked = false; drawState.editRec = null;
         clearPreview();
-        drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);
+        if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);   // 円は脚三角形を出さない
       }
     } else {                                            // ①の2回目＝終点を現在位置に合わせる（離す時に確定）
-      const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, e.shiftKey);
-      if (r.p) { drawState.cur = r.p; drawState.vert = e.shiftKey; drawState.snapped = r.snapped; }
+      const sh = e.shiftKey && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし
+      const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
+      if (r.p && drawState.mode === 'xline') r.p.y = drawState.first.y;   // スナップ先のELにも引っ張られず水平を保つ
+      if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
     }
     drawDown = { x: e.clientX, y: e.clientY, armed: !hadFirst };   // armed=この押下で起点を立てた
     e.stopImmediatePropagation();
@@ -4045,30 +4993,82 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     e.stopImmediatePropagation();
     if (!drawState.first) return;
     if (armed) {                                        // 起点を立てた押下
-      if (moved > 6) { if (!commitGuide()) abortDrawPoint(); }   // ②ドラッグして離した＝確定
+      if (moved > 6) {
+        if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
+        else if (drawState.mode === 'dim') startDimAdjust();      // 平行寸法は確定せず逃げ調整へ
+        else if (!commitGuide()) abortDrawPoint();                // ②ドラッグして離した＝確定
+      }
       // ドラッグ無し（単純クリック）＝①の1回目。起点は残し、2回目クリックを待つ
     } else {                                            // ①の2回目クリック＝終点で確定
-      commitGuide();                                    // 同一点でゼロ長なら確定されず、起点を保持して継続
+      if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();     // 引出＝肘で確定（2点）
+      else if (drawState.mode === 'dim') startDimAdjust();        // 平行寸法は確定せず逃げ調整へ
+      else commitGuide();                               // 同一点でゼロ長なら確定されず、起点を保持して継続
     }
   }, true);
   window.addEventListener('pointermove', e => {
     if (!drawActive()) return;
     if (overLineBox(e.clientX, e.clientY)) return;      // 脚入力欄の上ではプレビュー凍結（方向を保つ）
     if (drawState.locked) return;                       // 確定待ちは固定（脚入力で編集）
+    if (drawState.mode === 'dim' && dimKind === 'angle') {   // 角度：2本目を取った後だけ円弧プレビューを出す（選択前は何も出さない）
+      clearPreview(); clearLineGuide();
+      const ang = drawState.angle;
+      if (ang && ang.V) {
+        const r = angleDimFrom(ang, e.clientX, e.clientY);
+        if (r) {
+          drawState.preview = buildAnn('dim', r.a, r.b, r.st); drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; }); annGroup.add(drawState.preview);
+          if (r.snapPt) guideDot(r.snapPt, 0x39ff8a, 0.0042);   // スナップ中＝緑印
+        }
+      } else if (pickAnnLineAt(e.clientX, e.clientY)) {   // 直線をホバー中＝スナップ印（半径/直径と同じ操作感）
+        const sp = drawSnapPoint(e.clientX, e.clientY); if (sp) guideDot(sp, 0x39ff8a, 0.0042);
+      }
+      return;
+    }
+    if (drawState.mode === 'dim' && (dimKind === 'radius' || dimKind === 'diameter')) {   // 半径/直径：ロック後のみ、カーソルで向き・内外・補助線長を調整するプレビュー
+      clearPreview(); clearLineGuide();
+      if (drawState.circDim) {
+        const r = circleDimFromCursor(drawState.circDim.rec, e.clientX, e.clientY);
+        if (r) {
+          drawState.preview = buildAnn('dim', r.a, r.b, r.st);
+          drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; });
+          annGroup.add(drawState.preview);
+          if (r.snapPt) guideDot(r.snapPt, 0x39ff8a, 0.0042);   // スナップ中＝緑印
+        }
+      } else {                                            // ロック前：円/楕円に来たらスナップ印（中心・四半円点・機点）を出す
+        if (pickCircleForDim(e.clientX, e.clientY)) {
+          const snap = drawSnapPoint(e.clientX, e.clientY);
+          if (snap) guideDot(snap, 0x39ff8a, 0.0042);
+        }
+      }
+      return;
+    }
+    if (drawState.mode === 'dim' && drawState.dimAdjust) {   // 寸法線：カーソルで補助線の長さ（逃げ）を調整
+      const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
+      const r = dimOffsetFromCursor(e.clientX, e.clientY, a, b, e.shiftKey);   // Shift＝縦方向へ逃げる
+      if (r) { drawState.dimOff = r.off; drawState.dimDir = r.dir; }
+      clearPreview();
+      const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff, dimDir: drawState.dimDir });
+      drawState.preview = buildAnn('dim', a, b, st);
+      drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; });
+      annGroup.add(drawState.preview);
+      return;
+    }
     if (!drawState.first) {                             // ホバー中：スナップ印だけ出す（吸着可視化）
       clearLineGuide();
       const r = pickFirstPoint(e.clientX, e.clientY);
       if (r.snapped && r.p) guideDot(r.p, 0x39ff8a, 0.0042);
       return;
     }
-    const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, e.shiftKey);
+    const sh = e.shiftKey && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし（常に水平）
+    const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
     if (!r.p) return;
-    drawState.cur = r.p; drawState.vert = e.shiftKey; drawState.snapped = r.snapped;
+    if (drawState.mode === 'xline') r.p.y = drawState.first.y;
+    if (drawState.mode === 'circle') r.p.y = drawState.first.y;   // 半径点も中心の高さに合わせる（水平な円）
+    drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped;
     clearPreview();
     drawState.preview = buildAnn(drawState.mode, drawState.first, r.p, styleFor(drawState.mode));
     drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; });
     annGroup.add(drawState.preview);
-    drawTriangle3D(drawState.first, r.p, drawState.vert, drawState.snapped);
+    if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, r.p, drawState.vert, drawState.snapped);   // 円は脚三角形を出さない
   }, true);
   window.addEventListener('contextmenu', e => {
     if (!drawActive()) return;
@@ -4078,7 +5078,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     drawRDown = null;
     if (moved > 6) return;                               // 右ドラッグ＝視点パン → 取消しない
     if (drawState.locked) finishGuide();                 // 確定待ちを終える（線は残す）
-    else if (drawState.first) abortDrawPoint();          // 描画中の起点を取消
+    else if (drawState.first || drawState.circDim || drawState.angle) abortDrawPoint();   // 描画中の起点／半径直径ロック／角度収集を取消
     else cancelDraw();                                   // モード解除
   }, true);
   window.addEventListener('keydown', e => {
@@ -4087,18 +5087,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (e.key === 'Escape') {
       e.stopImmediatePropagation();
       if (drawState.locked) finishGuide();
-      else if (drawState.first) abortDrawPoint();
+      else if (drawState.first || drawState.circDim || drawState.angle) abortDrawPoint();
       else cancelDraw();
     } else if ((e.key === 'Delete' || e.key === 'Backspace') && !drawState.first && annStore.length) {
       e.stopImmediatePropagation();
       const r = annStore.pop(); annGroup.remove(r.obj); disposeObj(r.obj);   // 直近の注釈を取消
+      if (r.type === 'xline') updateXlinePts();   // 構築線なら交点も引き直す
     }
   }, true);
 
   // ===================================================================
   //  描画後の線分：再選択 / 移動 / 端点ドラッグで長さ変更（描画モード外で動作）
   // ===================================================================
-  window.__annSnapPoints = () => { const a = []; for (const r of annStore) { if (r === drawState.editRec) continue; if (annMoveSnap && selAnns.has(r)) continue; a.push(r.a, r.b); } return a; };
+  window.__annSnapPoints = () => { const a = []; for (const r of annStore) { if (r === drawState.editRec) continue; if (annMoveSnap && selAnns.has(r)) continue; for (const sp of annSnapPoints(r)) a.push(sp); } for (const p of xlinePts) a.push(p); return a; };   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
   const lineSelGroup = new THREE.Group();   // 選択中の線の端点ハンドル（青球）
   modelGroup.add(lineSelGroup);
   let lineSel = null, lineDrag = null;
@@ -4120,11 +5121,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const moving = !!(lineDrag && lineDrag.mode === 'sel' && lineDrag.moved);   // 平行移動(sel)中のみ橙に戻す。伸縮(end)は緑のまま
     // 既定・平行移動中＝橙(0xff8a3c)・小。端を選択した静止状態／伸縮中の起点＝緑(0x39ff8a)・少し大。部品マーカーと同色・同形
     // 構築線は起点マーカー不要（2026-06-12 社長指示）。線分のみ両端を表示
-    for (const rec of selAnns) for (const p of (rec.type === 'xline' ? [] : [rec.a, rec.b])) {
-      const chosen = (p === gp) && !moving;
-      const m = new THREE.Mesh(new THREE.SphereGeometry(chosen ? 0.0028 : 0.0015, 16, 12),
-        new THREE.MeshBasicMaterial({ color: chosen ? 0x39ff8a : 0xff8a3c, depthTest: false, transparent: true, opacity: 0.92 }));
-      m.position.copy(p); m.renderOrder = 999; lineSelGroup.add(m);
+    for (const rec of selAnns) {
+      // 円/楕円は中心＋四半円点(±X,±Z)をハンドル表示。線分は両端。構築線は無し。
+      const pts = rec.type === 'xline' ? [] : rec.type === 'circle' ? annSnapPoints(rec) : [rec.a, rec.b];
+      for (const p of pts) {
+        const chosen = (p === gp) && !moving;
+        const m = new THREE.Mesh(new THREE.SphereGeometry(chosen ? 0.0028 : 0.0015, 16, 12),
+          new THREE.MeshBasicMaterial({ color: chosen ? 0x39ff8a : 0xff8a3c, depthTest: false, transparent: true, opacity: 0.92 }));
+        m.position.copy(p); m.renderOrder = 999; lineSelGroup.add(m);
+      }
     }
   }
   function showLineHandles() { refreshHandles(); }   // 旧呼び出し互換（引数は無視）
@@ -4138,26 +5143,47 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const end = da <= db ? 0 : 1;
     return { pt: end === 0 ? rec.a : rec.b, end, near: Math.min(da, db) < (SNAP_PX + 6) };
   }
+  // 円の四半円点ハンドル（±X, ±Z）のうちカーソル近傍のもの。{axis:'x'|'z', sign, pt, dir} or null（dir=その軸のワールド単位ベクトル）
+  function circleHandleAt(rec, cx, cy) {
+    if (rec.type !== 'circle') return null;
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z }; };
+    const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), c = rec.a, q = quatFromStyle(rec.style);
+    const ax = new V3(1, 0, 0).applyQuaternion(q), az = new V3(0, 0, 1).applyQuaternion(q);   // X・Z軸のワールド向き
+    const cands = [
+      { axis: 'x', dir: ax, pt: c.clone().addScaledVector(ax, rx) }, { axis: 'x', dir: ax, pt: c.clone().addScaledVector(ax, -rx) },
+      { axis: 'z', dir: az, pt: c.clone().addScaledVector(az, rz) }, { axis: 'z', dir: az, pt: c.clone().addScaledVector(az, -rz) },
+    ];
+    let best = null, bestD = SNAP_PX + 6;
+    for (const h of cands) { const s = scr(h.pt); if (s.z >= 1) continue; const d = Math.hypot(s.x - cx, s.y - cy); if (d < bestD) { bestD = d; best = h; } }
+    return best;
+  }
+  let dimValOpen = false;                      // 値フォームを開くのは「値クリック」時のみ（オブジェクト選択では出さない）
+  let dimValEditing = false;                   // true＝既存値の編集（引出ラベル「編集」）／false＝新規入力（引出ラベル「入力」）
   function selectLine(rec, additive) {
     selectPart(null);                          // 部品選択を解除（部品クリックと同じ排他。__annClearSelも走る）
     if (!additive) selAnns.clear();
     selAnns.add(rec); lineSel = rec;
     clearGrip();                               // 選択しただけ＝起点未選択（端点は小さいまま）
+    dimValOpen = false;                        // オブジェクトをクリックして選択＝値フォームは出さない（Delで削除できる）
+    drawState.dimReadjust = null;              // 別アイテム選択で再調整は解除
     refreshAnnHi(); refreshHandles();
     if (typeof updateForm === 'function') updateForm();   // EL入力フォームを起点側に表示
   }
-  function deselectLine() { lineSel = null; clearLineHandles(); selAnns.clear(); clearAnnHi(); clearGrip(); if (typeof updateForm === 'function') updateForm(); }
+  function deselectLine() { lineSel = null; clearLineHandles(); selAnns.clear(); clearAnnHi(); clearGrip(); dimValOpen = false; drawState.dimReadjust = null; if (typeof updateForm === 'function') updateForm(); }
+  window.__openDimValueForm = (editing) => { dimValOpen = true; dimValEditing = !!editing; };   // 値クリック/再編集=true、新規入力=false
 
   // ---- 線分の複数選択（Ctrl+クリック／窓選択）。部品の selectedParts と並行管理 ----
   // 選択表示は部品と同じく「青く発光」させる＝線そのものの色を SEL_COLOR に塗り替え、解除で元色へ戻す
   const selAnns = new Set();                 // 選択中の注釈レコード集合
-  function paintAnn(rec, on) {
+  function paintAnn(rec, on, color) {
     const fallback = rec.style ? rec.style.color : 0xffffff;
+    const onCol = (color != null) ? color : SEL_COLOR;
     rec.obj.traverse(o => {
       if (o.type === 'Sprite') return;
       if (!o.material || !o.material.color) return;
-      // 選択中は青く発光。解除時は各メッシュ固有の色（レーザーの芯/暈）へ、無ければ線色へ戻す
-      o.material.color.setHex(on ? SEL_COLOR : (o.userData.baseColor != null ? o.userData.baseColor : fallback));
+      // on＝指定色（既定は青の選択発光）。解除時は各メッシュ固有の色（レーザーの芯/暈）へ、無ければ線色へ戻す
+      o.material.color.setHex(on ? onCol : (o.userData.baseColor != null ? o.userData.baseColor : fallback));
     });
   }
   function refreshAnnHi() { for (const rec of annStore) paintAnn(rec, selAnns.has(rec)); }
@@ -4177,13 +5203,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 矩形(client座標)に掛かる線分を選択へ積み増す。返り値＝選択総数
   window.__annSelectInRect = (x0, y0, x1, y1) => {
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
-    const proj = p => { const n = modelGroup.localToWorld(p.clone()).project(cam);
-      return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z }; };
+    cam.updateMatrixWorld();
+    const inv = new THREE.Matrix4().copy(cam.matrixWorld).invert();
     let added = 0;
     for (const rec of annStore) {
-      const [A, B] = annPickEnds(rec);
-      const pa = proj(A), pb = proj(B);
-      if (pa.z >= 1 && pb.z >= 1) continue;
+      const seg = annScreenSeg(rec, rect, cam, inv);   // ニアプレーンクリップ済（構築線も正しく判定）
+      if (!seg) continue;
+      const { pa, pb } = seg;
       const inA = pa.x >= x0 && pa.x <= x1 && pa.y >= y0 && pa.y <= y1;
       const inB = pb.x >= x0 && pb.x <= x1 && pb.y >= y0 && pb.y <= y1;
       if (inA || inB || segRectCross(pa.x, pa.y, pb.x, pb.y, x0, y0, x1, y1)) {
@@ -4195,7 +5221,25 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return selAnns.size;
   };
   window.__annHasSel = () => selAnns.size > 0;
-  window.__annClearSel = () => { if (selAnns.size) { selAnns.clear(); clearAnnHi(); refreshHandles(); if (typeof updateForm === 'function') updateForm(); } };
+  window.__annDeselect = () => deselectLine();   // 構築線のEL→角度連鎖の「閉じ」用
+  window.__annSelectRec = (rec) => { if (annStore.includes(rec)) selectLine(rec); };   // 寸法確定後に選択して「値」フォームを出す用
+  window.__annDeleteRec = (rec) => {              // 特定の注釈を1件削除（スピナー中のDelete用）
+    const i = annStore.indexOf(rec); if (i < 0) return;
+    annStore.splice(i, 1); annGroup.remove(rec.obj); disposeObj(rec.obj);
+    if (lineSel === rec) { lineSel = null; clearLineHandles(); clearGrip(); }
+    selAnns.delete(rec); refreshAnnHi(); refreshHandles();
+    if (rec.type === 'xline') updateXlinePts();
+    if (typeof updateForm === 'function') updateForm();
+  };
+  // 部品選択時などの線選択全解除。lineSel も必ず消す（残っているとパイプ端クリックを
+  // 寸法線の起点掴みが横取りする等の事故源になる・2026-06-13 修正）
+  window.__annClearSel = () => {
+    if (selAnns.size || lineSel) {
+      lineSel = null; clearLineHandles(); clearGrip();
+      selAnns.clear(); clearAnnHi(); refreshHandles();
+      if (typeof updateForm === 'function') updateForm();
+    }
+  };
   // Ctrl+クリック：カーソル下の線を選択へ出し入れ（部品の個別トグルと同じ感覚）。線が無ければ false
   window.__annToggleAt = (cx, cy) => {
     const rec = pickAnnAt(cx, cy);
@@ -4216,6 +5260,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return null;
   }
   window.__lineElRef = () => {
+    if (lineSel && lineSel.type === 'dim' && selAnns.size === 1) return null;    // 寸法線はEL機能なし（2026-06-13 社長指示）
     if (drawState.editRec) return null;                                          // 端点編集中はEL非表示（脚=Z欄に切替）
     if (lineDrag && lineDrag.mode === 'sel' && !lineDrag.free && lineDrag.moved) return null;   // 直行(水平)移動中はEL非表示（X/Z/L欄）
     const p = lineElRefPt(); return p ? p.clone() : null;
@@ -4238,9 +5283,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     refreshAnnHi(); refreshHandles();
   };
   // 右クリック：選択中の線を起点(grip)まわりに45°回転。通常＝水平面(Y軸)まわり、Shift＝鉛直面まわり（どちらも回り続ける）
+  // 直径寸法は a,b が中心を挟む両縁なので、回転の支点は円の中心（中点）にする
+  function dimRotPivot() {
+    if (selAnns.size === 1 && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimKind === 'diameter') {
+      return lineSel.a.clone().add(lineSel.b).multiplyScalar(0.5);
+    }
+    return null;
+  }
   window.__annRotate = (shift) => {
     if (!selAnns.size) return;
-    let pivot = gripPt() || (lineSel ? lineSel.a : null);
+    let pivot = dimRotPivot() || gripPt() || (lineSel ? lineSel.a : null);
     if (!pivot) { for (const r of selAnns) { pivot = r.a; break; } }
     if (!pivot) return;
     const ang = Math.PI / 4;
@@ -4261,7 +5313,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     const q = new THREE.Quaternion().setFromAxisAngle(axis, signed);
     const rot = p => { const v = p.clone().sub(pivot).applyQuaternion(q); p.copy(pivot).add(v); };
-    for (const r of selAnns) { if (r.a !== pivot) rot(r.a); if (r.b !== pivot) rot(r.b); rebuildAnn(r); }
+    for (const r of selAnns) {
+      if (r.type === 'circle') {                       // 円/楕円：中心まわりの向き(quat)を合成して回す。中心が起点でなければ中心も公転
+        r.style = r.style || {};
+        const cq = q.clone().multiply(quatFromStyle(r.style));
+        r.style.quat = { x: cq.x, y: cq.y, z: cq.z, w: cq.w };
+        if (r.a !== pivot) rot(r.a);
+        const ax = new V3(1, 0, 0).applyQuaternion(cq);
+        r.b.copy(r.a.clone().addScaledVector(ax, circleRadii(r.style, r.a, r.b).rx));   // bを+X四半円点へ
+        rebuildAnn(r);
+      } else {
+        if (r.a !== pivot) rot(r.a); if (r.b !== pivot) rot(r.b);
+        if (r.style && r.style.angP2) { const p2 = new V3(r.style.angP2[0], r.style.angP2[1], r.style.angP2[2]); rot(p2); r.style.angP2 = [p2.x, p2.y, p2.z]; }
+        rebuildAnn(r);
+      }
+    }
     refreshAnnHi(); refreshHandles();
     if (typeof updateForm === 'function') updateForm();
   };
@@ -4269,7 +5335,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let _rotSpin = null;
   window.__annRotateSpinStart = (shift) => {
     if (!selAnns.size) return false;
-    let pivot = gripPt() || (lineSel ? lineSel.a : null);
+    let pivot = dimRotPivot() || gripPt() || (lineSel ? lineSel.a : null);
     if (!pivot) { for (const r of selAnns) { pivot = r.a; break; } }
     if (!pivot) return false;
     let dirRef = lineSel ? (lineSel.a === pivot ? lineSel.b : lineSel.a).clone().sub(pivot) : null;
@@ -4281,7 +5347,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (shift) axis = base;                                      // 鉛直面まわり
     else if (isVertical) axis = new V3(-base.z, 0, base.x).normalize();   // 垂直線はクロス方向
     else axis = new V3(0, 1, 0);                                 // 通常は水平面（Y軸）
-    _rotSpin = { pivot: pivot.clone(), axis, snap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone() })) };
+    _rotSpin = { pivot: pivot.clone(), axis, snap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), quat: r.type === 'circle' ? quatFromStyle(r.style) : null, ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })) };
     return true;
   };
   window.__annRotateSpinApply = (deg) => {
@@ -4289,7 +5355,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const q = new THREE.Quaternion().setFromAxisAngle(_rotSpin.axis, deg * Math.PI / 180);
     for (const s of _rotSpin.snap) {
       const va = s.a.clone().sub(_rotSpin.pivot).applyQuaternion(q); s.r.a.copy(_rotSpin.pivot).add(va);
-      const vb = s.b.clone().sub(_rotSpin.pivot).applyQuaternion(q); s.r.b.copy(_rotSpin.pivot).add(vb);
+      if (s.r.type === 'circle') {                     // 円/楕円：snapshotの向きにqを合成。bは+X四半円点へ
+        s.r.style = s.r.style || {};
+        const cq = q.clone().multiply(s.quat);
+        s.r.style.quat = { x: cq.x, y: cq.y, z: cq.z, w: cq.w };
+        const ax = new V3(1, 0, 0).applyQuaternion(cq);
+        s.r.b.copy(s.r.a.clone().addScaledVector(ax, circleRadii(s.r.style, s.r.a, s.r.b).rx));
+      } else {
+        const vb = s.b.clone().sub(_rotSpin.pivot).applyQuaternion(q); s.r.b.copy(_rotSpin.pivot).add(vb);
+        if (s.ap) { const p2 = new V3(s.ap[0], s.ap[1], s.ap[2]).sub(_rotSpin.pivot).applyQuaternion(q).add(_rotSpin.pivot); s.r.style.angP2 = [p2.x, p2.y, p2.z]; }
+      }
       rebuildAnn(s.r);
     }
     refreshAnnHi(); refreshHandles();
@@ -4298,7 +5373,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__annRotateSpinEnd = () => { _rotSpin = null; };
   window.__annRotateSpinCancel = () => {
     if (!_rotSpin) return;
-    for (const s of _rotSpin.snap) { s.r.a.copy(s.a); s.r.b.copy(s.b); rebuildAnn(s.r); }
+    for (const s of _rotSpin.snap) { s.r.a.copy(s.a); s.r.b.copy(s.b); if (s.r.type === 'circle' && s.quat) s.r.style.quat = { x: s.quat.x, y: s.quat.y, z: s.quat.z, w: s.quat.w }; if (s.ap) s.r.style.angP2 = s.ap.slice(); rebuildAnn(s.r); }
     _rotSpin = null; refreshAnnHi(); refreshHandles();
   };
   window.__annRotateSpinActive = () => !!_rotSpin;
@@ -4361,6 +5436,253 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   window.__annHeadingSpinActive = () => !!_headingSpin;
   window.__annHeadingSpinPivot = () => _headingSpin ? _headingSpin.pivot.clone() : null;
+  // ---- 立面寸法線の逃げ方位スピナー（確定直後に方位を数値指定・0.5°刻み・0〜360°） ----
+  let _dimDirSpin = null;
+  function dimDirFromDeg(deg) { const r = deg * Math.PI / 180; return { x: Math.cos(r), y: 0, z: -Math.sin(r) }; }
+  window.__dimDirSpinStart = (rec) => {
+    if (!rec || rec.type !== 'dim' || !rec.style || !rec.style.dimDir || !rec.style.dimOff) return false;
+    const d = rec.style.dimDir;
+    let deg = Math.atan2(-d.z, d.x) * 180 / Math.PI;
+    deg = ((deg % 360) + 360) % 360;
+    _dimDirSpin = { rec, start: deg };
+    return true;
+  };
+  window.__dimDirSpinStartDeg = () => _dimDirSpin ? _dimDirSpin.start : 0;
+  window.__dimDirSpinApply = (absDeg) => {
+    if (!_dimDirSpin) return;
+    _dimDirSpin.rec.style.dimDir = dimDirFromDeg(absDeg);
+    rebuildAnn(_dimDirSpin.rec);
+  };
+  window.__dimDirSpinEnd = () => { _dimDirSpin = null; };
+  window.__dimDirSpinCancel = () => {
+    if (!_dimDirSpin) return;
+    _dimDirSpin.rec.style.dimDir = dimDirFromDeg(_dimDirSpin.start);
+    rebuildAnn(_dimDirSpin.rec);
+    _dimDirSpin = null;
+  };
+  window.__dimDirSpinActive = () => !!_dimDirSpin;
+  window.__dimDirSpinPivot = () => {
+    if (!_dimDirSpin) return null;
+    const s = _dimDirSpin.rec.style, dd = s.dimDir;
+    const dv = new V3(dd.x, dd.y, dd.z).multiplyScalar(s.dimOff || 0);
+    return _dimDirSpin.rec.a.clone().add(_dimDirSpin.rec.b).multiplyScalar(0.5).add(dv);   // 寸法線本体の中点
+  };
+  // ---- 寸法線の逃げ量スピナー（確定直後に逃げの長さを mm で指定・1mm刻み） ----
+  let _dimOffSpin = null;
+  window.__dimOffSpinStart = (rec) => {
+    if (!rec || rec.type !== 'dim' || !rec.style || !rec.style.dimDir) return false;
+    _dimOffSpin = { rec, start: rec.style.dimOff || 0 };
+    return true;
+  };
+  window.__dimOffSpinStartMm = () => _dimOffSpin ? Math.round((_dimOffSpin.start || 0) * 1000) : 0;
+  window.__dimOffSpinApply = (mm) => {
+    if (!_dimOffSpin) return;
+    _dimOffSpin.rec.style.dimOff = (mm || 0) / 1000;
+    rebuildAnn(_dimOffSpin.rec);
+  };
+  window.__dimOffSpinEnd = () => { _dimOffSpin = null; };
+  window.__dimOffSpinCancel = () => {
+    if (!_dimOffSpin) return;
+    _dimOffSpin.rec.style.dimOff = _dimOffSpin.start;
+    rebuildAnn(_dimOffSpin.rec);
+    _dimOffSpin = null;
+  };
+  window.__dimOffSpinActive = () => !!_dimOffSpin;
+  window.__dimOffSpinPivot = () => {
+    if (!_dimOffSpin) return null;
+    const s = _dimOffSpin.rec.style, dd = s.dimDir;
+    const dv = new V3(dd.x, dd.y, dd.z).multiplyScalar(s.dimOff || 0);
+    return _dimOffSpin.rec.a.clone().add(_dimOffSpin.rec.b).multiplyScalar(0.5).add(dv);
+  };
+  // ---- スライド寸法（補助線を斜めに倒す）。右クリックで +45°⇄−45°、スピナーで微調整 ----
+  window.__annSelIsSingleDim = () => selAnns.size === 1 && !!(lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir && lineSel.style.dimOff);
+  window.__dimSkewToggle = () => {
+    if (!window.__annSelIsSingleDim()) return null;
+    const rec = lineSel;
+    const cur = rec.style.dimSkew || 0;
+    rec.style.dimSkew = cur > 0 ? -45 : (cur < 0 ? 0 : 45);   // 1回目=+45°→2回目=−45°→3回目=0（元に戻る）→繰り返し
+    rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+    return rec;
+  };
+  // ---- 逃げ方向の回転（Shift+右クリック）：AB軸まわりに45°刻みで回す（水平→斜め→上下→…） ----
+  function dimRollRefs(rec) {
+    const ab = rec.b.clone().sub(rec.a), l = ab.length();
+    const u = l > 1e-9 ? ab.multiplyScalar(1 / l) : new V3(1, 0, 0);
+    let r1 = new V3(-u.z, 0, u.x);                      // ABの水平直交（基準0°）
+    if (r1.lengthSq() < 1e-9) r1.set(1, 0, 0);          // ABが垂直ならX方向を基準に
+    r1.normalize();
+    const r2 = new V3().crossVectors(u, r1).normalize();
+    return { r1, r2 };
+  }
+  function dimRollDeg(rec) {
+    const refs = dimRollRefs(rec);
+    const d = rec.style.dimDir, v = new V3(d.x, d.y, d.z);
+    let deg = Math.atan2(v.dot(refs.r2), v.dot(refs.r1)) * 180 / Math.PI;
+    return ((deg % 360) + 360) % 360;
+  }
+  function setDimRoll(rec, deg) {
+    const refs = dimRollRefs(rec);
+    const rad = deg * Math.PI / 180;
+    const v = refs.r1.clone().multiplyScalar(Math.cos(rad)).addScaledVector(refs.r2, Math.sin(rad));
+    rec.style.dimDir = { x: v.x, y: v.y, z: v.z };
+    rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+  }
+  window.__dimRollStep = () => {
+    if (!window.__annSelIsSingleDim()) return null;
+    const rec = lineSel;
+    setDimRoll(rec, (Math.round(dimRollDeg(rec) / 45) * 45 + 45) % 360);
+    return rec;
+  };
+  let _dimRollSpin = null;
+  window.__dimRollSpinStart = (rec) => { if (!rec || rec.type !== 'dim') return false; _dimRollSpin = { rec, start: dimRollDeg(rec) }; return true; };
+  window.__dimRollSpinStartDeg = () => _dimRollSpin ? _dimRollSpin.start : 0;
+  window.__dimRollSpinApply = (deg) => { if (_dimRollSpin) setDimRoll(_dimRollSpin.rec, deg); };
+  window.__dimRollSpinEnd = () => { _dimRollSpin = null; };
+  window.__dimRollSpinCancel = () => { if (!_dimRollSpin) return; setDimRoll(_dimRollSpin.rec, _dimRollSpin.start); _dimRollSpin = null; };
+  window.__dimRollSpinActive = () => !!_dimRollSpin;
+  window.__dimRollSpinPivot = () => {
+    if (!_dimRollSpin) return null;
+    const r = _dimRollSpin.rec;
+    const ends = dimLineEnds(r.a, r.b, r.style);
+    return ends ? ends.A2.clone().add(ends.B2).multiplyScalar(0.5) : r.a.clone().add(r.b).multiplyScalar(0.5);
+  };
+  // ---- 寸法の「値」上書き（任意の値）。単独選択中の寸法線に対して hForm（値欄）で入力 ----
+  window.__dimValueSel = () => (selAnns.size === 1 && lineSel && lineSel.type === 'dim') ? lineSel : null;
+  window.__dimValueGet = () => {
+    const r = window.__dimValueSel(); if (!r) return '';
+    return (r.style.dimText != null && r.style.dimText !== '') ? r.style.dimText : dimMeasuredStr(r.a, r.b, r.style);
+  };
+  window.__dimValueApply = (v) => {
+    const r = window.__dimValueSel(); if (!r) return;
+    const meas = dimMeasuredStr(r.a, r.b, r.style);
+    const s = String(v).trim();
+    r.style.dimText = (s !== '' && s !== meas) ? s : null;   // 実測表示と同じ／空なら上書き解除
+    rebuildAnn(r); refreshAnnHi();
+  };
+  // 寸法の値（赤文字）の表示位置。種別ごとに値テキストの実位置に合わせる。
+  function dimValueAnchor(rec) {
+    const s = rec.style || {}, kind = s.dimKind || 'parallel';
+    if (kind === 'leader') { let h = new V3(rec.b.x - rec.a.x, 0, rec.b.z - rec.a.z); if (h.lengthSq() < 1e-9) h.set(1, 0, 0); h.normalize(); return rec.b.clone().addScaledVector(h, 0.02).addScaledVector(new V3(0, 1, 0), 0.005); }
+    if (kind === 'angle') { const g = angleArcGeom(rec.a, rec.b, s, 24); return g.arc[Math.floor(g.N / 2)] || rec.a.clone(); }
+    if (kind === 'radius' || kind === 'diameter') {
+      const C = kind === 'radius' ? rec.a.clone() : rec.a.clone().add(rec.b).multiplyScalar(0.5);
+      const dir = rec.b.clone().sub(C); const Rd = dir.length(); if (Rd > 1e-9) dir.multiplyScalar(1 / Rd);
+      const lead = s.dimLead != null ? s.dimLead : Rd * 0.55;
+      return C.addScaledVector(dir, lead);
+    }
+    const ends = dimLineEnds(rec.a, rec.b, s);
+    return ends ? ends.A2.clone().add(ends.B2).multiplyScalar(0.5) : rec.a.clone().add(rec.b).multiplyScalar(0.5);
+  }
+  window.__dimValuePivot = () => { const r = window.__dimValueSel(); return r ? dimValueAnchor(r) : null; };
+  // ---- 寸法値の上書き入力フォーム（自由テキスト可・補助線や実測はそのまま） ----
+  const dimValForm = document.createElement('div');
+  dimValForm.id = 'dimValForm';
+  dimValForm.style.cssText = 'position:fixed;z-index:70;display:none;align-items:center;gap:4px;padding:2px 6px;font:12px Meiryo,sans-serif;color:#ffd9d9;background:rgba(40,12,12,.85);border:1px solid #a04040;border-radius:4px';
+  const dimValLabel = document.createElement('span');
+  dimValLabel.textContent = '値';
+  dimValForm.appendChild(dimValLabel);
+  const dimValInput = document.createElement('input');
+  dimValInput.type = 'text';
+  dimValInput.style.cssText = 'width:96px;font:bold 12px Meiryo,sans-serif;color:#ff6a5a;background:#1a0e0e;border:1px solid #7a3030;border-radius:3px;padding:1px 4px';
+  dimValForm.appendChild(dimValInput);
+  document.body.appendChild(dimValForm);
+  const applyDimVal = () => {
+    const r = window.__dimValueSel(); if (!r) return;
+    const meas = dimMeasuredStr(r.a, r.b, r.style);
+    const s = dimValInput.value.trim();
+    r.style.dimText = (s !== '' && s !== meas) ? s : null;   // 空欄 or 実測と同じ＝上書き解除（実測表示へ）
+    rebuildAnn(r); refreshAnnHi();
+  };
+  dimValInput.addEventListener('input', applyDimVal);
+  dimValInput.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); applyDimVal(); dimValInput.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); dimValInput.blur(); }
+  });
+  dimValInput.addEventListener('blur', () => { dimValOpen = false; });   // 編集終了＝フォームを閉じる（以後はDelで削除可）
+  // 寸法の値（赤文字）の画面上の当たり判定。クリックされた寸法線レコードを返す
+  function pickDimTextAt(cx, cy) {
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    cam.updateMatrixWorld();
+    const camRight = new V3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+    const camUp = new V3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+    const scr = wp => { const n = wp.clone().project(cam); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z }; };
+    for (const rec of annStore) {
+      if (rec.type !== 'dim') continue;
+      let hit = false;
+      rec.obj.traverse(o => {
+        if (hit || !o.userData.dimText) return;
+        const cW = modelGroup.localToWorld(o.position.clone());
+        const pc = scr(cW); if (pc.z >= 1) return;
+        const px = scr(cW.clone().addScaledVector(camRight, o.scale.x / 2));
+        const py = scr(cW.clone().addScaledVector(camUp, o.scale.y / 2));
+        const rx = Math.hypot(px.x - pc.x, px.y - pc.y) + 4;   // 画面半幅＋余裕
+        const ry = Math.hypot(py.x - pc.x, py.y - pc.y) + 4;
+        const th = (o.material && o.material.rotation) || 0;   // 文字の画面回転に合わせた座標系で矩形判定
+        const dxs = cx - pc.x, dys = cy - pc.y;
+        const along = dxs * Math.cos(th) - dys * Math.sin(th);
+        const across = dxs * Math.sin(th) + dys * Math.cos(th);
+        if (Math.abs(along) <= rx && Math.abs(across) <= ry) hit = true;
+      });
+      if (hit) return rec;
+    }
+    return null;
+  }
+  window.__pickDimTextAt = pickDimTextAt;
+  // 値フォームを開いてフォーカス（文字クリック時）
+  window.__focusDimValueInput = () => {
+    setTimeout(() => {
+      if (window.__positionDimValueForm) window.__positionDimValueForm();
+      if (dimValForm.style.display !== 'none') { dimValInput.focus(); dimValInput.select(); }
+    }, 30);
+  };
+  // 毎フレーム：選択中の寸法線の本体中点脇に「値」フォームを追従（スピナー表示中・未選択は隠す）
+  window.__positionDimValueForm = () => {
+    const rotVisible = rotForm && rotForm.style.display === 'flex';
+    const rmbDown = typeof rDownPos !== 'undefined' && rDownPos;   // 右クリック操作中（スライド切替等）は一瞬でも出さない
+    const r = (!selectedPart && selectedParts.size === 0) ? window.__dimValueSel() : null;
+    const mirroring = window.__mirrorActive && window.__mirrorActive();
+    if (!r || !dimValOpen || rotVisible || rmbDown || lineDrag || mirroring) { dimValForm.style.display = 'none'; return; }   // 値クリックで開いた時のみ表示（オブジェクト選択中は出さない）
+    const piv = dimValueAnchor(r);
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const ndc = modelGroup.localToWorld(piv).project(cam);
+    if (ndc.z >= 1) { dimValForm.style.display = 'none'; return; }
+    const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+    dimValForm.style.display = 'flex';
+    dimValLabel.textContent = (r.style && r.style.dimKind === 'leader') ? (dimValEditing ? '編集' : '入力') : '値';   // 引出＝編集/入力・他は値
+    if (document.activeElement !== dimValInput) {
+      dimValInput.value = (r.style.dimText != null && r.style.dimText !== '') ? String(r.style.dimText) : dimMeasuredStr(r.a, r.b, r.style);
+    }
+    const fw = dimValForm.offsetWidth || 120, fh = dimValForm.offsetHeight || 24;
+    dimValForm.style.left = Math.round(Math.max(rect.left + 4, Math.min(sx + 14, rect.right - fw - 4))) + 'px';
+    dimValForm.style.top = Math.round(Math.max(rect.top + 4, Math.min(sy + 12, rect.bottom - fh - 4))) + 'px';
+  };
+  let _dimSkewSpin = null;
+  window.__dimSkewSpinStart = (rec) => {
+    if (!rec || rec.type !== 'dim') return false;
+    _dimSkewSpin = { rec, start: rec.style.dimSkew || 0 };
+    return true;
+  };
+  window.__dimSkewSpinStartDeg = () => _dimSkewSpin ? _dimSkewSpin.start : 0;
+  window.__dimSkewSpinApply = (deg) => {
+    if (!_dimSkewSpin) return;
+    _dimSkewSpin.rec.style.dimSkew = deg;
+    rebuildAnn(_dimSkewSpin.rec); refreshAnnHi();
+  };
+  window.__dimSkewSpinEnd = () => { _dimSkewSpin = null; };
+  window.__dimSkewSpinCancel = () => {
+    if (!_dimSkewSpin) return;
+    _dimSkewSpin.rec.style.dimSkew = _dimSkewSpin.start;
+    rebuildAnn(_dimSkewSpin.rec);
+    _dimSkewSpin = null;
+  };
+  window.__dimSkewSpinActive = () => !!_dimSkewSpin;
+  window.__dimSkewSpinPivot = () => {
+    if (!_dimSkewSpin) return null;
+    const r = _dimSkewSpin.rec;
+    const ends = dimLineEnds(r.a, r.b, r.style);
+    return ends ? ends.A2.clone().add(ends.B2).multiplyScalar(0.5) : r.a.clone().add(r.b).multiplyScalar(0.5);
+  };
   window.__annDeleteSelected = () => {              // 選択中の線をまとめて削除。返り値＝削除数
     if (!selAnns.size) return 0;
     let n = 0;
@@ -4380,10 +5702,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   // 部品の集団移動に追従して、選択中の線も同じ分だけ平行移動
   let annMoveSnap = null;
-  window.__annMoveStart = () => { annMoveSnap = [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone() })); };
+  window.__annMoveStart = () => { annMoveSnap = [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })); };
   window.__annMoveApply = (dx, dy, dz) => {
     if (!annMoveSnap) return;
-    for (const s of annMoveSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); rebuildAnn(s.r); }
+    for (const s of annMoveSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); if (s.ap) s.r.style.angP2 = [s.ap[0] + dx, s.ap[1] + dy, s.ap[2] + dz]; rebuildAnn(s.r); }
     refreshAnnHi();
     refreshHandles();   // 全選択線の端点ハンドルを現在位置へ（窓選択で lineSel 無しでも置き去りにしない）
   };
@@ -4391,12 +5713,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 選択中の線をまとめて (dx,dy,dz) だけ平行移動（高さ/EL一括変更で部品と一緒に動かす用）
   window.__annShiftSelected = (dx, dy, dz) => {
     if (!selAnns.size) return;
-    for (const r of selAnns) { r.a.set(r.a.x + dx, r.a.y + dy, r.a.z + dz); r.b.set(r.b.x + dx, r.b.y + dy, r.b.z + dz); rebuildAnn(r); }
+    for (const r of selAnns) { r.a.set(r.a.x + dx, r.a.y + dy, r.a.z + dz); r.b.set(r.b.x + dx, r.b.y + dy, r.b.z + dz); if (r.style && r.style.angP2) r.style.angP2 = [r.style.angP2[0] + dx, r.style.angP2[1] + dy, r.style.angP2[2] + dz]; rebuildAnn(r); }
     refreshAnnHi(); refreshHandles();
   };
   window.__annMoveCancel = () => {
     if (!annMoveSnap) return;
-    for (const s of annMoveSnap) { s.r.a.copy(s.a); s.r.b.copy(s.b); rebuildAnn(s.r); }
+    for (const s of annMoveSnap) { s.r.a.copy(s.a); s.r.b.copy(s.b); if (s.ap) s.r.style.angP2 = s.ap.slice(); rebuildAnn(s.r); }
     annMoveSnap = null; refreshAnnHi();
   };
   // 線本体クリックの許容画面距離(px)。大きいほど緩く（離れていても）選べる
@@ -4419,36 +5741,78 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const L = 12;
       return [rec.a.clone().addScaledVector(dir, -L), rec.a.clone().addScaledVector(dir, L)];
     }
+    if (rec.type === 'dim') {   // 逃げた寸法線は見えている本体の位置で当てる（斜めスライドも考慮）
+      const ends = dimLineEnds(rec.a, rec.b, rec.style);
+      if (ends) return [ends.A2, ends.B2];
+    }
     return [rec.a, rec.b];
   }
-  // カーソル最寄りの線を画面距離(px)で拾う。近くに線が無ければ null（=部品クリックへ委ねる）
+  // 線レコードの画面投影セグメント（ニアプレーンクリップ済）。両端ともカメラ背後なら null。
   // 構築線（±12mの長い線）は片端がカメラ背後に回ると project() の投影が反転して
-  // 当たり判定が壊れるため、視点空間でニアプレーンにクリップしてから投影する。
+  // クリック・窓選択の判定が壊れるため、視点空間でニアプレーンにクリップしてから投影する。
+  function annScreenSeg(rec, rect, cam, inv) {
+    const [Ae, Be] = annPickEnds(rec);
+    return clipProjectSeg(Ae, Be, rect, cam, inv);
+  }
+  // 任意の3D線分をニアプレーンクリップして画面座標へ投影
+  function clipProjectSeg(Ae, Be, rect, cam, inv) {
+    const toView = p => modelGroup.localToWorld(p.clone()).applyMatrix4(inv);   // カメラ視点空間（前方= -z）
+    let A = toView(Ae), B = toView(Be);
+    if (cam.isPerspectiveCamera) {
+      const nearZ = -((cam.near || 0.01) + 1e-4);
+      if (A.z > nearZ && B.z > nearZ) return null;   // 両端ともカメラ背後
+      if (A.z > nearZ) A.lerp(B, (nearZ - A.z) / (B.z - A.z));        // 背後側の端をニアプレーンへ
+      else if (B.z > nearZ) B.lerp(A, (nearZ - B.z) / (A.z - B.z));
+    }
+    const toScr = v => {
+      const n = v.clone().applyMatrix4(cam.projectionMatrix);
+      return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height };
+    };
+    return { pa: toScr(A), pb: toScr(B) };
+  }
+  // カーソル最寄りの線を画面距離(px)で拾う。近くに線が無ければ null（=部品クリックへ委ねる）
   function pickAnnAt(cx, cy) {
     if (!annStore.length) return null;
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
     cam.updateMatrixWorld();
     const inv = new THREE.Matrix4().copy(cam.matrixWorld).invert();
-    const toView = p => modelGroup.localToWorld(p.clone()).applyMatrix4(inv);   // カメラ視点空間（前方= -z）
-    const toScr = v => {
-      const n = v.clone().applyMatrix4(cam.projectionMatrix);
-      return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height };
+    let best = null, bestD = ANN_PICK_PX, bestExt = false;
+    const testSeg = (rec, seg, isExt) => {
+      if (!seg) return;
+      const d = segPixelDist(cx, cy, seg.pa.x, seg.pa.y, seg.pb.x, seg.pb.y);
+      if (d <= bestD) { bestD = d; best = rec; bestExt = !!isExt; }
     };
-    const persp = !!cam.isPerspectiveCamera;
-    const nearZ = persp ? -((cam.near || 0.01) + 1e-4) : null;
-    let best = null, bestD = ANN_PICK_PX;
     for (const rec of annStore) {
-      const [Ae, Be] = annPickEnds(rec);
-      let A = toView(Ae), B = toView(Be);
-      if (persp) {
-        if (A.z > nearZ && B.z > nearZ) continue;   // 両端ともカメラ背後
-        if (A.z > nearZ) A.lerp(B, (nearZ - A.z) / (B.z - A.z));        // 背後側の端をニアプレーンへ
-        else if (B.z > nearZ) B.lerp(A, (nearZ - B.z) / (A.z - B.z));
+      if (rec.type === 'circle') {                       // 円/楕円：外周をクリックで選べるよう、周を多角形に分けて当てる
+        const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+        const N = 64; let prev = null;
+        for (let i = 0; i <= N; i++) {
+          const t = (i / N) * Math.PI * 2;
+          const p = rec.a.clone().add(new V3(Math.cos(t) * rx, 0, Math.sin(t) * rz).applyQuaternion(q));
+          if (prev) testSeg(rec, clipProjectSeg(prev, p, rect, cam, inv), false);
+          prev = p;
+        }
+        continue;
       }
-      const pa = toScr(A), pb = toScr(B);
-      const d = segPixelDist(cx, cy, pa.x, pa.y, pb.x, pb.y);
-      if (d <= bestD) { bestD = d; best = rec; }
+      if (rec.type === 'dim' && rec.style && rec.style.dimKind === 'angle') {   // 角度：円弧と両辺（V→各方向）をクリックで選べる
+        const g = angleArcGeom(rec.a, rec.b, rec.style, 24);
+        for (let i = 0; i < g.arc.length - 1; i++) testSeg(rec, clipProjectSeg(g.arc[i], g.arc[i + 1], rect, cam, inv), false);
+        testSeg(rec, clipProjectSeg(g.V, g.V.clone().addScaledVector(g.d1, g.R), rect, cam, inv), false);
+        testSeg(rec, clipProjectSeg(g.V, g.V.clone().addScaledVector(g.d2, g.R), rect, cam, inv), false);
+        continue;
+      }
+      testSeg(rec, annScreenSeg(rec, rect, cam, inv), false);
+      if (rec.type === 'dim') {                          // 寸法線は補助線（起点→寸法線）クリックでも選択できる
+        const ends = dimLineEnds(rec.a, rec.b, rec.style);
+        if (ends) {
+          testSeg(rec, clipProjectSeg(rec.a, ends.A2, rect, cam, inv), true);
+          testSeg(rec, clipProjectSeg(rec.b, ends.B2, rect, cam, inv), true);
+        }
+      }
     }
+    // 補助線は部品（フランジ等）の真上を通ることが多い。補助線だけの当たりで、
+    // その場所に部品がある時は部品選択を優先する（部品のEL等を塞がない）
+    if (best && bestExt && typeof pickPlacedAt === 'function' && pickPlacedAt(cx, cy)) return null;
     return best;
   }
   // カーソル近傍の端点（0=a,1=b）。無ければ null。
@@ -4458,6 +5822,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z }; };
     const sa = scr(rec.a), sb = scr(rec.b), TH = SNAP_PX + 6;
     const da = Math.hypot(sa.x - cx, sa.y - cy), db = Math.hypot(sb.x - cx, sb.y - cy);
+    if (rec.type === 'circle') return (db < TH && sb.z < 1) ? 1 : null;   // 円は半径ハンドル(b)だけ掴める（中心aは移動グリップ）
     if (da <= db && da < TH && sa.z < 1) return 0;
     if (db < TH && sb.z < 1) return 1;
     return null;
@@ -4501,7 +5866,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (d < bestD) { bestD = d; best = mpos.clone(); }
     };
     for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal) continue; for (const local of connsOf(p)) test(connModelPos(p, local)); }
-    for (const r of annStore) { if (exAnns.has(r)) continue; test(r.a); test(r.b); }
+    for (const r of annStore) { if (exAnns.has(r)) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
     for (const pt of xlinePts) test(pt);   // 構築線どうしの交点へも吸着
     return best;
   }
@@ -4512,11 +5877,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const mark = (pt, rN, rB) => { const isSnap = snapPoint && pt.distanceTo(snapPoint) < 1e-6; addMarker(pt, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN); };
     for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal) continue; const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true); for (const local of connsOf(p)) mark(connModelPos(p, local), rN, rB); }
     const lN = markerRadiusFor(null, false), lB = markerRadiusFor(null, true);
-    for (const r of annStore) { if (exAnns.has(r)) continue; mark(r.a, lN, lB); mark(r.b, lN, lB); }
+    for (const r of annStore) { if (exAnns.has(r)) continue; for (const sp of annSnapPoints(r)) mark(sp, lN, lB); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
+    for (const p of xlinePts) mark(p, lN, lB);
   }
   let _lnLastT = 0, _lnLastX = 0, _lnLastY = 0, _lnLastRec = null;   // ダブルクリック検出（自由移動）
   window.addEventListener('pointerdown', e => {
     if (drawActive() || e.button !== 0) return;
+    if (drawState.dimReadjust && e.target === renderer.domElement) {   // 再調整中のクリック＝確定（このクリックは消費）
+      drawState.dimReadjust = null; clearLineGuide();
+      e.stopImmediatePropagation(); return;
+    }
     if (followTool || movingPart) return;                // 部品の配置/移動中は線分操作を横取りしない（スナップ先の線を掴んで配置を止める不具合対策）
     if (e.target !== renderer.domElement) return;        // 脚入力などUIは通す
     if (e.ctrlKey || e.metaKey) return;                  // Ctrl＝部品の複数選択へ委ねる
@@ -4530,12 +5900,34 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         if (sp.userData && sp.userData.faceLocal && nearestConnLocal(sp, e.clientX, e.clientY)) return;
       }
     }
-    if (lineSel) {                                       // 選択中の線の端点を掴む → 長さ変更
-      const end = endpointAt(lineSel, e.clientX, e.clientY);
-      if (end !== null) {
-        startEndpointEdit(lineSel, end);
-        lineDrag = { mode: 'end', downX: e.clientX, downY: e.clientY, moved: false };
+    // 寸法の値（赤文字）をクリック＝その寸法線を選択して「値」入力を開く（文字の編集）
+    {
+      const recT = pickDimTextAt(e.clientX, e.clientY);
+      if (recT) {
+        selectLine(recT);
+        if (window.__openDimValueForm) window.__openDimValueForm(true);   // 値クリック＝編集フォームを開く（編集）
+        if (window.__focusDimValueInput) window.__focusDimValueInput();
         e.stopImmediatePropagation(); return;
+      }
+    }
+    if (lineSel && selAnns.has(lineSel)) {               // 実際に選択中の線の端点を掴む → 長さ変更/付け替え
+      if (lineSel.type === 'circle') {                   // 円：四半円点ハンドルを掴む → 半径変更（Shift＝その軸だけ＝楕円）
+        const h = circleHandleAt(lineSel, e.clientX, e.clientY);
+        if (h) {
+          lineDrag = { mode: 'circleaxis', rec: lineSel, axis: h.axis, dir: h.dir.clone(), downX: e.clientX, downY: e.clientY, moved: false };
+          e.stopImmediatePropagation(); return;
+        }
+      } else {
+        const end = endpointAt(lineSel, e.clientX, e.clientY);
+        if (end !== null) {
+          if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで別の機点へ付け替える
+            lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
+            e.stopImmediatePropagation(); return;
+          }
+          startEndpointEdit(lineSel, end);
+          lineDrag = { mode: 'end', downX: e.clientX, downY: e.clientY, moved: false };
+          e.stopImmediatePropagation(); return;
+        }
       }
     }
     const rec = pickAnnAt(e.clientX, e.clientY);          // 線の本体 → 選択＋移動（部品と同じ操作系）
@@ -4547,7 +5939,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const origin = info.pt.clone();
       lineDrag = { mode: 'sel', free: isDbl, origin, planeY: origin.y, gRec: rec, gEnd: info.end, nearEnd: info.near,
                    downX: e.clientX, downY: e.clientY, moved: false,
-                   annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone() })),
+                   annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })),
                    partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
       if (info.near) { gRec = rec; gEnd = info.end; _vAxis = null; _tipAxis = null; _tipMode = false; refreshHandles(); if (typeof updateForm === 'function') updateForm(); }   // 端の近くを掴んだ＝起点を選択（大きく・ELを更新・鉛直軸再計算）
       e.stopImmediatePropagation(); return;
@@ -4559,6 +5951,20 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.addEventListener('pointermove', e => {
     if (drawActive() || !lineDrag) return;
     if (Math.hypot(e.clientX - lineDrag.downX, e.clientY - lineDrag.downY) > 3) lineDrag.moved = true;
+    if (lineDrag.mode === 'circleaxis') {                // 円：四半円点を掴んで半径変更。通常＝真円・Shift＝その軸だけ＝楕円
+      const rec = lineDrag.rec, c = rec.a;
+      const sp = axisStretchPoint(e.clientX, e.clientY, c, lineDrag.dir);   // 軸（向き込み）に沿ってカーソルへ最も近い点
+      if (!sp) return;
+      const r = Math.max(0.001, Math.round(sp.distanceTo(c) * 1000) / 1000);   // 中心からの距離＝半径。1mm刻み・最小1mm
+      rec.style = rec.style || {};
+      if (e.shiftKey) { if (lineDrag.axis === 'x') rec.style.rx = r; else rec.style.rz = r; }   // Shift＝楕円（その軸のみ）
+      else { rec.style.rx = r; rec.style.rz = r; }                                              // 通常＝真円（両軸そろえる）
+      const ax = new V3(1, 0, 0).applyQuaternion(quatFromStyle(rec.style));
+      rec.b.copy(c.clone().addScaledVector(ax, rec.style.rx != null ? rec.style.rx : r));   // bは+X四半円点に正規化（移動グリップ用）
+      rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+      e.stopImmediatePropagation();
+      return;
+    }
     if (lineDrag.mode === 'sel') {                       // 選択（線＋部品）の移動。部品と同じ：通常=直行(45°/指定角)・ダブル=自由
       const exParts = lineDrag._exParts || (lineDrag._exParts = new Set(lineDrag.partSnap.map(s => s.p)));
       let dx = 0, dy = 0, dz = 0, snappedPt = null;
@@ -4576,7 +5982,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const dist = Math.max(0, vx * cdx + vz * cdz);
         dx = cdx * dist; dz = cdz * dist;
       }
-      for (const s of lineDrag.annSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); rebuildAnn(s.r); }
+      // 構築線のみの移動は、線に直交する横方向だけに制限（斜め移動なし・2026-06-13 社長指示）
+      if (!lineDrag.partSnap.length && lineDrag.annSnap.length &&
+          lineDrag.annSnap.every(s => s.r.type === 'xline')) {
+        const s0 = lineDrag.annSnap[0];
+        const ddx = s0.b.x - s0.a.x, ddz = s0.b.z - s0.a.z;
+        const hl = Math.hypot(ddx, ddz);
+        if (hl > 1e-9) {
+          const px = -ddz / hl, pz = ddx / hl;       // 線の向きに直交する水平単位ベクトル
+          const t = dx * px + dz * pz;
+          dx = px * t; dz = pz * t; dy = 0; snappedPt = null;
+        }
+      }
+      for (const s of lineDrag.annSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); if (s.ap) s.r.style.angP2 = [s.ap[0] + dx, s.ap[1] + dy, s.ap[2] + dz]; rebuildAnn(s.r); }
       if (window.__partSelApply) window.__partSelApply(lineDrag.partSnap, dx, dy, dz);
       lineDrag._delta = { x: dx, z: dz };                // 直行移動のX/Z/L欄表示用
       refreshAnnHi();
@@ -4587,16 +6005,40 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!lineDrag.free && (Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6))   // 直行は部品と同じ黄色ガイド三角形
         addGuideTriangle(new V3(lineDrag.origin.x, lineDrag.planeY, lineDrag.origin.z), new V3(lineDrag.origin.x + dx, lineDrag.planeY, lineDrag.origin.z + dz), 0xffcc33);
       e.stopImmediatePropagation();
+    } else if (lineDrag.mode === 'dimend') {             // 寸法線の起点付け替え：機点・交点へスナップ（無ければ水平面）
+      const rec = lineDrag.rec;
+      const cur = lineDrag.end === 0 ? rec.a : rec.b;
+      const ex = new Set([rec]);
+      const snap = moveSnapForGrip(e.clientX, e.clientY, new Set(), ex);
+      let pos = snap;
+      if (!pos) { const hit = planeHitAt(e.clientX, e.clientY, cur.y); if (!hit) return; pos = hit; }
+      cur.copy(pos);
+      rebuildAnn(rec);
+      refreshAnnHi(); refreshHandles();
+      showLineMoveMarkers(cur.clone(), new Set(), ex, snap);
+      e.stopImmediatePropagation();
     } else {                                             // end：反対端固定で、線の軸方向に沿って伸び縮み（斜め・Y方向も保持）
-      const sp = axisStretchPoint(e.clientX, e.clientY, drawState.first, drawState.editAxis);
-      if (!sp) return;
-      const dist = Math.round(sp.distanceTo(drawState.first) * 1000) / 1000;   // 固定端からの距離を1mm刻みに
-      const p = drawState.first.clone().addScaledVector(drawState.editAxis, dist);
-      drawState.cur = p; drawState.vert = false; drawState.snapped = false;
+      // アイテム（部品の機点）や他の線の端点・構築線交点が近くにあれば吸着（軸から外れても機点に合わせる）
+      const snapPt = moveSnapForGrip(e.clientX, e.clientY, new Set(), new Set([drawState.editRec]));
+      let p;
+      if (snapPt) {
+        p = snapPt.clone();
+        const dl = p.distanceTo(drawState.first);
+        if (dl > 1e-6) drawState.editAxis = p.clone().sub(drawState.first).multiplyScalar(1 / dl);   // 以後の伸縮軸も吸着先の向きへ
+        drawState.snapped = true;
+      } else {
+        const sp = axisStretchPoint(e.clientX, e.clientY, drawState.first, drawState.editAxis);
+        if (!sp) return;
+        const dist = Math.round(sp.distanceTo(drawState.first) * 1000) / 1000;   // 固定端からの距離を1mm刻みに
+        p = drawState.first.clone().addScaledVector(drawState.editAxis, dist);
+        drawState.snapped = false;
+      }
+      drawState.cur = p; drawState.vert = false;
+      if (drawState.editRec.type === 'circle') p.y = drawState.first.y;   // 円の半径変更は水平を保つ
       drawState.editRec.b.copy(p); rebuildAnn(drawState.editRec);
-      // Y成分がある斜め線は水平到達点を角にしてつぶれない三角形に（Z＋Yでも表示される）
+      // Y成分がある斜め線は水平到達点を角にしてつぶれない三角形に（Z＋Yでも表示される）。円は脚三角形なし
       const hasY = Math.abs(p.y - drawState.first.y) > 1e-4;
-      drawTriangle3D(drawState.first, p, hasY, false);
+      if (drawState.editRec.type !== 'circle') drawTriangle3D(drawState.first, p, hasY, drawState.snapped);
       showLineHandles(drawState.editRec); refreshAnnHi();
       if (typeof updateForm === 'function') updateForm();   // 伸縮で起点側ELが変われば追従
       e.stopImmediatePropagation();
@@ -4607,18 +6049,41 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const mode = lineDrag.mode, moved = lineDrag.moved, nearEnd = lineDrag.nearEnd;
     lineDrag = null;
     e.stopImmediatePropagation();
-    if (mode === 'end') {
-      if (moved) drawState.locked = true;     // 確定待ち：脚/距離入力で微調整可（Enterで確定）
+    if (mode === 'circleaxis') {                   // 円/楕円の半径変更を確定（選択は維持・ハンドル再表示）
+      if (typeof hideCircleR === 'function') hideCircleR();
+      refreshHandles(); refreshAnnHi();
+      if (typeof updateForm === 'function') updateForm();
+    } else if (mode === 'end') {
+      if (moved && drawState.editRec && drawState.editRec.type === 'circle') { clearDrawTemp(); }   // 円は半径変更したら即確定（脚入力なし）
+      else if (moved) drawState.locked = true;     // 確定待ち：脚/距離入力で微調整可（Enterで確定）
       else { clearDrawTemp(); if (typeof updateForm === 'function') updateForm(); }   // 端クリックのみ→編集解除しELを戻す
+    } else if (mode === 'dimend') {
+      clearMarkers();                          // 付け替え完了（選択は維持・寸法値は自動更新済）
+      if (typeof updateForm === 'function') updateForm();
     } else if (mode === 'sel') {
       clearMarkers(); hideLineBoxes();         // 移動ガイド三角形・X/Z/L欄を消す（選択・位置は維持）
       if (!moved && !nearEnd) { clearGrip(); refreshHandles(); }   // 本体クリックのみ＝起点未選択（端点は小さく）
       if (typeof updateForm === 'function') updateForm();   // 移動後はELフォームを戻す
+      // 構築線の再選択（クリックのみ）＝EL欄へ即フォーカス → Enterで角度 → Enterで閉じの連鎖を開始
+      if (!moved && lineSel && lineSel.type === 'xline') focusElInputSoon();
+      // 寸法線の再選択（クリックのみ）＝逃げ量スピナーを開く（EL機能は廃止）。引出は値（文字）クリックのみ編集なのでここでは何もしない
+      else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir) startDimOffSpin(lineSel);
+      // 半径/直径/角度の再選択（クリックのみ）＝逃げ（リーダー長・円弧半径/位置）の再調整に入る
+      else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind)) drawState.dimReadjust = { rec: lineSel };
     }
+  }, true);
+  // 再調整中：カーソルで逃げ（リーダー長・円弧半径/位置）を更新。スナップ＝緑印
+  window.addEventListener('pointermove', e => {
+    if (!drawState.dimReadjust || drawActive() || lineDrag) return;
+    clearLineGuide();
+    const snap = dimReadjustApply(drawState.dimReadjust.rec, e.clientX, e.clientY);
+    if (snap) guideDot(snap, 0x39ff8a, 0.0042);
+    refreshHandles();
   }, true);
   window.addEventListener('keydown', e => {
     if (drawActive() || !lineSel) return;
     if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    if (e.key === 'Escape' && drawState.dimReadjust) { e.stopImmediatePropagation(); drawState.dimReadjust = null; clearLineGuide(); return; }   // 再調整だけ抜ける（選択は維持）
     if (e.key === 'Escape') { e.stopImmediatePropagation(); clearDrawTemp(); deselectLine(); }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.stopImmediatePropagation();
@@ -4636,12 +6101,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdPng').onclick = exportPng;
   $('cmdLine').onclick = () => setDrawMode('line');
   $('cmdXline').onclick = () => setDrawMode('xline');
+  $('cmdCircle').onclick = () => setDrawMode('circle');
   $('cmdDim').onclick = () => setDrawMode('dim');
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
-  $('cmdDel').onclick = () => deleteSelected();
-  $('cmdZoom').onclick = zoomExtents;
-  $('cmdHome').onclick = resetView;
+  // 削除・ホームのリボンボタンは廃止（2026-06-13 社長指示）。削除＝Deleteキー、ホーム＝右上の家アイコン
+  const zoomBtn = document.getElementById('zoomBtn');   // 範囲ズームは右上ホームの真下へ移設
+  if (zoomBtn) zoomBtn.onclick = zoomExtents;
 
   // ================= ヘルプ（使い方ガイド）の開閉 =================
   const helpPanel = $('helpPanel'), helpBackdrop = $('helpBackdrop'), cmdHelp = $('cmdHelp');
@@ -4682,7 +6148,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (drawState.mode !== type) setDrawMode(type);           // 設定対象のツールを起動（閉じたらすぐ描ける）
     fmtMenu.classList.toggle('is-xline', type === 'xline');   // 構築線は太さ非対応
     const ttl = fmtMenu.querySelector('.fm-ttl');
-    if (ttl) ttl.textContent = (type === 'dim' ? '寸法線' : type === 'xline' ? '構築線' : '線分') + 'の既定書式';
+    if (ttl) ttl.textContent = (type === 'dim' ? '寸法線' : type === 'xline' ? '構築線' : type === 'circle' ? '円' : '線分') + 'の既定書式';
     fmtMenu.style.display = 'block';
     markFmtActive();
     const mw = fmtMenu.offsetWidth, mh = fmtMenu.offsetHeight;
@@ -4694,7 +6160,52 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     fmtMenu.style.top = Math.max(6, py) + 'px';
   }
   function closeFmtMenu() { fmtMenu.style.display = 'none'; }
-  function maybeCloseFmtMenu() { if (fmtMenu.style.display === 'block') { closeFmtMenu(); return true; } return false; }
+
+  // ---- 寸法の種別メニュー（リボン「寸法」を右クリックで開く：平行/角度/半径/直径/引出） ----
+  const DIM_KINDS = [
+    ['parallel', '平行', '2点間の距離'],
+    ['angle',    '角度', '水平からの傾き'],
+    ['radius',   '半径', '中心→縁＝R'],
+    ['diameter', '直径', '差し渡し＝⌀'],
+    ['leader',   '引出', '注記の引出線'],
+  ];
+  const dimKindMenu = document.createElement('div');
+  dimKindMenu.id = 'dimKindMenu';
+  dimKindMenu.innerHTML = '<div class="dk-ttl">寸法の種別</div>' +
+    DIM_KINDS.map(([k, n, d]) => `<button class="dk-bt" data-kind="${k}">${n}<small>${d}</small></button>`).join('');
+  document.body.appendChild(dimKindMenu);
+  function markDimKindActive() {
+    dimKindMenu.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === dimKind));
+  }
+  function updateDimBtnTitle() {
+    const b = $('cmdDim'); if (b) b.title = `寸法：${DIM_KIND_LABEL[dimKind] || '平行'}（右クリックで 平行/角度/半径/直径/引出 を選択）`;
+  }
+  function closeDimKindMenu() { dimKindMenu.style.display = 'none'; }
+  function openDimKindMenu(ax, atop) {
+    if (drawState.mode !== 'dim') setDrawMode('dim');     // 種別を選んだらすぐ描けるよう寸法ツールを起動
+    markDimKindActive();
+    dimKindMenu.style.display = 'block';
+    const mw = dimKindMenu.offsetWidth, mh = dimKindMenu.offsetHeight;
+    let px = ax; if (px + mw > window.innerWidth - 6) px = window.innerWidth - mw - 6;
+    let py = atop - mh - 6; if (py < 6) py = atop + 30;   // リボンは画面下端なのでアイコンの上に出す
+    dimKindMenu.style.left = Math.max(6, px) + 'px';
+    dimKindMenu.style.top = Math.max(6, py) + 'px';
+  }
+  dimKindMenu.addEventListener('click', e => {
+    const el = e.target.closest('[data-kind]'); if (!el) return;
+    dimKind = el.dataset.kind;                            // 以後に引く寸法へ適用（既存の寸法は変えない）
+    markDimKindActive(); updateDimBtnTitle();
+    if (drawState.mode !== 'dim') setDrawMode('dim');
+    closeDimKindMenu();
+  });
+  updateDimBtnTitle();
+
+  function maybeCloseFmtMenu() {
+    let closed = false;
+    if (fmtMenu.style.display === 'block') { closeFmtMenu(); closed = true; }
+    if (dimKindMenu.style.display === 'block') { closeDimKindMenu(); closed = true; }
+    return closed;
+  }
   function applyFmt(act, val) {
     const st = toolStyle[fmtToolType]; if (!st) return;
     if (act === 'ltype') { st.ltype = val; st.color = ltypeColor(val); st.width = 0.0006; }   // 色は線種で決定・太さは極細固定
@@ -4705,22 +6216,49 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     applyFmt(el.dataset.act, el.dataset.val);
   });
 
-  // リボンのアイコンを右クリック → そのツールの既定書式メニューを開く
-  // 構築線(xline)はレーザー一種類なので書式メニューは持たない（右クリック対象外）
-  [['cmdLine', 'line'], ['cmdDim', 'dim']].forEach(([id, type]) => {
-    const b = $(id); if (!b) return;
-    b.addEventListener('contextmenu', e => {
+  // リボンの線分アイコンを右クリック → 既定書式メニュー（線種選択）
+  // 構築線(xline)はレーザー一種類なので書式メニューを持たない（右クリック対象外）
+  {
+    const b = $('cmdLine');
+    if (b) b.addEventListener('contextmenu', e => {
       e.preventDefault(); e.stopPropagation();
       const r = b.getBoundingClientRect();
-      openToolFmtMenu(type, r.left, r.top);
+      openToolFmtMenu('line', r.left, r.top);
     });
-  });
+  }
+  // リボンの円アイコンを右クリック → 既定書式メニュー（線種選択・線分と共通の仕組み）
+  {
+    const b = $('cmdCircle');
+    if (b) b.addEventListener('contextmenu', e => {
+      e.preventDefault(); e.stopPropagation();
+      const r = b.getBoundingClientRect();
+      openToolFmtMenu('circle', r.left, r.top);
+    });
+  }
+  // リボンの寸法アイコンを右クリック → 種別メニュー（平行/角度/半径/直径/引出）
+  {
+    const b = $('cmdDim');
+    if (b) b.addEventListener('contextmenu', e => {
+      e.preventDefault(); e.stopPropagation();
+      const r = b.getBoundingClientRect();
+      closeFmtMenu();
+      openDimKindMenu(r.left, r.top);
+    });
+  }
   // メニュー外クリック / Esc / ホイールで閉じる
   window.addEventListener('pointerdown', e => {
     if (fmtMenu.style.display === 'block' && !fmtMenu.contains(e.target)) closeFmtMenu();
+    if (dimKindMenu.style.display === 'block' && !dimKindMenu.contains(e.target)) closeDimKindMenu();
   }, true);
-  window.addEventListener('keydown', e => { if (e.key === 'Escape' && fmtMenu.style.display === 'block') closeFmtMenu(); });
-  window.addEventListener('wheel', () => { if (fmtMenu.style.display === 'block') closeFmtMenu(); }, { passive: true });
+  window.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (fmtMenu.style.display === 'block') closeFmtMenu();
+    if (dimKindMenu.style.display === 'block') closeDimKindMenu();
+  });
+  window.addEventListener('wheel', () => {
+    if (fmtMenu.style.display === 'block') closeFmtMenu();
+    if (dimKindMenu.style.display === 'block') closeDimKindMenu();
+  }, { passive: true });
 })();
 
 // ===================================================================
