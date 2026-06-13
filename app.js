@@ -2599,8 +2599,34 @@ function selectPart(obj, additive = false) {
   selectedParts.clear();
   selectedPart = obj;
   if (obj) { selectedParts.add(obj); setEmissive(obj, SEL_COLOR); }   // 青く光らせて選択表示
+  if (obj && obj.userData && obj.userData.groupId != null) {          // グループの一員 → 同グループの部品・注釈も一緒に選択
+    for (const p of placedParts) if (p.userData.groupId === obj.userData.groupId && p !== obj) { selectedParts.add(p); setEmissive(p, SEL_COLOR); }
+    if (window.__annAddGroupToSel) window.__annAddGroupToSel(obj.userData.groupId);
+  }
   updateForm();
   refreshItemList();   // 3D空間での選択/解除を一覧へ反映
+}
+// グループ化／解除（リボン編集グループ）。部品＋注釈にまたがる
+let groupSeq = 0;
+window.__bumpGroupSeq = (n) => { if (n > groupSeq) groupSeq = n; };   // ファイル読込後の採番衝突防止
+window.__selectPartsGroup = (gid) => { for (const p of placedParts) if (p.userData.groupId === gid) { selectedParts.add(p); setEmissive(p, SEL_COLOR); } };
+function groupSelection() {
+  const parts = [...selectedParts];
+  const annCount = window.__annSelCount ? window.__annSelCount() : 0;
+  if (parts.length + annCount < 2) return;          // 2つ以上で意味がある
+  const gid = ++groupSeq;
+  for (const p of parts) p.userData.groupId = gid;
+  if (window.__annSetGroup) window.__annSetGroup(gid);
+  refreshItemList();
+}
+function ungroupSelection() {
+  const gids = new Set();
+  for (const p of selectedParts) if (p.userData.groupId != null) gids.add(p.userData.groupId);
+  if (window.__annSelGroupIds) for (const g of window.__annSelGroupIds()) gids.add(g);
+  if (!gids.size) return;
+  for (const p of placedParts) if (gids.has(p.userData.groupId)) p.userData.groupId = null;
+  if (window.__annClearGroupIds) window.__annClearGroupIds(gids);
+  refreshItemList();
 }
 // Ctrl+クリック：対象を選択集合に出し入れする（主選択 selectedPart も更新）
 function toggleSelect(obj) {
@@ -3701,8 +3727,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         quat: p.quaternion.toArray(),
         scale: p.scale.toArray(),
         grip: p.userData.gripLocal ? p.userData.gripLocal.toArray() : null,
+        groupId: p.userData.groupId != null ? p.userData.groupId : null,
       })),
-      annotations: annStore.map(a => ({ type: a.type, a: a.a.toArray(), b: a.b.toArray(), style: a.style })),
+      annotations: annStore.map(a => ({ type: a.type, a: a.a.toArray(), b: a.b.toArray(), style: a.style, groupId: a.groupId != null ? a.groupId : null })),
     };
   }
   function save() {
@@ -3739,6 +3766,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       obj.userData.orient = rec.orient || 0;
       obj.userData.roll = rec.roll || 0;
       if (rec.mat) obj.userData.mat = rec.mat;
+      if (rec.groupId != null) obj.userData.groupId = rec.groupId;
       obj.userData.placed = true;
       modelGroup.add(obj);
       placedParts.push(obj);
@@ -3747,8 +3775,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     $('dwgDate').value = d.date || ''; $('dwgPlace').value = d.place || '';
     $('dwgName').value = d.name || ''; $('dwgNo').value = d.no || '';
     if (Array.isArray(data.annotations)) {
-      for (const a of data.annotations) addAnnotation(a.type, new V3().fromArray(a.a), new V3().fromArray(a.b), a.style);
+      for (const a of data.annotations) { addAnnotation(a.type, new V3().fromArray(a.a), new V3().fromArray(a.b), a.style); if (a.groupId != null) annStore[annStore.length - 1].groupId = a.groupId; }
     }
+    let maxG = 0;
+    for (const p of placedParts) if (p.userData.groupId > maxG) maxG = p.userData.groupId;
+    for (const a of annStore) if (a.groupId > maxG) maxG = a.groupId;
+    if (window.__bumpGroupSeq) window.__bumpGroupSeq(maxG);
     selectPart(null); refreshItemList();
   }
   function load() {
@@ -4039,7 +4071,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     if (kind === 'radius') return 'R' + mm;
     if (kind === 'diameter') return 'φ' + mm;
-    if (kind === 'leader') return '';   // 引出は既定文字なし（入力した文字だけ表示）
+    if (kind === 'leader' || kind === 'text') return '';   // 引出・文字は既定文字なし（入力した文字だけ表示）
     return String(mm);
   }
   // 角度寸法の幾何（頂点V・両方向の単位ベクトル・円弧半径R・円弧点列）を返す。buildAnn と当たり判定で共用。
@@ -4077,6 +4109,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       // （スライド寸法）。寸法値は常に起点間距離。
       const kind = style.dimKind || 'parallel';
       const isLeader = kind === 'leader';
+      const isText = kind === 'text';
       // 表示する値：任意の値（style.dimText）があれば最優先（引出の注記入力もこれで上書き）、無ければ種別ごとの実測
       const shown = String((style.dimText != null && style.dimText !== '') ? style.dimText : dimMeasuredStr(a, b, style));
       // 寸法線本体（アイテムと並行の線）の両端の矢印：先端が tip、羽根は toward（内側）を向く
@@ -4100,7 +4133,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         g.add(laserTube(p0, p1, 0.00026, 0xfff6a8, 0.95));    // 芯（極細）
         return g;
       };
-      if (isLeader) {
+      if (isText) {
+        // 文字：a=配置点。線は引かず、点aに常に正立した文字だけを置く（空なら何も描かない）。
+        if (shown !== '') grp.add(dimTextSprite(shown, a, a.clone(), new V3(0, 1, 0)));
+      } else if (isLeader) {
         // 引出線：a=矢印先端（指す点）／b=肘(knee)。bから水平に棚（横線）を自動で伸ばし、その上に注記文字を置く。
         grp.add(glowSeg(a, b));            // 斜めの引出線
         mkArrow(a, b);                      // 先端aに矢印（bからaを向く）
@@ -4288,7 +4324,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     updateDrawButtons();
   }
   function updateDrawButtons() {
-    [['line', 'cmdLine'], ['xline', 'cmdXline'], ['circle', 'cmdCircle'], ['dim', 'cmdDim']].forEach(([m, id]) => {
+    [['line', 'cmdLine'], ['xline', 'cmdXline'], ['circle', 'cmdCircle'], ['dim', 'cmdDim'], ['text', 'cmdText']].forEach(([m, id]) => {
       const b = $(id); if (b) b.classList.toggle('active', drawState.mode === m);
     });
   }
@@ -4920,6 +4956,20 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof maybeCloseFmtMenu === 'function' && maybeCloseFmtMenu()) { e.stopImmediatePropagation(); drawDown = null; return; }
     const rect = renderer.domElement.getBoundingClientRect();
     if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;   // ビューキューブは通す
+    if (drawState.mode === 'text') {                          // 文字：点をクリックして配置→そのまま入力
+      const r = pickFirstPoint(e.clientX, e.clientY);
+      if (r.p) {
+        const st = Object.assign({}, styleFor('dim'), { dimKind: 'text' });
+        addAnnotation('dim', r.p.clone(), r.p.clone(), st);
+        const rec = annStore[annStore.length - 1];
+        cancelDraw();
+        selectLine(rec);
+        if (window.__openDimValueForm) window.__openDimValueForm(false);
+        if (window.__focusDimValueInput) window.__focusDimValueInput();
+      }
+      drawDown = null; e.stopImmediatePropagation();
+      return;
+    }
     if (drawState.mode === 'dim' && dimKind === 'angle') {   // 角度：2直線をそれぞれ選択して測る（直線オブジェクト以外は無視）
       const ang = drawState.angle;
       const placing = ang && ang.V;
@@ -5167,6 +5217,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     clearGrip();                               // 選択しただけ＝起点未選択（端点は小さいまま）
     dimValOpen = false;                        // オブジェクトをクリックして選択＝値フォームは出さない（Delで削除できる）
     drawState.dimReadjust = null;              // 別アイテム選択で再調整は解除
+    if (!additive && rec.groupId != null) {    // グループの一員を選んだら、同グループの注釈・部品も一緒に選択
+      for (const r of annStore) if (r.groupId === rec.groupId) selAnns.add(r);
+      if (window.__selectPartsGroup) window.__selectPartsGroup(rec.groupId);
+    }
     refreshAnnHi(); refreshHandles();
     if (typeof updateForm === 'function') updateForm();   // EL入力フォームを起点側に表示
   }
@@ -5221,6 +5275,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return selAnns.size;
   };
   window.__annHasSel = () => selAnns.size > 0;
+  // ---- グループ化用（注釈側） ----
+  window.__annSelCount = () => selAnns.size;
+  window.__annSetGroup = (gid) => { for (const r of selAnns) r.groupId = gid; };   // 選択中の注釈にグループID付与
+  window.__annSelGroupIds = () => { const s = new Set(); for (const r of selAnns) if (r.groupId != null) s.add(r.groupId); return [...s]; };
+  window.__annClearGroupIds = (gidSet) => { for (const r of annStore) if (r.groupId != null && gidSet.has(r.groupId)) r.groupId = null; };
+  window.__annAddGroupToSel = (gid) => { let add = false; for (const r of annStore) if (r.groupId === gid && !selAnns.has(r)) { selAnns.add(r); add = true; } if (add) { refreshAnnHi(); refreshHandles(); } };
   window.__annDeselect = () => deselectLine();   // 構築線のEL→角度連鎖の「閉じ」用
   window.__annSelectRec = (rec) => { if (annStore.includes(rec)) selectLine(rec); };   // 寸法確定後に選択して「値」フォームを出す用
   window.__annDeleteRec = (rec) => {              // 特定の注釈を1件削除（スピナー中のDelete用）
@@ -5649,7 +5709,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (ndc.z >= 1) { dimValForm.style.display = 'none'; return; }
     const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
     dimValForm.style.display = 'flex';
-    dimValLabel.textContent = (r.style && r.style.dimKind === 'leader') ? (dimValEditing ? '編集' : '入力') : '値';   // 引出＝編集/入力・他は値
+    dimValLabel.textContent = (r.style && (r.style.dimKind === 'leader' || r.style.dimKind === 'text')) ? (dimValEditing ? '編集' : '入力') : '値';   // 引出・文字＝編集/入力・他は値
     if (document.activeElement !== dimValInput) {
       dimValInput.value = (r.style.dimText != null && r.style.dimText !== '') ? String(r.style.dimText) : dimMeasuredStr(r.a, r.b, r.style);
     }
@@ -6103,8 +6163,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdXline').onclick = () => setDrawMode('xline');
   $('cmdCircle').onclick = () => setDrawMode('circle');
   $('cmdDim').onclick = () => setDrawMode('dim');
+  $('cmdText').onclick = () => setDrawMode('text');
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
+  $('cmdGroup').onclick = groupSelection;
+  $('cmdUngroup').onclick = ungroupSelection;
   // 削除・ホームのリボンボタンは廃止（2026-06-13 社長指示）。削除＝Deleteキー、ホーム＝右上の家アイコン
   const zoomBtn = document.getElementById('zoomBtn');   // 範囲ズームは右上ホームの真下へ移設
   if (zoomBtn) zoomBtn.onclick = zoomExtents;
