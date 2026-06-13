@@ -1533,6 +1533,7 @@ let movingRoll = 0;           // 移動中部品のひねり(roll) 0/45°
 let moveOrig = null;          // 取消用：掴む前の position
 let moveGroup = [];           // 集団移動：主選択と一緒に動かす他の選択部品 [{part, startPos}]
 let annFollowMove = false;    // 部品の集団移動に、窓選択した線も追従させるか
+let touchShift = false;       // タッチ用の仮想Shift（「鉛直」ボタンON＝Y方向作図）。e.shiftKey と OR して使う
 let movingByDrag = false;     // ダブルクリック→押したままドラッグで自由移動中か（pointerupで確定）
 let _lastDownT = 0, _lastDownX = 0, _lastDownY = 0, _lastDownPart = null;  // ダブルクリック押下検出用
 const SNAP_PX = 18;           // 機点スナップが効く画面距離(px)
@@ -3301,6 +3302,14 @@ function zoomStep(factor) {
   bindHold('tcOrient',  () => orientStep(false), false);
   bindHold('tcTwist',   () => orientStep(true),  false);
   bindHold('tcEsc',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })), false);
+  // 「鉛直」＝タッチ用の仮想Shiftトグル。ON中は1本指の作図がY方向（鉛直）になる
+  const tcVert = document.getElementById('tcVert');
+  if (tcVert) {
+    const sync = () => tcVert.classList.toggle('on', touchShift);
+    tcVert.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); touchShift = !touchShift; sync(); });
+    tcVert.addEventListener('contextmenu', e => e.preventDefault());
+    sync();
+  }
 })();
 
 // ---- 描画ループ ----
@@ -5023,13 +5032,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!hadFirst) {                                    // ①の1回目／②の押下＝起点を決める
       const r = pickFirstPoint(e.clientX, e.clientY);
       if (r.p) {
-        drawState.first = r.p; drawState.cur = r.p.clone(); drawState.vert = e.shiftKey && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし
+        drawState.first = r.p; drawState.cur = r.p.clone(); drawState.vert = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし
         drawState.snapped = r.snapped; drawState.locked = false; drawState.editRec = null;
         clearPreview();
         if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);   // 円は脚三角形を出さない
       }
     } else {                                            // ①の2回目＝終点を現在位置に合わせる（離す時に確定）
-      const sh = e.shiftKey && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし
+      const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし
       const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
       if (r.p && drawState.mode === 'xline') r.p.y = drawState.first.y;   // スナップ先のELにも引っ張られず水平を保つ
       if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
@@ -5095,7 +5104,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     if (drawState.mode === 'dim' && drawState.dimAdjust) {   // 寸法線：カーソルで補助線の長さ（逃げ）を調整
       const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
-      const r = dimOffsetFromCursor(e.clientX, e.clientY, a, b, e.shiftKey);   // Shift＝縦方向へ逃げる
+      const r = dimOffsetFromCursor(e.clientX, e.clientY, a, b, e.shiftKey || touchShift);   // Shift／鉛直＝縦方向へ逃げる
       if (r) { drawState.dimOff = r.off; drawState.dimDir = r.dir; }
       clearPreview();
       const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff, dimDir: drawState.dimDir });
@@ -5110,7 +5119,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (r.snapped && r.p) guideDot(r.p, 0x39ff8a, 0.0042);
       return;
     }
-    const sh = e.shiftKey && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし（常に水平）
+    const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし（常に水平）
     const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
     if (!r.p) return;
     if (drawState.mode === 'xline') r.p.y = drawState.first.y;

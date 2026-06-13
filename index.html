@@ -221,6 +221,8 @@
     gap: 1px; box-shadow: 0 3px 10px rgba(0,0,0,.45); font-family: inherit;
     -webkit-tap-highlight-color: transparent; touch-action: none; }
   #touchCtrl button:active { background: rgba(47,123,255,.40); border-color: #2f7bff; }
+  #touchCtrl button.on { background: rgba(47,123,255,.55); border-color: #2f7bff; box-shadow: 0 0 0 2px rgba(47,123,255,.5); }
+  #touchCtrl button.on .lb { color: #fff; }
   #touchCtrl button .ic { font-size: 21px; line-height: 1; }
   #touchCtrl button .lb { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: #aebfe0; }
   #touchCtrl .tc-zoom { font-size: 26px; font-weight: 700; }
@@ -400,6 +402,7 @@
     <button id="tcZoomOut" title="縮小（ホイール下）"><span class="ic tc-zoom">−</span></button>
     <button id="tcOrient"  title="向きを送る（右クリック相当）"><span class="ic">🧭</span><span class="lb">向き</span></button>
     <button id="tcTwist"   title="ひねり（Shift＋右クリック相当）"><span class="ic">↻</span><span class="lb">ひねり</span></button>
+    <button id="tcVert"    title="鉛直（Y方向）に作図 ⇔ 水平。ON中は線などが縦に引けます（Shift相当）"><span class="ic">⇅</span><span class="lb">鉛直</span></button>
     <button id="tcEsc"     title="取消・選択解除（Esc相当）"><span class="ic">⎋</span><span class="lb">取消</span></button>
   </div>
   <div id="homeBtn" title="視点を初期位置に戻す（ホーム）">
@@ -434,6 +437,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260613b"></script>
+  <script src="app.js?v=20260613c"></script>
 </body>
 </html>
