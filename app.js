@@ -4327,6 +4327,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     [['line', 'cmdLine'], ['xline', 'cmdXline'], ['circle', 'cmdCircle'], ['dim', 'cmdDim'], ['text', 'cmdText']].forEach(([m, id]) => {
       const b = $(id); if (b) b.classList.toggle('active', drawState.mode === m);
     });
+    // タッチ操作：作図モード中は1本指の視点回転を無効化（1本指＝作図／2本指＝パン・ズームは維持）
+    if (controls && controls.touches) controls.touches.ONE = drawActive() ? null : THREE.TOUCH.ROTATE;
   }
   // ---- 描画用スナップ＆点決め ----
   // 注釈レコードのスナップ点（起点）。線分＝端点＋中点／円＝中心＋四半円点(±X,±Z)／寸法ほか＝両端。
