@@ -1533,7 +1533,8 @@ let movingRoll = 0;           // 移動中部品のひねり(roll) 0/45°
 let moveOrig = null;          // 取消用：掴む前の position
 let moveGroup = [];           // 集団移動：主選択と一緒に動かす他の選択部品 [{part, startPos}]
 let annFollowMove = false;    // 部品の集団移動に、窓選択した線も追従させるか
-let touchShift = false;       // タッチ用の仮想Shift（「鉛直」ボタンON＝Y方向作図）。e.shiftKey と OR して使う
+let touchShift = false;       // タッチ用の仮想Shift（画面のShiftボタンON）。e.shiftKey と OR して使う（Y方向作図・楕円化など）
+let touchCtrl = false;        // タッチ用の仮想Ctrl（画面のCtrlボタンON）。e.ctrlKey/metaKey と OR して使う（複数選択トグル）
 let movingByDrag = false;     // ダブルクリック→押したままドラッグで自由移動中か（pointerupで確定）
 let _lastDownT = 0, _lastDownX = 0, _lastDownY = 0, _lastDownPart = null;  // ダブルクリック押下検出用
 const SNAP_PX = 18;           // 機点スナップが効く画面距離(px)
@@ -2770,7 +2771,7 @@ function refreshItemList() {
     // 行クリック＝その仕様の全アイテムを選択（Ctrlで選択に追加）
     tr.addEventListener('click', e => {
       if (e.target === del || e.target === matInp) return;
-      const add = e.ctrlKey || e.metaKey;
+      const add = e.ctrlKey || e.metaKey || touchCtrl;
       if (!add) { for (const p of selectedParts) setEmissive(p, 0x000000); selectedParts.clear(); }
       for (const p of g.parts) { selectedParts.add(p); setEmissive(p, SEL_COLOR); }
       selectedPart = g.parts[g.parts.length - 1];
@@ -2837,7 +2838,7 @@ window.addEventListener('pointermove', e => {
 // captureフェーズで controls.enabled=false にし、OrbitControls の回転開始を抑止する。
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0 || followTool || movingPart) return;
-  if (e.ctrlKey || e.metaKey) return;      // Ctrl+クリックは複数選択トグル（移動ドラッグを開始しない）→ pointerup で処理
+  if (e.ctrlKey || e.metaKey || touchCtrl) return;      // Ctrl+クリックは複数選択トグル（移動ドラッグを開始しない）→ pointerup で処理
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
   // パイプ端の優先掴み：選択中がパイプで、その端の近く(16px)を押したら、
@@ -2910,7 +2911,7 @@ window.addEventListener('pointerup', e => {
 let viewDown = null;
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0) { viewDown = null; return; }   // 左ボタンのみ（右=切替/中=パン は対象外）
-  if (e.ctrlKey || e.metaKey) { viewDown = null; return; }   // Ctrl は窓選択/個別トグル側で一括処理
+  if (e.ctrlKey || e.metaKey || touchCtrl) { viewDown = null; return; }   // Ctrl は窓選択/個別トグル側で一括処理
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) { viewDown = null; return; }  // ギズモ上は無視
   viewDown = { x: e.clientX, y: e.clientY };
@@ -2975,7 +2976,7 @@ function selectPartsInRect(x0, y0, x1, y1) {
 // 開始：Ctrl押下＋左ボタンで窓選択を始める（capture で OrbitControls より先に捕捉）
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0 || followTool || movingPart) return;
-  if (!(e.ctrlKey || e.metaKey)) return;
+  if (!(e.ctrlKey || e.metaKey || touchCtrl)) return;
   boxSel = { sx: e.clientX, sy: e.clientY, moved: false };
   controls.enabled = false;            // ドラッグ中は視点回転させない
   e.stopPropagation();                 // 既存の選択/方向移動/オービット開始を抑止
@@ -3182,7 +3183,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 2) return;
   rDownPos = { x: e.clientX, y: e.clientY }; rLongFired = false; clearRLong();
   if (canRotSpin()) {                          // 線またはパイプを選択中＝長押しで角度スピナー
-    const sh = e.shiftKey, cx = e.clientX, cy = e.clientY;
+    const sh = e.shiftKey || touchShift, cx = e.clientX, cy = e.clientY;
     rLongTimer = setTimeout(() => { rLongFired = true; startRotSpin(sh, cx, cy); }, 350);
   }
 });
@@ -3195,7 +3196,7 @@ renderer.domElement.addEventListener('contextmenu', e => {
   rDownPos = null;
   if (rLongFired) { rLongFired = false; return; }   // 長押しで角度スピナーを出した → 45°回転はしない
   if (moved > 6) return;              // 右ドラッグ＝視点パン → 回転しない
-  orientStep(e.shiftKey);             // Shift+右クリック＝ひねり(roll)切替
+  orientStep(e.shiftKey || touchShift);             // Shift+右クリック＝ひねり(roll)切替
 });
 // 向きの送り（右クリック相当）。タッチのコントローラーからも同じ処理を呼ぶ。
 function orientStep(shift) {
@@ -3302,14 +3303,16 @@ function zoomStep(factor) {
   bindHold('tcOrient',  () => orientStep(false), false);
   bindHold('tcTwist',   () => orientStep(true),  false);
   bindHold('tcEsc',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })), false);
-  // 「鉛直」＝タッチ用の仮想Shiftトグル。ON中は1本指の作図がY方向（鉛直）になる
-  const tcVert = document.getElementById('tcVert');
-  if (tcVert) {
-    const sync = () => tcVert.classList.toggle('on', touchShift);
-    tcVert.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); touchShift = !touchShift; sync(); });
-    tcVert.addEventListener('contextmenu', e => e.preventDefault());
+  // Shift／Ctrl＝タッチ用の仮想モディファイア（PCのShift/Ctrl押下と同じ挙動を再現するトグル）
+  const bindMod = (id, get, set, after) => {
+    const btn = document.getElementById(id); if (!btn) return;
+    const sync = () => btn.classList.toggle('on', get());
+    btn.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); set(!get()); sync(); if (after) after(); });
+    btn.addEventListener('contextmenu', e => e.preventDefault());
     sync();
-  }
+  };
+  bindMod('tcShift', () => touchShift, v => { touchShift = v; }, null);
+  bindMod('tcCtrl',  () => touchCtrl,  v => { touchCtrl = v; }, () => { if (window.__syncTouchOrbit) window.__syncTouchOrbit(); });
 })();
 
 // ---- 描画ループ ----
@@ -4336,9 +4339,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     [['line', 'cmdLine'], ['xline', 'cmdXline'], ['circle', 'cmdCircle'], ['dim', 'cmdDim'], ['text', 'cmdText']].forEach(([m, id]) => {
       const b = $(id); if (b) b.classList.toggle('active', drawState.mode === m);
     });
-    // タッチ操作：作図モード中は1本指の視点回転を無効化（1本指＝作図／2本指＝パン・ズームは維持）
-    if (controls && controls.touches) controls.touches.ONE = drawActive() ? null : THREE.TOUCH.ROTATE;
+    syncTouchOrbit();
   }
+  // タッチ操作：作図モード中／Ctrl ON 中は1本指の視点回転を無効化（1本指＝作図・窓選択／2本指＝パン・ズームは維持）
+  function syncTouchOrbit() { if (controls && controls.touches) controls.touches.ONE = (drawActive() || touchCtrl) ? null : THREE.TOUCH.ROTATE; }
+  window.__syncTouchOrbit = syncTouchOrbit;
   // ---- 描画用スナップ＆点決め ----
   // 注釈レコードのスナップ点（起点）。線分＝端点＋中点／円＝中心＋四半円点(±X,±Z)／寸法ほか＝両端。
   // 構築線は対象外（交点のみ別途）。
@@ -5960,7 +5965,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     if (followTool || movingPart) return;                // 部品の配置/移動中は線分操作を横取りしない（スナップ先の線を掴んで配置を止める不具合対策）
     if (e.target !== renderer.domElement) return;        // 脚入力などUIは通す
-    if (e.ctrlKey || e.metaKey) return;                  // Ctrl＝部品の複数選択へ委ねる
+    if (e.ctrlKey || e.metaKey || touchCtrl) return;                  // Ctrl＝部品の複数選択へ委ねる
     const rect = renderer.domElement.getBoundingClientRect();
     if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
     if (drawState.editRec) clearDrawTemp();              // 直前の確定待ち編集を終える
@@ -6028,7 +6033,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!sp) return;
       const r = Math.max(0.001, Math.round(sp.distanceTo(c) * 1000) / 1000);   // 中心からの距離＝半径。1mm刻み・最小1mm
       rec.style = rec.style || {};
-      if (e.shiftKey) { if (lineDrag.axis === 'x') rec.style.rx = r; else rec.style.rz = r; }   // Shift＝楕円（その軸のみ）
+      if (e.shiftKey || touchShift) { if (lineDrag.axis === 'x') rec.style.rx = r; else rec.style.rz = r; }   // Shift＝楕円（その軸のみ）
       else { rec.style.rx = r; rec.style.rz = r; }                                              // 通常＝真円（両軸そろえる）
       const ax = new V3(1, 0, 0).applyQuaternion(quatFromStyle(rec.style));
       rec.b.copy(c.clone().addScaledVector(ax, rec.style.rx != null ? rec.style.rx : r));   // bは+X四半円点に正規化（移動グリップ用）
