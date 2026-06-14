@@ -4073,14 +4073,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const lab = (p, t) => `<text x="${(C + (p.x - C) * 1.22).toFixed(1)}" y="${(C + (p.y - C) * 1.22 + 3.2).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#333">${t}</text>`;
       let body = '';
       body += `<polyline points="${pts.trim()}" fill="none" stroke="#8a8f99" stroke-width="0.9"/>`;
-      body += `<line x1="${Wa.x.toFixed(1)}" y1="${Wa.y.toFixed(1)}" x2="${Ea.x.toFixed(1)}" y2="${Ea.y.toFixed(1)}" stroke="#8a8f99" stroke-width="0.9" stroke-linecap="round"/>`;
+      body += `<line x1="${(C - ex * 0.72).toFixed(1)}" y1="${(C - ey * 0.72).toFixed(1)}" x2="${(C + ex * 0.72).toFixed(1)}" y2="${(C + ey * 0.72).toFixed(1)}" stroke="#8a8f99" stroke-width="0.9" stroke-linecap="round"/>`;
       body += `<polygon points="${So.x.toFixed(1)},${So.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/>`;
       body += `<polygon points="${N.x.toFixed(1)},${N.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/>`;
       body += `<circle cx="40" cy="40" r="2.2" fill="#2a3550"/>`;
       body += lab(N, 'N');
       return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
     } catch (e) {
-      return `<svg class="north" viewBox="0 0 80 80"><ellipse cx="40" cy="42" rx="24" ry="12" fill="none" stroke="#8a8f99" stroke-width="0.9"/><line x1="16" y1="42" x2="64" y2="42" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,62 43.2,42 36.8,42" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/><polygon points="40,22 43.2,42 36.8,42" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#333">N</text></svg>`;
+      return `<svg class="north" viewBox="0 0 80 80"><ellipse cx="40" cy="42" rx="24" ry="12" fill="none" stroke="#8a8f99" stroke-width="0.9"/><line x1="23" y1="42" x2="57" y2="42" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,62 43.2,42 36.8,42" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/><polygon points="40,22 43.2,42 36.8,42" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#333">N</text></svg>`;
     }
   }
   function printSheet() {
