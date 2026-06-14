@@ -4206,7 +4206,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   modelGroup.add(annGroup);
   const annStore = [];   // {type,a,b,obj}
   const COL = { line: 0x7fd1ff, xline: 0xff6bd0, dim: 0xffd24a };
-  const XLINE_COLOR = 0x33ff55;   // 構築線（レーザー）の発光色＝緑。線種・色の選択は無し（一種類）
+  const XLINE_COLOR = 0xff6a00;   // 構築線の色＝オレンジ。ダーク／ホワイト両モードで同一・視認性重視（線種・色の選択は無し）
 
   // ---- 線分の書式（色・線種・太さ）。右クリックメニューで編集する ----
   // 線種パターンは「描く長さ, 空ける長さ, …」をワールド長(m)で表す（偶数番＝描く区間）
@@ -4286,11 +4286,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // 構築線はレーザー（光の線）一種類で描く：赤い光暈＋白く光る芯を加算合成で発光させる。
   // 色・線種の選択は無し（style は無視）。長尺だが円柱3本だけなので軽い。
-  function laserTube(A, B, radius, color, opacity) {
+  function laserTube(A, B, radius, color, opacity, solid) {
     const len = A.distanceTo(B);
-    // 白モードは加算合成だと色が白く飛ぶので通常合成＋不透明寄りにして本来の色を保つ（構築線=緑/寸法線=黄のまま）
+    // 白モードは加算合成だと色が白く飛ぶので通常合成＋不透明寄りにして本来の色を保つ（寸法線=黄のまま）。
+    // solid=true（構築線）はモードに依らず常に通常合成・同一不透明度＝ダーク／ホワイトで同じ色・同じ見え方。
     const light = (typeof lightMode !== 'undefined') && lightMode;
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: light ? Math.min(1, opacity * 1.8) : opacity, depthTest: false, blending: light ? THREE.NormalBlending : THREE.AdditiveBlending });
+    const useNormal = solid || light;
+    const op = (light && !solid) ? Math.min(1, opacity * 1.8) : opacity;
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, depthTest: false, blending: useNormal ? THREE.NormalBlending : THREE.AdditiveBlending });
     const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len, 8, 1, true), mat);
     m.position.copy(A).add(B).multiplyScalar(0.5);
     m.quaternion.setFromUnitVectors(new V3(0, 1, 0), B.clone().sub(A).normalize());
@@ -4300,9 +4303,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   function xlineSeg(A, B, style) {
     const grp = new THREE.Group();
-    grp.add(laserTube(A, B, 0.0016, XLINE_COLOR, 0.16));    // 外側の光暈（極細）
-    grp.add(laserTube(A, B, 0.0007, XLINE_COLOR, 0.38));    // 中間の光暈
-    grp.add(laserTube(A, B, 0.00032, 0xd8ffd8, 0.95));      // 白緑に光る芯
+    // 構築線＝両モード共通色。solid=true で加算合成を使わず、ダーク／ホワイトで同じ見え方にする。
+    grp.add(laserTube(A, B, 0.0016, XLINE_COLOR, 0.22, true));   // 外側のにじみ
+    grp.add(laserTube(A, B, 0.0007, XLINE_COLOR, 0.5, true));    // 中間
+    grp.add(laserTube(A, B, 0.00032, XLINE_COLOR, 1.0, true));   // 芯（同色・不透明）
     return grp;
   }
   // 文字スプライト（寸法値）。カメラへ正対し、3D空間に置く。
