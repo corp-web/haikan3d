@@ -4052,7 +4052,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     } catch (e) { return 0; }
   }
   function printSheet() {
-    const img = snapshot();   // 図面領域に貼る画像＝今の3D空間を転写（背景・グリッド・部品・注釈そのまま）
+    const img = snapshotForPrint();   // 図面領域＝白地・グリッドなしの線画（元の体裁）
     const nAng = northScreenAngleDeg();
     const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
       name = esc($('dwgName').value), no = esc($('dwgNo').value);
