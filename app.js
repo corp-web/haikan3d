@@ -4070,18 +4070,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const N = { x: C - sx, y: C - sy }, So = { x: C + sx, y: C + sy }, Ea = { x: C + ex, y: C + ey }, Wa = { x: C - ex, y: C - ey };
       const nlen = Math.hypot(sx, sy) || 1e-6, perpx = -sy / nlen, perpy = sx / nlen, ww = 3.4;
       const wL = { x: C + perpx * ww, y: C + perpy * ww }, wR = { x: C - perpx * ww, y: C - perpy * ww };
-      const Utip = { x: C + ux * 0.6, y: C + uy * 0.6 };
-      const lab = (p, t, big) => `<text x="${(C + (p.x - C) * 1.2).toFixed(1)}" y="${(C + (p.y - C) * 1.2 + (big ? 3.2 : 2.2)).toFixed(1)}" text-anchor="middle" font-size="${big ? 9 : 5.5}" font-weight="700" fill="${big ? '#c0392b' : '#6b7280'}">${t}</text>`;
+      const lab = (p, t) => `<text x="${(C + (p.x - C) * 1.22).toFixed(1)}" y="${(C + (p.y - C) * 1.22 + 3.2).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#333">${t}</text>`;
       let body = '';
       body += `<polyline points="${pts.trim()}" fill="none" stroke="#8a8f99" stroke-width="0.9"/>`;
-      body += `<line x1="40" y1="40" x2="${Utip.x.toFixed(1)}" y2="${Utip.y.toFixed(1)}" stroke="#9aa3b2" stroke-width="1" stroke-linecap="round"/>`;
-      body += `<polygon points="${So.x.toFixed(1)},${So.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#d3d7df" stroke="#7a8090" stroke-width="0.4"/>`;
-      body += `<polygon points="${N.x.toFixed(1)},${N.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#d23b3b" stroke="#9c1f1f" stroke-width="0.4"/>`;
+      body += `<line x1="${Wa.x.toFixed(1)}" y1="${Wa.y.toFixed(1)}" x2="${Ea.x.toFixed(1)}" y2="${Ea.y.toFixed(1)}" stroke="#8a8f99" stroke-width="0.9" stroke-linecap="round"/>`;
+      body += `<polygon points="${So.x.toFixed(1)},${So.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/>`;
+      body += `<polygon points="${N.x.toFixed(1)},${N.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/>`;
       body += `<circle cx="40" cy="40" r="2.2" fill="#2a3550"/>`;
-      body += lab(N, 'N', true) + lab(Ea, 'E', false) + lab(So, 'S', false) + lab(Wa, 'W', false);
+      body += lab(N, 'N');
       return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
     } catch (e) {
-      return `<svg class="north" viewBox="0 0 80 80"><ellipse cx="40" cy="42" rx="24" ry="12" fill="none" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,22 43.2,42 36.8,42" fill="#d23b3b"/><polygon points="40,62 43.2,42 36.8,42" fill="#d3d7df"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#c0392b">N</text></svg>`;
+      return `<svg class="north" viewBox="0 0 80 80"><ellipse cx="40" cy="42" rx="24" ry="12" fill="none" stroke="#8a8f99" stroke-width="0.9"/><line x1="16" y1="42" x2="64" y2="42" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,62 43.2,42 36.8,42" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/><polygon points="40,22 43.2,42 36.8,42" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#333">N</text></svg>`;
     }
   }
   function printSheet() {
