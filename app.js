@@ -6811,13 +6811,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (caret) caret.textContent = collapsed ? '▸' : '▾';
     head.title = collapsed ? 'クリックで展開' : 'クリックで折りたたみ';
   });
-  // 図面仕様・押印セクションの開閉
-  const specHead = document.getElementById('dwgSpecHead');
-  const specBody = document.getElementById('dwgSpecBody');
+  // 図面仕様パネル（アイテムリストの横）の開閉
+  const specHead = document.getElementById('specHead');
+  const specBody = document.getElementById('specBodyWrap');
+  const specCaret = document.getElementById('specCaret');
   if (specHead && specBody) {
+    let specCollapsed = false;
     specHead.addEventListener('click', () => {
-      const open = specBody.classList.toggle('open');
-      specHead.classList.toggle('open', open);
+      specCollapsed = !specCollapsed;
+      specBody.style.display = specCollapsed ? 'none' : '';
+      if (specCaret) specCaret.textContent = specCollapsed ? '▸' : '▾';
+      specHead.title = specCollapsed ? 'クリックで展開' : 'クリックで折りたたみ';
     });
   }
 })();
