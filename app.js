@@ -4051,33 +4051,39 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return Math.atan2(dx, dy) * 180 / Math.PI;   // SVG回転角（上向き基準・時計回り）
     } catch (e) { return 0; }
   }
-  // 左下の軸ギズモと同じ X(赤)/Y(緑)/Z(青) 3D軸を、現在のビュー向きでSVGに起こす
+  // 左下の軸ギズモと同じ X(赤)/Y(緑)/Z(青) 3D軸＋北(N・黒・太)を、現在のビュー向きでSVGに。
+  // 北＝ワールド -Z（コンパスの北の向き）。Nを太く長くして方位を明示する。
   function buildAxisGlyph() {
-    const C = 40, R = 25, ah = 6, hw = 3.4;
+    const C = 40;
+    const defs = [
+      ['X', [1, 0, 0], '#e23b3b', false], ['Y', [0, 1, 0], '#1f9d4d', false], ['Z', [0, 0, 1], '#2f6df0', false],
+      ['N', [0, 0, -1], '#111', true],
+    ];
     let dirs;
     try {
       const cam = activeCam(); cam.updateMatrixWorld();
       const base = (typeof controls !== 'undefined' && controls.target) ? controls.target.clone() : new V3(0, 0, 0);
       const o = base.clone().project(cam);
-      const defs = [['X', [1, 0, 0], '#e23b3b'], ['Y', [0, 1, 0], '#1f9d4d'], ['Z', [0, 0, 1], '#2f6df0']];
-      dirs = defs.map(([t, v, col]) => {
+      dirs = defs.map(([t, v, col, north]) => {
         const p = base.clone().add(new V3(v[0], v[1], v[2])).project(cam);
         const dx = p.x - o.x, dy = p.y - o.y, L = Math.hypot(dx, dy) || 1e-6;
-        return { t, col, depth: p.z - o.z, sx: dx / L, sy: -dy / L };   // SVGはy下向き
+        return { t, col, north, depth: p.z - o.z, sx: dx / L, sy: -dy / L };   // SVGはy下向き
       });
-      dirs.sort((a, b) => b.depth - a.depth);   // 奥の軸から描く
+      dirs.sort((a, b) => b.depth - a.depth);   // 奥から描く（Nは太いので最後に上書き気味）
+      dirs.sort((a, b) => (a.north ? 1 : 0) - (b.north ? 1 : 0));   // 北は最前面
     } catch (e) {
-      dirs = [{ t: 'X', col: '#e23b3b', sx: 0.87, sy: 0.5 }, { t: 'Y', col: '#1f9d4d', sx: 0, sy: -1 }, { t: 'Z', col: '#2f6df0', sx: -0.87, sy: 0.5 }];
+      dirs = [{ t: 'X', col: '#e23b3b', sx: 0.87, sy: 0.5 }, { t: 'Z', col: '#2f6df0', sx: -0.87, sy: 0.5 }, { t: 'Y', col: '#1f9d4d', sx: 0, sy: -1 }, { t: 'N', col: '#111', north: true, sx: 0.25, sy: -0.97 }];
     }
     let body = '<circle cx="40" cy="40" r="2" fill="#555"/>';
     for (const d of dirs) {
+      const R = d.north ? 29 : 23, w = d.north ? 3.2 : 2.2, ah = d.north ? 8 : 6, hw = d.north ? 4.8 : 3.4, fs = d.north ? 11 : 8, lo = d.north ? 8 : 6;
       const tx = C + d.sx * R, ty = C + d.sy * R;
       const bx = tx - d.sx * ah, by = ty - d.sy * ah;
       const px = -d.sy * hw, py = d.sx * hw;
-      const lx = C + d.sx * (R + 6), ly = C + d.sy * (R + 6);
-      body += `<line x1="40" y1="40" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${d.col}" stroke-width="2.2" stroke-linecap="round"/>`;
+      const lx = C + d.sx * (R + lo), ly = C + d.sy * (R + lo);
+      body += `<line x1="40" y1="40" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${d.col}" stroke-width="${w}" stroke-linecap="round"/>`;
       body += `<polygon points="${tx.toFixed(1)},${ty.toFixed(1)} ${(bx + px).toFixed(1)},${(by + py).toFixed(1)} ${(bx - px).toFixed(1)},${(by - py).toFixed(1)}" fill="${d.col}"/>`;
-      body += `<text x="${lx.toFixed(1)}" y="${(ly + 2.6).toFixed(1)}" text-anchor="middle" font-size="8" font-weight="700" fill="${d.col}">${d.t}</text>`;
+      body += `<text x="${lx.toFixed(1)}" y="${(ly + (d.north ? 3.6 : 2.6)).toFixed(1)}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${d.col}">${d.t}</text>`;
     }
     return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
   }
