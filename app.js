@@ -3824,9 +3824,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ================= ファイル：保存 / 開く =================
   // 図面仕様・押印の入力欄（id→保存キー）。3D空間で入力し、保存・印刷に反映する。
   const DWG_SPEC_FIELDS = [
-    ['dwgClass', 'cls'], ['dwgTempD', 'tempD'], ['dwgTempN', 'tempN'],
+    ['dwgLaw', 'law'], ['dwgClass', 'cls'], ['dwgTempD', 'tempD'], ['dwgTempN', 'tempN'],
     ['dwgPresD', 'presD'], ['dwgPresN', 'presN'], ['dwgTestP', 'testP'], ['dwgTestA', 'testA'],
-    ['dwgRT', 'rt'], ['dwgPT', 'pt'], ['dwgHeat', 'heat'], ['dwgWash', 'wash'],
+    ['dwgNDE', 'nde'], ['dwgHeat', 'heat'], ['dwgWash', 'wash'],
     ['dwgPaint', 'paint'], ['dwgInsul', 'insul'],
     ['dwgDesign', 'design'], ['dwgDraw', 'draw'], ['dwgCheck', 'check'], ['dwgApprove', 'approve'],
   ];
@@ -4071,11 +4071,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const sp = gatherSpec();
     const sv = k => esc(sp[k] || '');
     const specRows =
-      `<tr><td class="sk">法　規</td><td class="sl">クラス</td><td class="sv" colspan="3">${sv('cls')}</td></tr>` +
+      `<tr><td class="sk">法　規</td><td class="sv">${sv('law')}</td><td class="sl">クラス</td><td class="sv" colspan="2">${sv('cls')}</td></tr>` +
       `<tr><td class="sk">温度℃</td><td class="sl">設計</td><td class="sv">${sv('tempD')}</td><td class="sl">常用</td><td class="sv">${sv('tempN')}</td></tr>` +
       `<tr><td class="sk">圧力MPa</td><td class="sl">設計</td><td class="sv">${sv('presD')}</td><td class="sl">常用</td><td class="sv">${sv('presN')}</td></tr>` +
       `<tr><td class="sk">試験MPa</td><td class="sl">耐圧</td><td class="sv">${sv('testP')}</td><td class="sl">気密</td><td class="sv">${sv('testA')}</td></tr>` +
-      `<tr><td class="sk">非破壊</td><td class="sl">R.T</td><td class="sv">${sv('rt')}</td><td class="sl">P.T</td><td class="sv">${sv('pt')}</td></tr>` +
+      `<tr><td class="sk">非破壊検査</td><td class="sv" colspan="4">${sv('nde')}</td></tr>` +
       `<tr><td class="sk">熱処理</td><td class="sv" colspan="4">${sv('heat')}</td></tr>` +
       `<tr><td class="sk">洗　浄</td><td class="sv" colspan="4">${sv('wash')}</td></tr>` +
       `<tr><td class="sk">塗　装</td><td class="sv" colspan="4">${sv('paint')}</td></tr>` +
