@@ -3828,7 +3828,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ['dwgRT', 'rt'], ['dwgPT', 'pt'], ['dwgHeat', 'heat'], ['dwgWash', 'wash'],
     ['dwgPaint', 'paint'], ['dwgInsul', 'insul'],
     ['dwgDesign', 'design'], ['dwgDraw', 'draw'], ['dwgCheck', 'check'], ['dwgApprove', 'approve'],
-    ['dwgRev', 'rev'],
+    ['dwgRev', 'rev'], ['dwgCompany', 'company'],
   ];
   function gatherSpec() {
     const o = {};
@@ -4112,7 +4112,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       ['非破壊検査', [sv('rt'), sv('pt')].filter(Boolean).join(' / ')], ['熱処理', sv('heat')], ['洗浄', sv('wash')], ['塗装', sv('paint')],
       ['保温', sv('insul')], ['設計', sv('design')], ['製図', sv('draw')], ['検図', sv('check')], ['承認', sv('approve')],
     ];
-    const infoPairs = [['作成年月日', date], ['改訂', sv('rev')], ['名称', name], ['場所', place], ['図番', no], ['尺度', scale]];
     // キー値を2組/行のテーブル行に。端数は空セルで埋め、罫線が必ず閉じるようにする。
     const kvRows = pairs => {
       let html = '', row = '';
@@ -4123,7 +4122,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (row) html += `<tr>${row}<td class="k"></td><td></td></tr>`;
       return html;
     };
-    const specHtml = kvRows(specPairs), infoHtml = kvRows(infoPairs);
+    const specHtml = kvRows(specPairs);
+    // 図面情報：改訂の右に尺度／社名は最下行に大きく表示
+    const infoHtml =
+      `<tr><td class="k">作成年月日</td><td>${date}</td><td class="k">改訂</td><td>${sv('rev')}</td><td class="k">尺度</td><td>${scale}</td></tr>` +
+      `<tr><td class="k">名称</td><td>${name}</td><td class="k">場所</td><td>${place}</td><td class="k">図番</td><td>${no}</td></tr>` +
+      `<tr><td class="k">社名</td><td colspan="5" class="company">${sv('company')}</td></tr>`;
     // モデル空間で「図面仕様」を折りたたんでいたら、印刷でも図面仕様を省略する
     const specEl = document.getElementById('specBodyWrap');
     const specCollapsed = !!(specEl && specEl.style.display === 'none');
@@ -4138,12 +4142,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
   .panel{position:absolute;right:5mm;bottom:5mm;width:124mm;max-height:calc(100% - 11mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
-  .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:1mm;letter-spacing:.5mm;}
-  .panel .sc{overflow:hidden;}
+  .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:1mm;letter-spacing:.5mm;border-bottom:0.12mm solid #111;}
+  .panel .sc{overflow:hidden;border-bottom:0.12mm solid #111;}
   .panel table{width:100%;border-collapse:collapse;font-size:2.7mm;}
+  .panel table.items{border-style:hidden;}   /* 外枠はパネル枠に任せ二重線を防ぐ */
   .panel td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;}
   .panel td.hcell{background:#f0f0f0;font-weight:700;text-align:left;}
   .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
+  table.kv td.company{font-weight:700;font-size:3.2mm;text-align:center;}
   .sec{padding:1.6mm 2.5mm;}
   .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
   table.kv{width:100%;border-collapse:collapse;font-size:2.6mm;table-layout:fixed;}
@@ -4156,7 +4162,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ${axisSvg}
     <div class="panel">
       <div class="hd">アイテムリスト</div>
-      <div class="sc"><table>
+      <div class="sc"><table class="items">
         <tr><td class="hcell n">#</td><td class="hcell">種別</td><td class="hcell">タイプ</td><td class="hcell">サイズ</td><td class="hcell">クラス</td><td class="hcell q">数量</td><td class="hcell">材質</td></tr>
         ${ilRows}
       </table></div>
