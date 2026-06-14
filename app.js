@@ -4141,7 +4141,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .frame{position:absolute;inset:5mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
   .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
-  .panel{position:absolute;right:6mm;bottom:6mm;width:124mm;max-height:calc(100% - 12mm);background:#fff;border:0.3mm solid #111;border-radius:1mm;overflow:hidden;display:flex;flex-direction:column;}
+  .panel{position:absolute;right:5mm;bottom:5mm;width:124mm;max-height:calc(100% - 11mm);background:#fff;border:0.5mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
   .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;border-bottom:0.3mm solid #111;padding:1mm;letter-spacing:.5mm;}
   .panel .sc{overflow:hidden;}
   .panel table{width:100%;border-collapse:collapse;font-size:2.7mm;}
@@ -4205,7 +4205,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     cl.onclick = close;
     const onkey = e => { if (e.key === 'Escape') close(); };
     document.addEventListener('keydown', onkey);
-    setTimeout(fitW, 60);
+    applyZoom();   // 既定は100%表示（全体表示ボタンで幅に合わせる）
   }
   // （未使用・保険）ポップアップを使わず非表示iframeで直接印刷
   function printViaFrame(html) {
