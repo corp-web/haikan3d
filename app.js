@@ -4063,18 +4063,29 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
   .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
-  .north{position:absolute;left:8mm;top:6mm;width:18mm;height:25mm;}
+  .north{position:absolute;left:8mm;top:6mm;width:21mm;height:27mm;}
   .north .pn{font-size:3.4mm;font-weight:700;}
   @media print{@page{size:A3 landscape;margin:8mm;}}
 </style></head><body>
   <div class="pg">
     <img src="${img}">
-    <svg class="north" viewBox="0 0 48 66">
-      <text class="pn" x="24" y="9" text-anchor="middle">P.N</text>
-      <g transform="rotate(${nAng.toFixed(1)} 24 40)">
-        <!-- 立体的に折れた方位矢印（左面=明・右面=暗で3D風） -->
-        <polygon points="24,14 13,57 24,47" fill="#d0d0d0" stroke="#111" stroke-width="0.7" stroke-linejoin="round"/>
-        <polygon points="24,14 35,57 24,47" fill="#1b1b1b" stroke="#111" stroke-width="0.7" stroke-linejoin="round"/>
+    <svg class="north" viewBox="0 0 64 84">
+      <text class="pn" x="32" y="10" text-anchor="middle">P.N</text>
+      <g transform="rotate(${nAng.toFixed(1)} 32 46)">
+        <!-- 3Dコンパスローズ：二重リング＋4方位の星（各点を明/暗に割って立体感）。北の針を長く -->
+        <circle cx="32" cy="46" r="29" fill="none" stroke="#111" stroke-width="0.6"/>
+        <circle cx="32" cy="46" r="24.5" fill="none" stroke="#111" stroke-width="0.3"/>
+        <g stroke="#111" stroke-width="0.4" stroke-linejoin="round">
+          <polygon points="32,12 25,39 32,46" fill="#dcdcdc"/>
+          <polygon points="32,12 39,39 32,46" fill="#1b1b1b"/>
+          <polygon points="61,46 39,39 32,46" fill="#dcdcdc"/>
+          <polygon points="61,46 39,53 32,46" fill="#1b1b1b"/>
+          <polygon points="32,77 39,53 32,46" fill="#dcdcdc"/>
+          <polygon points="32,77 25,53 32,46" fill="#1b1b1b"/>
+          <polygon points="3,46 25,53 32,46" fill="#dcdcdc"/>
+          <polygon points="3,46 25,39 32,46" fill="#1b1b1b"/>
+        </g>
+        <circle cx="32" cy="46" r="2.4" fill="#111"/>
       </g>
     </svg>
   </div>
