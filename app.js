@@ -4101,6 +4101,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       ['非破壊検査', [sv('rt'), sv('pt')].filter(Boolean).join(' / ')], ['熱処理', sv('heat')], ['洗浄', sv('wash')], ['塗装', sv('paint')],
       ['保温', sv('insul')], ['設計', sv('design')], ['製図', sv('draw')], ['検図', sv('check')], ['承認', sv('approve')],
     ];
+    if (specPairs.length % 2) specPairs.push(['', '']);   // 2列グリッドの最終行を埋める
     const specHtml = specPairs.map(([k, v]) => `<div class="sr"><span>${k}</span><b>${v || ''}</b></div>`).join('');
     const infoPairs = [['作成年月日', date], ['改訂', sv('rev')], ['名称', name], ['場所', place], ['図番', no], ['尺度', scale]];
     const infoHtml = infoPairs.map(([k, v]) => `<div class="sr"><span>${k}</span><b>${v || ''}</b></div>`).join('');
@@ -4122,9 +4123,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
   .sec{border-top:0.3mm solid #111;padding:2mm 2.5mm;}
   .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:1mm 5mm;}
-  .sr{display:flex;gap:1.5mm;font-size:2.7mm;align-items:baseline;}
-  .sr span{color:#555;flex:0 0 20mm;} .sr b{font-weight:400;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;border-top:0.2mm solid #111;border-left:0.2mm solid #111;}
+  .sr{display:flex;font-size:2.6mm;border-right:0.2mm solid #111;border-bottom:0.2mm solid #111;min-width:0;}
+  .sr span{flex:0 0 22mm;background:#f4f4f4;color:#333;padding:0.7mm 1.4mm;border-right:0.2mm solid #111;white-space:nowrap;}
+  .sr b{flex:1;font-weight:400;padding:0.7mm 1.4mm;min-width:0;overflow:hidden;white-space:nowrap;}
   @media print{@page{size:A3 landscape;margin:8mm;}}
 </style></head><body>
   <div class="pg">
