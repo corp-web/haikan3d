@@ -4085,9 +4085,25 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   function printSheet() {
     const img = snapshotForPrint();   // 白地・グリッドなしの線画
-    const axisSvg = buildAxisGlyph();   // 左下の軸ギズモと同じXYZ軸（現在の向き）
-    const no = esc($('dwgNo').value), name = esc($('dwgName').value);
-    // 方位記号(P.N)以外の枠図（外枠・区域記号・部品表・仕様条件表・押印・備考・表題欄）は廃止。図面＋方位のみ。
+    const axisSvg = buildAxisGlyph();   // 3D方位コンパス（現在の向き）
+    const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
+      name = esc($('dwgName').value), no = esc($('dwgNo').value);
+    const scale = (typeof fmtScaleF === 'function' && typeof currentScaleF === 'function') ? esc(fmtScaleF(currentScaleF())) : '';
+    const sp = gatherSpec();
+    const sv = k => esc(sp[k] || '');
+    // アイテムリスト（画面と同じ列）
+    const rows = partsRows();
+    let ilRows = rows.map(r => `<tr><td class="n">${r.no}</td><td>${esc(r.kind)}</td><td>${esc(r.type)}</td><td>${esc(r.size)}</td><td>${esc(r.cls)}</td><td class="q">${r.qty}</td><td>${esc(r.mat) || '—'}</td></tr>`).join('');
+    if (!ilRows) ilRows = `<tr><td colspan="7" style="text-align:center;color:#888;padding:3mm">（部品なし）</td></tr>`;
+    const specPairs = [
+      ['法規', sv('law')], ['クラス', sv('cls')], ['設計温度℃', sv('tempD')], ['常用温度℃', sv('tempN')],
+      ['設計圧力', sv('presD')], ['常用圧力', sv('presN')], ['試験 耐圧', sv('testP')], ['気密', sv('testA')],
+      ['非破壊検査', [sv('rt'), sv('pt')].filter(Boolean).join(' / ')], ['熱処理', sv('heat')], ['洗浄', sv('wash')], ['塗装', sv('paint')],
+      ['保温', sv('insul')], ['設計', sv('design')], ['製図', sv('draw')], ['検図', sv('check')], ['承認', sv('approve')],
+    ];
+    const specHtml = specPairs.map(([k, v]) => `<div class="sr"><span>${k}</span><b>${v || ''}</b></div>`).join('');
+    const infoPairs = [['作成年月日', date], ['改訂', sv('rev')], ['名称', name], ['場所', place], ['図番', no], ['尺度', scale]];
+    const infoHtml = infoPairs.map(([k, v]) => `<div class="sr"><span>${k}</span><b>${v || ''}</b></div>`).join('');
     const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
@@ -4096,11 +4112,33 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
   .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
   .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
+  /* アイテムリスト・図面仕様・図面情報（右下） */
+  .panel{position:absolute;right:6mm;bottom:6mm;width:124mm;max-height:calc(100% - 12mm);background:#fff;border:0.3mm solid #111;border-radius:1mm;overflow:hidden;display:flex;flex-direction:column;}
+  .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;border-bottom:0.3mm solid #111;padding:1mm;letter-spacing:.5mm;}
+  .panel .sc{overflow:hidden;}
+  .panel table{width:100%;border-collapse:collapse;font-size:2.7mm;}
+  .panel th{background:#f0f0f0;border:0.2mm solid #111;padding:0.8mm 1.4mm;text-align:left;white-space:nowrap;}
+  .panel td{border:0.2mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;}
+  .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
+  .sec{border-top:0.3mm solid #111;padding:2mm 2.5mm;}
+  .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:1mm 5mm;}
+  .sr{display:flex;gap:1.5mm;font-size:2.7mm;align-items:baseline;}
+  .sr span{color:#555;flex:0 0 20mm;} .sr b{font-weight:400;}
   @media print{@page{size:A3 landscape;margin:8mm;}}
 </style></head><body>
   <div class="pg">
     <img src="${img}">
     ${axisSvg}
+    <div class="panel">
+      <div class="hd">アイテムリスト</div>
+      <div class="sc"><table>
+        <thead><tr><th class="n">#</th><th>種別</th><th>タイプ</th><th>サイズ</th><th>クラス</th><th class="q">数量</th><th>材質</th></tr></thead>
+        <tbody>${ilRows}</tbody>
+      </table></div>
+      <div class="sec"><div class="t">図面仕様</div><div class="grid">${specHtml}</div></div>
+      <div class="sec"><div class="grid">${infoHtml}</div></div>
+    </div>
   </div>
 </body></html>`;
     printViaFrame(html);
