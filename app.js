@@ -108,9 +108,13 @@ const gizmo = {};
   const gCam = new THREE.PerspectiveCamera(40, 1, 0.1, 20);
   gCam.position.set(0, 0, GIZMO_CAM_DIST);
   gCam.lookAt(0, 0, 0);
-  gScene.add(new THREE.AmbientLight(0xffffff, 0.9));
-  const gl = new THREE.DirectionalLight(0xffffff, 0.55);
-  gl.position.set(2, 4, 5); gScene.add(gl);
+  // 立体感のある照明：空/地の自然グラデ(HemisphereLight)＋斜め上のキーライト＋弱い補助光。
+  // 各面の明るさが向きで変わり、より現実のキューブらしく見える。
+  gScene.add(new THREE.HemisphereLight(0xffffff, 0x6b7280, 0.95));
+  const gl = new THREE.DirectionalLight(0xffffff, 0.85);
+  gl.position.set(3.5, 6, 4.5); gScene.add(gl);
+  const glFill = new THREE.DirectionalLight(0xffffff, 0.22);
+  glFill.position.set(-4, -1.5, -3); gScene.add(glFill);
 
   const globe = new THREE.Group();
   const cubeSize = 1.5;
@@ -124,9 +128,10 @@ const gizmo = {};
   function faceTexture(text) {
     const s = 256, cv = document.createElement('canvas'); cv.width = cv.height = s;
     const ctx = cv.getContext('2d');
-    const g = ctx.createLinearGradient(0, 0, 0, s);
-    g.addColorStop(0, gizPal.g0); g.addColorStop(1, gizPal.g1);
-    ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
+    // 面はほぼ一様色（陰影は3D照明側で付ける＝向きに応じた立体感）。中心をわずかに明るくして艶を演出。
+    const rg = ctx.createRadialGradient(s * 0.42, s * 0.40, s * 0.05, s * 0.5, s * 0.5, s * 0.72);
+    rg.addColorStop(0, gizPal.g0); rg.addColorStop(1, gizPal.g1);
+    ctx.fillStyle = rg; ctx.fillRect(0, 0, s, s);
     ctx.strokeStyle = gizPal.border; ctx.lineWidth = 6; ctx.strokeRect(3, 3, s - 6, s - 6);
     ctx.fillStyle = gizPal.text;
     ctx.font = '116px "Hiragino Kaku Gothic ProN","Meiryo","Segoe UI",sans-serif';
@@ -137,7 +142,7 @@ const gizmo = {};
     return tex;
   }
   const FACE_TEXTS = ['右', '左', '上', '下', '前', '後'];
-  const faceMat = t => new THREE.MeshStandardMaterial({ map: faceTexture(t), color: 0xffffff, roughness: 1.0 });
+  const faceMat = t => new THREE.MeshStandardMaterial({ map: faceTexture(t), color: 0xffffff, roughness: 0.58, metalness: 0.06 });
   const cube = new THREE.Mesh(
     new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize),
     FACE_TEXTS.map(faceMat)
@@ -4075,7 +4080,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       `<tr><td class="sk">温度℃</td><td class="sl">設計</td><td class="sv">${sv('tempD')}</td><td class="sl">常用</td><td class="sv">${sv('tempN')}</td></tr>` +
       `<tr><td class="sk">圧力MPa</td><td class="sl">設計</td><td class="sv">${sv('presD')}</td><td class="sl">常用</td><td class="sv">${sv('presN')}</td></tr>` +
       `<tr><td class="sk">試験MPa</td><td class="sl">耐圧</td><td class="sv">${sv('testP')}</td><td class="sl">気密</td><td class="sv">${sv('testA')}</td></tr>` +
-      `<tr><td class="sk">非破壊</td><td class="sl">R.T</td><td class="sv">${sv('rt')}</td><td class="sl">P.T</td><td class="sv">${sv('pt')}</td></tr>` +
+      `<tr><td class="sk">非破壊検査</td><td class="sl">R.T</td><td class="sv">${sv('rt')}</td><td class="sl">P.T</td><td class="sv">${sv('pt')}</td></tr>` +
       `<tr><td class="sk">熱処理</td><td class="sv" colspan="4">${sv('heat')}</td></tr>` +
       `<tr><td class="sk">洗　浄</td><td class="sv" colspan="4">${sv('wash')}</td></tr>` +
       `<tr><td class="sk">塗　装</td><td class="sv" colspan="4">${sv('paint')}</td></tr>` +
