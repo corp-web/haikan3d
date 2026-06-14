@@ -4010,8 +4010,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         annBackup.push([m, m.color.getHex(), m.blending, m.opacity]);
         m.color.setHex(0x1a1a1a);
         m.blending = THREE.NormalBlending;
-        if (m.opacity < 0.55) m.opacity = Math.min(1, m.opacity * 2.2);   // 薄い光暈は少し濃く
-        m.needsUpdate = true;
+        m.needsUpdate = true;   // 光暈の不透明度は上げない（細い線のまま黒で出す）
       }
     });
 
@@ -4145,7 +4144,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .panel td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;}
   .panel td.hcell{background:#f0f0f0;font-weight:700;text-align:left;}
   .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
-  .sec{border-top:0.15mm solid #111;padding:2mm 2.5mm;}
+  .sec{padding:1.6mm 2.5mm;}
   .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
   table.kv{width:100%;border-collapse:collapse;font-size:2.6mm;table-layout:fixed;}
   table.kv td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -4339,12 +4338,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function labelSprite(text, color) {
     const fs = 44, pad = 10;
     const meas = document.createElement('canvas').getContext('2d');
-    meas.font = `bold ${fs}px Meiryo, sans-serif`;
+    meas.font = `${fs}px Meiryo, sans-serif`;
     const tw = Math.ceil(meas.measureText(text).width);
     const cv = document.createElement('canvas');
     cv.width = tw + pad * 2; cv.height = fs + pad * 2;
     const c = cv.getContext('2d');
-    c.font = `bold ${fs}px Meiryo, sans-serif`;
+    c.font = `${fs}px Meiryo, sans-serif`;
     c.fillStyle = 'rgba(18,26,48,.86)';
     c.fillRect(0, 0, cv.width, cv.height);
     c.strokeStyle = '#3a4a6e'; c.lineWidth = 2; c.strokeRect(1, 1, cv.width - 2, cv.height - 2);
@@ -4370,12 +4369,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const fs = 44, pad = (deco === 'box') ? 9 : 6;
     const extra = deco === 'double' ? 9 : (deco === 'underline' ? 5 : 0);   // 下線ぶんの下余白
     const meas = document.createElement('canvas').getContext('2d');
-    meas.font = `bold ${fs}px Meiryo, sans-serif`;
+    meas.font = `${fs}px Meiryo, sans-serif`;
     const tw = Math.ceil(meas.measureText(text).width);
     const cv = document.createElement('canvas');
     cv.width = tw + pad * 2; cv.height = fs + pad * 2 + extra;
     const c = cv.getContext('2d');
-    c.font = `bold ${fs}px Meiryo, sans-serif`;
+    c.font = `${fs}px Meiryo, sans-serif`;
     if (deco === 'box') { c.strokeStyle = col; c.lineWidth = 3; c.strokeRect(1.5, 1.5, cv.width - 3, cv.height - 3); }
     c.fillStyle = col; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.fillText(text, cv.width / 2, pad + fs / 2 + 2);
