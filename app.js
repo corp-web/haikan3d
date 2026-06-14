@@ -4136,8 +4136,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   *{box-sizing:border-box;margin:0;padding:0;}
   html,body{height:100%;background:#fff;}
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-  .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;border:0.5mm solid #111;}
+  .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
   .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
+  .frame{position:absolute;inset:5mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
   .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
   .panel{position:absolute;right:6mm;bottom:6mm;width:124mm;max-height:calc(100% - 12mm);background:#fff;border:0.3mm solid #111;border-radius:1mm;overflow:hidden;display:flex;flex-direction:column;}
@@ -4156,6 +4157,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 </style></head><body>
   <div class="pg">
     <img src="${img}">
+    <div class="frame"></div>
     ${axisSvg}
     <div class="panel">
       <div class="hd">アイテムリスト</div>
