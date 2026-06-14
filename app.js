@@ -3944,7 +3944,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.render(scene, activeCam());
     return renderer.domElement.toDataURL('image/png');
   }
-  // 印刷用：白背景・グリッド非表示で撮る（図面らしい白地の線画にする）
+  // 印刷用の線画マテリアル（白地に黒い輪郭線・陰影なし・隠線は消える）
+  let _printFillMat = null, _printEdgeMat = null;
+  function _printMats() {
+    if (!_printFillMat) {
+      _printFillMat = new THREE.MeshBasicMaterial({ color: 0xf2f2f2, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+      _printEdgeMat = new THREE.LineBasicMaterial({ color: 0x111111 });
+    }
+    return { fill: _printFillMat, edge: _printEdgeMat };
+  }
+  // 印刷用：白背景・グリッド非表示・線画化して撮る（参考の手書き図面に寄せる）
   function snapshotForPrint() {
     const prevBg = scene.background;
     const prevClear = renderer.getClearColor(new THREE.Color());
@@ -3953,11 +3962,36 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     scene.background = new THREE.Color(0xffffff);
     renderer.setClearColor(0xffffff, 1);
     if (grid) grid.visible = false;
+
+    // 各部品メッシュ：陰影なしの淡い面に差し替え＋黒い稜線(EdgesGeometry)を重ねる。
+    const { fill, edge } = _printMats();
+    const matBackup = [];   // [mesh, 元material]
+    const overlays = [];    // [mesh, lineSegments, edgesGeometry]
+    for (const p of placedParts) {
+      p.traverse(o => {
+        if (o.isMesh && o.geometry) {
+          matBackup.push([o, o.material]);
+          o.material = fill;
+          try {
+            const eg = new THREE.EdgesGeometry(o.geometry, 24);   // 24°超の稜線のみ＝清書きの輪郭
+            const ls = new THREE.LineSegments(eg, edge);
+            ls.renderOrder = 2;
+            o.add(ls);
+            overlays.push([o, ls, eg]);
+          } catch (e) { /* geometry によっては失敗：面だけで続行 */ }
+        }
+      });
+    }
+
     renderer.setViewport(0, 0, renderer.domElement.clientWidth, renderer.domElement.clientHeight);
     renderer.setScissorTest(false);
     renderer.clear();
     renderer.render(scene, activeCam());
     const url = renderer.domElement.toDataURL('image/png');
+
+    // 後始末：稜線を外して元のマテリアルへ戻す
+    for (const [o, ls, eg] of overlays) { o.remove(ls); eg.dispose(); }
+    for (const [o, m] of matBackup) o.material = m;
     scene.background = prevBg;
     renderer.setClearColor(prevClear, prevAlpha);
     if (grid) grid.visible = prevGrid;
