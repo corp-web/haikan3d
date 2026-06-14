@@ -70,7 +70,7 @@
   #itemList .il-head:hover { color: #cfe0fb; background: rgba(127,168,232,.10); }
   #itemList .il-caret { position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
     font-size: 10px; color: #7fa8e8; letter-spacing: 0; }
-  #itemList .il-body { overflow-y: auto; }
+  #itemList .il-body { overflow-y: auto; flex: 1 1 auto; min-height: 44px; }
   #itemList table { width: 100%; border-collapse: collapse; font-size: 11px; }
   #itemList thead th { position: sticky; top: 0; background: #2a3656; color: #b9c7e6;
     font-weight: 700; text-align: left; padding: 4px 6px; border-bottom: 1px solid #44537a; white-space: nowrap; }
@@ -101,20 +101,17 @@
   #itemList .il-foot input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
   #itemList .il-foot input:focus { outline: none; border-color: #2f7bff; }
   #itemList .il-foot input[type=date] { color-scheme: dark; }
-  /* 図面仕様パネル（アイテムリストの左隣） */
-  #specPanel { position: fixed; right: 444px; bottom: 56px; width: 300px; max-height: 54vh;
-    background: rgba(20,28,51,.94); border: 1px solid #36436b; border-radius: 10px;
-    box-shadow: 0 4px 14px rgba(0,0,0,.4); display: flex; flex-direction: column; overflow: hidden; }
-  #specPanel .il-head { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
-    padding: 6px 8px; border-bottom: 1px solid #36436b; letter-spacing: 1px; cursor: pointer; user-select: none; }
-  #specPanel .il-head:hover { color: #cfe0fb; background: rgba(127,168,232,.10); }
-  #specPanel .il-caret { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); font-size: 10px; color: #7fa8e8; }
-  #specPanel #specBodyWrap { padding: 7px 8px; display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
-  #specPanel .dwg-row, #specPanel .dwg-row2 { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #9fb2d6; }
-  #specPanel .dwg-row > span { width: 64px; flex: none; }
-  #specPanel .dwg-row2 > span { width: 56px; flex: none; }
-  #specPanel input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
-  #specPanel input:focus { outline: none; border-color: #2f7bff; }
+  /* 図面仕様（表と図面情報の間・折りたたみ） */
+  #itemList .il-spechead { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
+    padding: 5px 8px; border-top: 1px solid #36436b; letter-spacing: 1px; cursor: pointer; user-select: none; flex: none; }
+  #itemList .il-spechead:hover { color: #cfe0fb; background: rgba(127,168,232,.10); }
+  #itemList .il-specbody { padding: 7px 8px; display: flex; flex-direction: column; gap: 5px; flex: none;
+    max-height: 30vh; overflow-y: auto; border-top: 1px solid #2a3450; }
+  #itemList .il-specbody .dwg-row, #itemList .il-specbody .dwg-row2 { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #9fb2d6; }
+  #itemList .il-specbody .dwg-row > span { width: 64px; flex: none; }
+  #itemList .il-specbody .dwg-row2 > span { width: 56px; flex: none; }
+  #itemList .il-specbody input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
+  #itemList .il-specbody input:focus { outline: none; border-color: #2f7bff; }
   /* ツールパレット（左側・部品の3Dアイコンを並べる） */
   #palette { position: fixed; left: 12px; top: 12px; width: 124px;
     background: rgba(20,28,51,.92); border: 1px solid #36436b; border-radius: 10px;
@@ -281,9 +278,9 @@
   body.light #itemList .il-foot input[type=date], body.light #palette .pal-select { color-scheme: light; }
   body.light #itemList .mat-input { background: #fff; color: #2a3550; }
   body.light #itemList .c-no { color: #8a93a8; }
-  body.light #specPanel { background: rgba(248,250,253,.97); border-color: #c4ccda; color: #2a3550; }
-  body.light #specPanel .il-head { color: #1f6fd0; border-bottom-color: #d0d6e2; }
-  body.light #specPanel input { background: #fff; color: #2a3550; border-color: #c4ccda; }
+  body.light #itemList .il-spechead { color: #1f6fd0; border-top-color: #d0d6e2; }
+  body.light #itemList .il-specbody { border-top-color: #e0e4ec; }
+  body.light #itemList .il-specbody input { background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #helpPanel .hp-body { color: #2a3550; }
   body.light #helpPanel .hp-head { border-bottom-color: #d0d6e2; }
   body.light #helpPanel kbd, body.light #helpPanel b { color: #143a78; }
@@ -447,18 +444,9 @@
         <tbody id="ilBody"></tbody>
       </table>
     </div>
-    <!-- 図面情報（作成年月日・場所・名称・図番） -->
-    <div class="il-foot">
-      <div class="dwg-row"><span>作成年月日</span><input id="dwgDate" type="date"></div>
-      <div class="dwg-row"><span>場所</span><input id="dwgPlace" type="text"></div>
-      <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
-      <div class="dwg-row"><span>図番</span><input id="dwgNo" type="text"></div>
-    </div>
-  </div>
-  <!-- 図面仕様（アイテムリストの横）。入力値は保存＆印刷の仕様条件表/押印欄へ反映 -->
-  <div id="specPanel">
-    <div class="il-head" id="specHead" title="クリックで折りたたみ">図面仕様<span class="il-caret" id="specCaret">▾</span></div>
-    <div id="specBodyWrap">
+    <!-- 図面仕様（表と図面情報の間・折りたたみ）。入力値は保存＆印刷の仕様条件表/押印へ反映 -->
+    <div class="il-spechead" id="specHead" title="クリックで折りたたみ">図面仕様<span class="il-caret" id="specCaret">▾</span></div>
+    <div class="il-specbody" id="specBodyWrap">
       <div class="dwg-row"><span>法規/クラス</span><input id="dwgClass" type="text"></div>
       <div class="dwg-row2"><span>設計温度℃</span><input id="dwgTempD" type="text"><span>常用温度℃</span><input id="dwgTempN" type="text"></div>
       <div class="dwg-row2"><span>設計圧力</span><input id="dwgPresD" type="text"><span>常用圧力</span><input id="dwgPresN" type="text"></div>
@@ -468,6 +456,13 @@
       <div class="dwg-row2"><span>塗装</span><input id="dwgPaint" type="text"><span>保温</span><input id="dwgInsul" type="text"></div>
       <div class="dwg-row2"><span>設計</span><input id="dwgDesign" type="text"><span>製図</span><input id="dwgDraw" type="text"></div>
       <div class="dwg-row2"><span>検図</span><input id="dwgCheck" type="text"><span>承認</span><input id="dwgApprove" type="text"></div>
+    </div>
+    <!-- 図面情報（作成年月日・場所・名称・図番） -->
+    <div class="il-foot">
+      <div class="dwg-row"><span>作成年月日</span><input id="dwgDate" type="date"></div>
+      <div class="dwg-row"><span>場所</span><input id="dwgPlace" type="text"></div>
+      <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
+      <div class="dwg-row"><span>図番</span><input id="dwgNo" type="text"></div>
     </div>
   </div>
   <!-- 選択部品の脇に出る高さ入力フォーム（高さ/COP を入れて Enter で確定） -->
@@ -526,6 +521,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260614j"></script>
+  <script src="app.js?v=20260614k"></script>
 </body>
 </html>
