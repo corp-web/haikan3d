@@ -4101,10 +4101,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       ['非破壊検査', [sv('rt'), sv('pt')].filter(Boolean).join(' / ')], ['熱処理', sv('heat')], ['洗浄', sv('wash')], ['塗装', sv('paint')],
       ['保温', sv('insul')], ['設計', sv('design')], ['製図', sv('draw')], ['検図', sv('check')], ['承認', sv('approve')],
     ];
-    if (specPairs.length % 2) specPairs.push(['', '']);   // 2列グリッドの最終行を埋める
-    const specHtml = specPairs.map(([k, v]) => `<div class="sr"><span>${k}</span><b>${v || ''}</b></div>`).join('');
     const infoPairs = [['作成年月日', date], ['改訂', sv('rev')], ['名称', name], ['場所', place], ['図番', no], ['尺度', scale]];
-    const infoHtml = infoPairs.map(([k, v]) => `<div class="sr"><span>${k}</span><b>${v || ''}</b></div>`).join('');
+    // キー値を2組/行のテーブル行に。端数は空セルで埋め、罫線が必ず閉じるようにする。
+    const kvRows = pairs => {
+      let html = '', row = '';
+      pairs.forEach((p, i) => {
+        row += `<td class="k">${p[0]}</td><td>${p[1] || ''}</td>`;
+        if (i % 2 === 1) { html += `<tr>${row}</tr>`; row = ''; }
+      });
+      if (row) html += `<tr>${row}<td class="k"></td><td></td></tr>`;
+      return html;
+    };
+    const specHtml = kvRows(specPairs), infoHtml = kvRows(infoPairs);
+    // モデル空間で「図面仕様」を折りたたんでいたら、印刷でも図面仕様を省略する
+    const specEl = document.getElementById('specBodyWrap');
+    const specCollapsed = !!(specEl && specEl.style.display === 'none');
     const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
@@ -4123,10 +4134,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
   .sec{border-top:0.3mm solid #111;padding:2mm 2.5mm;}
   .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
-  .grid{display:grid;grid-template-columns:1fr 1fr;border-top:0.2mm solid #111;border-left:0.2mm solid #111;}
-  .sr{display:flex;font-size:2.6mm;border-right:0.2mm solid #111;border-bottom:0.2mm solid #111;min-width:0;}
-  .sr span{flex:0 0 22mm;background:#f4f4f4;color:#333;padding:0.7mm 1.4mm;border-right:0.2mm solid #111;white-space:nowrap;}
-  .sr b{flex:1;font-weight:400;padding:0.7mm 1.4mm;min-width:0;overflow:hidden;white-space:nowrap;}
+  table.kv{width:100%;border-collapse:collapse;font-size:2.6mm;table-layout:fixed;}
+  table.kv td{border:0.2mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  table.kv td.k{background:#f4f4f4;color:#333;width:22mm;}
   @media print{@page{size:A3 landscape;margin:8mm;}}
 </style></head><body>
   <div class="pg">
@@ -4138,8 +4148,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         <thead><tr><th class="n">#</th><th>種別</th><th>タイプ</th><th>サイズ</th><th>クラス</th><th class="q">数量</th><th>材質</th></tr></thead>
         <tbody>${ilRows}</tbody>
       </table></div>
-      <div class="sec"><div class="t">図面仕様</div><div class="grid">${specHtml}</div></div>
-      <div class="sec"><div class="grid">${infoHtml}</div></div>
+      ${specCollapsed ? '' : `<div class="sec"><div class="t">図面仕様</div><table class="kv">${specHtml}</table></div>`}
+      <div class="sec"><table class="kv">${infoHtml}</table></div>
     </div>
   </div>
 </body></html>`;
