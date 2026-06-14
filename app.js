@@ -157,22 +157,6 @@ const gizmo = {};
   globe.add(edges);
   const dirPlanes = [];   // 方位ラベル（北南東西）の再着色用
 
-  function chevron() {
-    const sh = new THREE.Shape();
-    sh.moveTo(0, 0.11); sh.lineTo(-0.10, -0.06); sh.lineTo(0.10, -0.06); sh.closePath();
-    return new THREE.Mesh(new THREE.ShapeGeometry(sh),
-      new THREE.MeshBasicMaterial({ color: 0x8fbfe6, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
-  }
-  const half = cubeSize / 2;
-  [new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,-1), new THREE.Vector3(1,0,0), new THREE.Vector3(-1,0,0)]
-    .forEach(n => {
-      const ch = chevron();
-      ch.position.copy(n.clone().multiplyScalar(half + 0.001));
-      ch.position.y = -half - 0.16;
-      ch.lookAt(ch.position.clone().add(n));
-      globe.add(ch);
-    });
-
   const compass = new THREE.Group();
   compass.position.y = -cubeSize * 0.55;
   globe.add(compass);
@@ -4080,7 +4064,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       `<tr><td class="sk">温度℃</td><td class="sl">設計</td><td class="sv">${sv('tempD')}</td><td class="sl">常用</td><td class="sv">${sv('tempN')}</td></tr>` +
       `<tr><td class="sk">圧力MPa</td><td class="sl">設計</td><td class="sv">${sv('presD')}</td><td class="sl">常用</td><td class="sv">${sv('presN')}</td></tr>` +
       `<tr><td class="sk">試験MPa</td><td class="sl">耐圧</td><td class="sv">${sv('testP')}</td><td class="sl">気密</td><td class="sv">${sv('testA')}</td></tr>` +
-      `<tr><td class="sk">非破壊検査</td><td class="sl">R.T</td><td class="sv">${sv('rt')}</td><td class="sl">P.T</td><td class="sv">${sv('pt')}</td></tr>` +
+      `<tr><td class="sk">非破壊検査</td><td class="sv" colspan="2">${sv('rt')}</td><td class="sv" colspan="2">${sv('pt')}</td></tr>` +
       `<tr><td class="sk">熱処理</td><td class="sv" colspan="4">${sv('heat')}</td></tr>` +
       `<tr><td class="sk">洗　浄</td><td class="sv" colspan="4">${sv('wash')}</td></tr>` +
       `<tr><td class="sk">塗　装</td><td class="sv" colspan="4">${sv('paint')}</td></tr>` +

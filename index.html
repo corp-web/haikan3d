@@ -281,6 +281,11 @@
   body.light #itemList .il-spechead { color: #1f6fd0; border-top-color: #d0d6e2; }
   body.light #itemList .il-specbody { border-top-color: #e0e4ec; }
   body.light #itemList .il-specbody input { background: #fff; color: #2a3550; border-color: #c4ccda; }
+  /* ホワイトモードで薄かった文字を濃く（ツールパレットと同等の視認性に） */
+  body.light #itemList tbody td { color: #2a3550; }
+  body.light #itemList .il-empty td { color: #6b7488; }
+  body.light #itemList .il-foot .dwg-row, body.light #itemList .il-foot .dwg-row > span { color: #33405c; }
+  body.light #itemList .il-specbody .dwg-row, body.light #itemList .il-specbody .dwg-row2 { color: #33405c; }
   body.light #helpPanel .hp-body { color: #2a3550; }
   body.light #helpPanel .hp-head { border-bottom-color: #d0d6e2; }
   body.light #helpPanel kbd, body.light #helpPanel b { color: #143a78; }
@@ -451,7 +456,7 @@
       <div class="dwg-row2"><span>設計温度℃</span><input id="dwgTempD" type="text"><span>常用温度℃</span><input id="dwgTempN" type="text"></div>
       <div class="dwg-row2"><span>設計圧力</span><input id="dwgPresD" type="text"><span>常用圧力</span><input id="dwgPresN" type="text"></div>
       <div class="dwg-row2"><span>試験 耐圧</span><input id="dwgTestP" type="text"><span>気密</span><input id="dwgTestA" type="text"></div>
-      <div class="dwg-row2"><span>非破壊検査</span><input id="dwgRT" type="text" placeholder="R.T"><input id="dwgPT" type="text" placeholder="P.T"></div>
+      <div class="dwg-row2"><span>非破壊検査</span><input id="dwgRT" type="text"><input id="dwgPT" type="text"></div>
       <div class="dwg-row2"><span>熱処理</span><input id="dwgHeat" type="text"><span>洗浄</span><input id="dwgWash" type="text"></div>
       <div class="dwg-row2"><span>塗装</span><input id="dwgPaint" type="text"><span>保温</span><input id="dwgInsul" type="text"></div>
       <div class="dwg-row2"><span>設計</span><input id="dwgDesign" type="text"><span>製図</span><input id="dwgDraw" type="text"></div>
@@ -521,6 +526,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260614n"></script>
+  <script src="app.js?v=20260614o"></script>
 </body>
 </html>
