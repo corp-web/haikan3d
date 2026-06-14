@@ -98,6 +98,16 @@ window.addEventListener('keydown', e => {
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); if (window.__redo) window.__redo(); }
 }, true);
 
+// 作図／鏡モード中のカーソル：CAD風の十字＋中央ピックボックス（黒縁＋白で明暗どちらの背景でも視認）
+const DRAW_CURSOR = (() => {
+  const lines = "<line x1='20' y1='1' x2='20' y2='14'/><line x1='20' y1='26' x2='20' y2='39'/>"
+    + "<line x1='1' y1='20' x2='14' y2='20'/><line x1='26' y1='20' x2='39' y2='20'/><rect x='14' y='14' width='12' height='12'/>";
+  const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'>"
+    + "<g fill='none' stroke='black' stroke-width='3'>" + lines + "</g>"
+    + "<g fill='none' stroke='white' stroke-width='1.2'>" + lines + "</g></svg>";
+  return "url(\"data:image/svg+xml;utf8," + encodeURIComponent(svg) + "\") 20 20, crosshair";
+})();
+
 // ===================================================================
 //  ビューキューブ（画面右上の独立ギズモ・別シーン）
 // ===================================================================
@@ -3610,7 +3620,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const parts = [...selectedParts], anns = [...selAnns];
     if (!parts.length && !anns.length) return;
     mirrorMode = { parts, anns, p1: null };
-    renderer.domElement.style.cursor = 'crosshair';       // モード表示はカーソルのみ（メッセージ画面は出さない）
+    renderer.domElement.style.cursor = DRAW_CURSOR;       // モード表示はカーソルのみ（メッセージ画面は出さない）
   }
   // 鏡の変換行列を求める。カーソルが指す方向（45°刻み）へ反転（鉛直面での鏡映）。
   // ※Shift の特殊機能は廃止（2026-06-13 社長指示）
@@ -3818,6 +3828,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ['dwgRT', 'rt'], ['dwgPT', 'pt'], ['dwgHeat', 'heat'], ['dwgWash', 'wash'],
     ['dwgPaint', 'paint'], ['dwgInsul', 'insul'],
     ['dwgDesign', 'design'], ['dwgDraw', 'draw'], ['dwgCheck', 'check'], ['dwgApprove', 'approve'],
+    ['dwgRev', 'rev'],
   ];
   function gatherSpec() {
     const o = {};
@@ -4177,7 +4188,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           <div class="trows">
             <div class="trow"><div class="k">図面名</div><div class="v">${name || ''}</div></div>
             <div class="trow"><div class="k">客先名</div><div class="v">${place || ''}</div><div class="k">図　番</div><div class="v">${no || ''}</div></div>
-            <div class="trow"><div class="k">尺度</div><div class="v">${scale || ''}</div><div class="k">年月日</div><div class="v">${date || ''}</div><div class="k">訂正</div><div class="v" style="flex:0 0 9mm;text-align:center;justify-content:center">0</div></div>
+            <div class="trow"><div class="k">尺度</div><div class="v">${scale || ''}</div><div class="k">年月日</div><div class="v">${date || ''}</div><div class="k">訂正</div><div class="v" style="flex:0 0 9mm;text-align:center;justify-content:center">${sv('rev') || '0'}</div></div>
           </div>
         </div>
       </div>
@@ -4668,7 +4679,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       stopFollow();
       selectPart(null);
       drawState.mode = mode;
-      renderer.domElement.style.cursor = 'crosshair';
+      renderer.domElement.style.cursor = DRAW_CURSOR;
     } else {
       renderer.domElement.style.cursor = '';
     }

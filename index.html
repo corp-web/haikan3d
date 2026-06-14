@@ -101,6 +101,12 @@
   #itemList .il-foot input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
   #itemList .il-foot input:focus { outline: none; border-color: #2f7bff; }
   #itemList .il-foot input[type=date] { color-scheme: dark; }
+  /* 作成年月日＋改訂の横並び行 */
+  #itemList .il-foot .dwg-row2 { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #9fb2d6; }
+  #itemList .il-foot .dwg-row2 > span { flex: none; width: 64px; }
+  #itemList .il-foot .dwg-daterow > span + span { width: 34px; text-align: right; }
+  #itemList .il-foot .dwg-row2 > input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
+  #itemList .il-foot .dwg-daterow > #dwgRev { flex: 0 0 52px; }
   /* 図面仕様（表と図面情報の間・折りたたみ） */
   #itemList .il-spechead { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
     padding: 5px 8px; border-top: 1px solid #36436b; letter-spacing: 1px; cursor: pointer; user-select: none; flex: none; }
@@ -284,7 +290,9 @@
   /* ホワイトモードで薄かった文字を濃く（ツールパレットと同等の視認性に） */
   body.light #itemList tbody td { color: #2a3550; }
   body.light #itemList .il-empty td { color: #6b7488; }
-  body.light #itemList .il-foot .dwg-row, body.light #itemList .il-foot .dwg-row > span { color: #33405c; }
+  body.light #itemList .il-foot .dwg-row, body.light #itemList .il-foot .dwg-row > span,
+  body.light #itemList .il-foot .dwg-row2, body.light #itemList .il-foot .dwg-row2 > span { color: #33405c; }
+  body.light #itemList .il-foot .dwg-row2 > input { background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #itemList .il-specbody .dwg-row, body.light #itemList .il-specbody .dwg-row2 { color: #33405c; }
   body.light #helpPanel .hp-body { color: #2a3550; }
   body.light #helpPanel .hp-head { border-bottom-color: #d0d6e2; }
@@ -464,7 +472,7 @@
     </div>
     <!-- 図面情報（作成年月日・場所・名称・図番） -->
     <div class="il-foot">
-      <div class="dwg-row"><span>作成年月日</span><input id="dwgDate" type="date"></div>
+      <div class="dwg-row2 dwg-daterow"><span>作成年月日</span><input id="dwgDate" type="date"><span>改訂</span><input id="dwgRev" type="text"></div>
       <div class="dwg-row"><span>場所</span><input id="dwgPlace" type="text"></div>
       <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
       <div class="dwg-row"><span>図番</span><input id="dwgNo" type="text"></div>
@@ -526,6 +534,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260614p"></script>
+  <script src="app.js?v=20260614q"></script>
 </body>
 </html>
