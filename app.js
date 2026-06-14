@@ -103,8 +103,8 @@ const DRAW_CURSOR = (() => {
   const lines = "<line x1='20' y1='1' x2='20' y2='14'/><line x1='20' y1='26' x2='20' y2='39'/>"
     + "<line x1='1' y1='20' x2='14' y2='20'/><line x1='26' y1='20' x2='39' y2='20'/><rect x='14' y='14' width='12' height='12'/>";
   const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'>"
-    + "<g fill='none' stroke='black' stroke-width='3'>" + lines + "</g>"
-    + "<g fill='none' stroke='white' stroke-width='1.2'>" + lines + "</g></svg>";
+    + "<g fill='none' stroke='black' stroke-width='1.6'>" + lines + "</g>"
+    + "<g fill='none' stroke='white' stroke-width='0.7'>" + lines + "</g></svg>";
   return "url(\"data:image/svg+xml;utf8," + encodeURIComponent(svg) + "\") 20 20, crosshair";
 })();
 
