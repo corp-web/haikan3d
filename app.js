@@ -4001,13 +4001,28 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       });
     }
 
+    // 注釈（寸法線・補助線・矢印・線分・構築線）は加算合成の発光色だと白地で飛ぶ。
+    // 印刷は黒の通常合成で確実に見えるようにする（文字スプライトは対象外＝色そのまま）。
+    const annBackup = [];
+    annGroup.traverse(o => {
+      const m = o.material;
+      if ((o.isMesh || o.isLine || o.isLineSegments) && m && m.color) {
+        annBackup.push([m, m.color.getHex(), m.blending, m.opacity]);
+        m.color.setHex(0x1a1a1a);
+        m.blending = THREE.NormalBlending;
+        if (m.opacity < 0.55) m.opacity = Math.min(1, m.opacity * 2.2);   // 薄い光暈は少し濃く
+        m.needsUpdate = true;
+      }
+    });
+
     renderer.setViewport(0, 0, renderer.domElement.clientWidth, renderer.domElement.clientHeight);
     renderer.setScissorTest(false);
     renderer.clear();
     renderer.render(scene, activeCam());
     const url = renderer.domElement.toDataURL('image/png');
 
-    // 後始末：稜線を外して元のマテリアルへ戻す
+    // 後始末：注釈の色/合成/不透明度を戻す → 稜線を外して元のマテリアルへ戻す
+    for (const [m, c, b, op] of annBackup) { m.color.setHex(c); m.blending = b; m.opacity = op; m.needsUpdate = true; }
     for (const [o, ls, eg] of overlays) { o.remove(ls); eg.dispose(); }
     for (const [o, m] of matBackup) o.material = m;
     scene.background = prevBg;
@@ -4121,7 +4136,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   *{box-sizing:border-box;margin:0;padding:0;}
   html,body{height:100%;background:#fff;}
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-  .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
+  .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;border:0.5mm solid #111;}
   .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
   .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
@@ -4153,9 +4168,44 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     </div>
   </div>
 </body></html>`;
-    printViaFrame(html);
+    showPrintPreview(html);
   }
-  // ポップアップを使わず非表示iframeで印刷（PC・iPad Safari どちらでもブロックされにくい）
+  // 画面内のズーム可能な印刷プレビュー（＋/−・全体表示・印刷・閉じる）。印刷ボタンで実際に印刷する。
+  function showPrintPreview(html) {
+    const old = document.getElementById('__printPreview'); if (old) old.remove();
+    const PW = 1587, PH = 1122;   // A3横 @96dpi（420×297mm）
+    const ov = document.createElement('div'); ov.id = '__printPreview';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(8,12,24,.82);display:flex;flex-direction:column;font:13px Meiryo,sans-serif;';
+    const bar = document.createElement('div');
+    bar.style.cssText = 'flex:none;display:flex;align-items:center;gap:8px;padding:8px 12px;background:#141c33;color:#dbe4f3;border-bottom:1px solid #36436b;';
+    const mkbtn = (t, bg) => { const b = document.createElement('button'); b.textContent = t; b.style.cssText = `padding:5px 12px;border:1px solid #41538a;border-radius:6px;background:${bg || '#22305a'};color:#e8eef7;cursor:pointer;font:13px Meiryo,sans-serif;`; return b; };
+    const title = document.createElement('b'); title.textContent = '印刷プレビュー'; title.style.marginRight = 'auto';
+    const zo = mkbtn('－'), zlabel = document.createElement('span'), zi = mkbtn('＋'), fit = mkbtn('全体表示'), pr = mkbtn('印刷', '#2f7bff'), cl = mkbtn('閉じる');
+    zlabel.style.cssText = 'min-width:52px;text-align:center;';
+    bar.append(title, zo, zlabel, zi, fit, pr, cl);
+    const scroll = document.createElement('div');
+    scroll.style.cssText = 'flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:18px;';
+    const holder = document.createElement('div');
+    holder.style.cssText = 'flex:none;box-shadow:0 6px 30px rgba(0,0,0,.55);background:#fff;';
+    const ifr = document.createElement('iframe');
+    ifr.style.cssText = `width:${PW}px;height:${PH}px;border:0;background:#fff;display:block;transform-origin:top left;`;
+    holder.appendChild(ifr); scroll.appendChild(holder);
+    ov.append(bar, scroll); document.body.appendChild(ov);
+    const idoc = ifr.contentWindow.document; idoc.open(); idoc.write(html); idoc.close();
+    let z = 1;
+    const applyZoom = () => { ifr.style.transform = `scale(${z})`; holder.style.width = (PW * z) + 'px'; holder.style.height = (PH * z) + 'px'; zlabel.textContent = Math.round(z * 100) + '%'; };
+    const fitW = () => { z = Math.max(0.1, Math.min(2, (scroll.clientWidth - 40) / PW)); applyZoom(); };
+    zo.onclick = () => { z = Math.max(0.1, z / 1.2); applyZoom(); };
+    zi.onclick = () => { z = Math.min(5, z * 1.2); applyZoom(); };
+    fit.onclick = fitW;
+    pr.onclick = () => { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) { alert('印刷に失敗しました：' + (e && e.message || e)); } };
+    const close = () => { ov.remove(); document.removeEventListener('keydown', onkey); };
+    cl.onclick = close;
+    const onkey = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onkey);
+    setTimeout(fitW, 60);
+  }
+  // （未使用・保険）ポップアップを使わず非表示iframeで直接印刷
   function printViaFrame(html) {
     let ifr = document.getElementById('__printFrame');
     if (ifr && ifr.parentNode) ifr.parentNode.removeChild(ifr);
