@@ -4052,140 +4052,31 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     } catch (e) { return 0; }
   }
   function printSheet() {
-    const img = snapshotForPrint();   // 図面領域＝白地・グリッドなしの線画（元の体裁）
+    const img = snapshotForPrint();   // 白地・グリッドなしの線画
     const nAng = northScreenAngleDeg();
-    const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
-      name = esc($('dwgName').value), no = esc($('dwgNo').value);
-    const scale = (typeof fmtScaleF === 'function' && typeof currentScaleF === 'function') ? esc(fmtScaleF(currentScaleF())) : '';
-    // 区域記号（上下＝1〜8／左右＝A〜F）
-    const numCells = [1, 2, 3, 4, 5, 6, 7, 8].map(n => `<div>${n}</div>`).join('');
-    const letCells = ['A', 'B', 'C', 'D', 'E', 'F'].map(l => `<div>${l}</div>`).join('');
-    // 部品表（配置部品から自動集計）。規格＝寸法・タイプ・クラスをまとめる
-    const rows = partsRows();
-    let prows = rows.map(r => {
-      const spec = [r.size, r.type, r.cls].filter(Boolean).join(' ');
-      return `<tr><td class="nc">${r.no}</td><td>${esc(r.kind)}</td><td class="spc">${esc(spec)}</td><td>${esc(r.mat) || '—'}</td><td class="qc">${r.qty}</td></tr>`;
-    }).join('');
-    if (!prows) prows = `<tr><td colspan="5" class="pe">（部品なし）</td></tr>`;
-    // 仕様条件表・押印欄（3D空間の入力欄の値を流し込む）
-    const sp = gatherSpec();
-    const sv = k => esc(sp[k] || '');
-    const specRows =
-      `<tr><td class="sk">法　規</td><td class="sv">${sv('law')}</td><td class="sl">クラス</td><td class="sv" colspan="2">${sv('cls')}</td></tr>` +
-      `<tr><td class="sk">温度℃</td><td class="sl">設計</td><td class="sv">${sv('tempD')}</td><td class="sl">常用</td><td class="sv">${sv('tempN')}</td></tr>` +
-      `<tr><td class="sk">圧力MPa</td><td class="sl">設計</td><td class="sv">${sv('presD')}</td><td class="sl">常用</td><td class="sv">${sv('presN')}</td></tr>` +
-      `<tr><td class="sk">試験MPa</td><td class="sl">耐圧</td><td class="sv">${sv('testP')}</td><td class="sl">気密</td><td class="sv">${sv('testA')}</td></tr>` +
-      `<tr><td class="sk">非破壊検査</td><td class="sv" colspan="2">${sv('rt')}</td><td class="sv" colspan="2">${sv('pt')}</td></tr>` +
-      `<tr><td class="sk">熱処理</td><td class="sv" colspan="4">${sv('heat')}</td></tr>` +
-      `<tr><td class="sk">洗　浄</td><td class="sv" colspan="4">${sv('wash')}</td></tr>` +
-      `<tr><td class="sk">塗　装</td><td class="sv" colspan="4">${sv('paint')}</td></tr>` +
-      `<tr><td class="sk">保　温</td><td class="sv" colspan="4">${sv('insul')}</td></tr>`;
-    const apprCells = [['設計', 'design'], ['製図', 'draw'], ['検図', 'check'], ['承認', 'approve']].map(([t, k]) =>
-      `<div class="c"><div class="h">${t}</div><div class="b">${sv(k)}</div></div>`).join('');
-    // ===== A3横の図面枠（先ほどの体裁）。図面領域には今の3D空間の転写を貼る =====
+    const no = esc($('dwgNo').value), name = esc($('dwgName').value);
+    // 方位記号(P.N)以外の枠図（外枠・区域記号・部品表・仕様条件表・押印・備考・表題欄）は廃止。図面＋方位のみ。
     const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
   html,body{height:100%;background:#fff;}
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-  .sheet{position:relative;width:420mm;height:297mm;margin:0 auto;background:#fff;overflow:hidden;}
-  .outer{position:absolute;left:6mm;top:6mm;right:6mm;bottom:6mm;border:0.5mm solid #111;}
-  .z{position:absolute;display:flex;font-size:2.8mm;color:#111;}
-  .z.t,.z.b{left:12mm;right:12mm;height:6mm;}
-  .z.t{top:6mm;border-bottom:0.3mm solid #111;}
-  .z.b{bottom:6mm;border-top:0.3mm solid #111;}
-  .z.t>div,.z.b>div{flex:1;display:flex;align-items:center;justify-content:center;border-left:0.2mm solid #111;}
-  .z.t>div:first-child,.z.b>div:first-child{border-left:none;}
-  .z.l,.z.r{top:12mm;bottom:12mm;width:6mm;flex-direction:column;}
-  .z.l{left:6mm;border-right:0.3mm solid #111;}
-  .z.r{right:6mm;border-left:0.3mm solid #111;}
-  .z.l>div,.z.r>div{flex:1;display:flex;align-items:center;justify-content:center;border-top:0.2mm solid #111;}
-  .z.l>div:first-child,.z.r>div:first-child{border-top:none;}
-  .inner{position:absolute;left:12mm;top:12mm;right:12mm;bottom:12mm;border:0.4mm solid #111;display:flex;flex-direction:column;}
-  .upper{flex:1;display:flex;min-height:0;}
-  .draw{flex:1;position:relative;overflow:hidden;background:#fff;}
-  .draw>img{width:100%;height:100%;object-fit:contain;}
-  .north{position:absolute;left:6mm;top:5mm;width:15mm;height:22mm;}
-  .north .pn{font-size:3.2mm;font-weight:700;}
-  .pcol{width:86mm;border-left:0.4mm solid #111;display:flex;flex-direction:column;min-width:0;}
-  .pcol .cap{font-size:3mm;font-weight:700;text-align:center;background:#f3f3f3;border-bottom:0.3mm solid #111;padding:0.7mm;}
-  .pcol .sc{flex:1;overflow:hidden;}
-  .pcol table{width:100%;border-collapse:collapse;font-size:2.6mm;table-layout:fixed;}
-  .pcol th,.pcol td{border:0.2mm solid #111;padding:0.5mm 1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .pcol th{background:#f3f3f3;}
-  .pcol .nc{width:7mm;text-align:right;color:#555;}
-  .pcol .qc{width:11mm;text-align:right;}
-  .pcol td.spc{font-size:2.4mm;}
-  .pcol .pe{text-align:center;color:#888;padding:5mm;}
-  .band{height:36mm;display:flex;border-top:0.4mm solid #111;}
-  .band>div{min-width:0;}
-  .spec{width:66mm;border-right:0.3mm solid #111;}
-  .spec table{width:100%;height:100%;border-collapse:collapse;font-size:2.3mm;table-layout:fixed;}
-  .spec td{border:0.2mm solid #111;padding:0 0.8mm;overflow:hidden;white-space:nowrap;}
-  .spec td:first-child{border-left:none;}
-  .spec tr:first-child td{border-top:none;}
-  .spec .sk{background:#f3f3f3;width:16mm;}
-  .spec .sl{background:#f7f7f7;text-align:center;font-size:2.1mm;width:7mm;}
-  .spec .sv{text-align:center;}
-  .appr{width:24mm;border-right:0.3mm solid #111;display:flex;flex-direction:column;}
-  .appr .c{flex:1;display:flex;flex-direction:column;border-bottom:0.2mm solid #111;}
-  .appr .c:last-child{border-bottom:none;}
-  .appr .c .h{font-size:2.5mm;text-align:center;background:#f3f3f3;border-bottom:0.2mm solid #111;}
-  .appr .c .b{flex:1;display:flex;align-items:center;justify-content:center;font-size:2.6mm;}
-  .notes{flex:1;border-right:0.3mm solid #111;display:flex;flex-direction:column;}
-  .notes .h{font-size:2.6mm;background:#f3f3f3;border-bottom:0.2mm solid #111;padding:0.4mm 1.5mm;}
-  .notes .b{flex:1;}
-  .title{width:130mm;display:flex;flex-direction:column;}
-  .title .co{height:12mm;display:flex;align-items:center;justify-content:center;font-size:6mm;font-weight:700;letter-spacing:1.2mm;border-bottom:0.3mm solid #111;}
-  .title .trows{flex:1;display:flex;flex-direction:column;}
-  .title .trow{flex:1;display:flex;border-top:0.2mm solid #111;}
-  .title .trow:first-child{border-top:none;}
-  .title .k{display:flex;align-items:center;padding:0 1.5mm;font-size:2.7mm;background:#f3f3f3;border-right:0.2mm solid #111;white-space:nowrap;}
-  .title .v{flex:1;display:flex;align-items:center;padding:0 1.5mm;font-size:3mm;border-right:0.2mm solid #111;min-width:0;overflow:hidden;white-space:nowrap;}
-  .title .v:last-child{border-right:none;}
-  @media print{@page{size:A3 landscape;margin:0;}.sheet{margin:0;}}
+  .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
+  .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
+  .north{position:absolute;left:8mm;top:6mm;width:16mm;height:23mm;}
+  .north .pn{font-size:3.4mm;font-weight:700;}
+  @media print{@page{size:A3 landscape;margin:8mm;}}
 </style></head><body>
-  <div class="sheet">
-    <div class="outer"></div>
-    <div class="z t">${numCells}</div>
-    <div class="z b">${numCells}</div>
-    <div class="z l">${letCells}</div>
-    <div class="z r">${letCells}</div>
-    <div class="inner">
-      <div class="upper">
-        <div class="draw">
-          <img src="${img}">
-          <svg class="north" viewBox="0 0 44 60">
-            <text class="pn" x="22" y="9" text-anchor="middle">P.N</text>
-            <circle cx="22" cy="35" r="13" fill="none" stroke="#111" stroke-width="1.1"/>
-            <g transform="rotate(${nAng.toFixed(1)} 22 35)">
-              <polygon points="22,20 28,48 22,40 16,48" fill="#111"/>
-              <polygon points="22,20 22,40 16,48" fill="#fff" stroke="#111" stroke-width="0.5"/>
-            </g>
-          </svg>
-        </div>
-        <div class="pcol">
-          <div class="cap">部　品　表</div>
-          <div class="sc"><table>
-            <thead><tr><th class="nc">No</th><th>品名</th><th>規格</th><th>材質</th><th class="qc">数量</th></tr></thead>
-            <tbody>${prows}</tbody>
-          </table></div>
-        </div>
-      </div>
-      <div class="band">
-        <div class="spec"><table>${specRows}</table></div>
-        <div class="appr">${apprCells}</div>
-        <div class="notes"><div class="h">備　考</div><div class="b"></div></div>
-        <div class="title">
-          <div class="co">志基テクノ株式会社</div>
-          <div class="trows">
-            <div class="trow"><div class="k">図面名</div><div class="v">${name || ''}</div></div>
-            <div class="trow"><div class="k">客先名</div><div class="v">${place || ''}</div><div class="k">図　番</div><div class="v">${no || ''}</div></div>
-            <div class="trow"><div class="k">尺度</div><div class="v">${scale || ''}</div><div class="k">年月日</div><div class="v">${date || ''}</div><div class="k">訂正</div><div class="v" style="flex:0 0 9mm;text-align:center;justify-content:center">${sv('rev') || '0'}</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
+  <div class="pg">
+    <img src="${img}">
+    <svg class="north" viewBox="0 0 44 60">
+      <text class="pn" x="22" y="9" text-anchor="middle">P.N</text>
+      <circle cx="22" cy="35" r="13" fill="none" stroke="#111" stroke-width="1.1"/>
+      <g transform="rotate(${nAng.toFixed(1)} 22 35)">
+        <polygon points="22,20 28,48 22,40 16,48" fill="#111"/>
+        <polygon points="22,20 22,40 16,48" fill="#fff" stroke="#111" stroke-width="0.5"/>
+      </g>
+    </svg>
   </div>
 </body></html>`;
     printViaFrame(html);
