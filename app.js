@@ -4082,10 +4082,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       `<tr><td class="sk">保　温</td><td class="sv" colspan="4">${sv('insul')}</td></tr>`;
     const apprCells = [['設計', 'design'], ['製図', 'draw'], ['検図', 'check'], ['承認', 'approve']].map(([t, k]) =>
       `<div class="c"><div class="h">${t}</div><div class="b">${sv(k)}</div></div>`).join('');
-    const w = window.open('', '_blank');
-    if (!w) { alert('ポップアップがブロックされました。印刷を許可してください。'); return; }
     // ===== A3横の正式な配管図枠。ベクター(HTML/CSS)で白紙から構築（借り物の枠は使わない） =====
-    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
+    const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
   html,body{height:100%;background:#fff;}
@@ -4194,9 +4192,28 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       </div>
     </div>
   </div>
-  <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
-</body></html>`);
-    w.document.close();
+</body></html>`;
+    printViaFrame(html);
+  }
+  // ポップアップを使わず非表示iframeで印刷（PC・iPad Safari どちらでもブロックされにくい）
+  function printViaFrame(html) {
+    let ifr = document.getElementById('__printFrame');
+    if (ifr && ifr.parentNode) ifr.parentNode.removeChild(ifr);
+    ifr = document.createElement('iframe');
+    ifr.id = '__printFrame';
+    ifr.setAttribute('aria-hidden', 'true');
+    ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;';
+    document.body.appendChild(ifr);
+    const idoc = ifr.contentWindow.document;
+    idoc.open(); idoc.write(html); idoc.close();
+    let done = false;
+    const go = () => {
+      if (done) return; done = true;
+      try { ifr.contentWindow.focus(); ifr.contentWindow.print(); }
+      catch (e) { alert('印刷の起動に失敗しました：' + (e && e.message || e)); }
+    };
+    ifr.onload = () => setTimeout(go, 250);
+    setTimeout(go, 900);   // onload が発火しない環境の保険
   }
 
   // ===================================================================
