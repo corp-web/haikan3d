@@ -4051,9 +4051,39 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return Math.atan2(dx, dy) * 180 / Math.PI;   // SVG回転角（上向き基準・時計回り）
     } catch (e) { return 0; }
   }
+  // 左下の軸ギズモと同じ X(赤)/Y(緑)/Z(青) 3D軸を、現在のビュー向きでSVGに起こす
+  function buildAxisGlyph() {
+    const C = 40, R = 25, ah = 6, hw = 3.4;
+    let dirs;
+    try {
+      const cam = activeCam(); cam.updateMatrixWorld();
+      const base = (typeof controls !== 'undefined' && controls.target) ? controls.target.clone() : new V3(0, 0, 0);
+      const o = base.clone().project(cam);
+      const defs = [['X', [1, 0, 0], '#e23b3b'], ['Y', [0, 1, 0], '#1f9d4d'], ['Z', [0, 0, 1], '#2f6df0']];
+      dirs = defs.map(([t, v, col]) => {
+        const p = base.clone().add(new V3(v[0], v[1], v[2])).project(cam);
+        const dx = p.x - o.x, dy = p.y - o.y, L = Math.hypot(dx, dy) || 1e-6;
+        return { t, col, depth: p.z - o.z, sx: dx / L, sy: -dy / L };   // SVGはy下向き
+      });
+      dirs.sort((a, b) => b.depth - a.depth);   // 奥の軸から描く
+    } catch (e) {
+      dirs = [{ t: 'X', col: '#e23b3b', sx: 0.87, sy: 0.5 }, { t: 'Y', col: '#1f9d4d', sx: 0, sy: -1 }, { t: 'Z', col: '#2f6df0', sx: -0.87, sy: 0.5 }];
+    }
+    let body = '<circle cx="40" cy="40" r="2" fill="#555"/>';
+    for (const d of dirs) {
+      const tx = C + d.sx * R, ty = C + d.sy * R;
+      const bx = tx - d.sx * ah, by = ty - d.sy * ah;
+      const px = -d.sy * hw, py = d.sx * hw;
+      const lx = C + d.sx * (R + 6), ly = C + d.sy * (R + 6);
+      body += `<line x1="40" y1="40" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${d.col}" stroke-width="2.2" stroke-linecap="round"/>`;
+      body += `<polygon points="${tx.toFixed(1)},${ty.toFixed(1)} ${(bx + px).toFixed(1)},${(by + py).toFixed(1)} ${(bx - px).toFixed(1)},${(by - py).toFixed(1)}" fill="${d.col}"/>`;
+      body += `<text x="${lx.toFixed(1)}" y="${(ly + 2.6).toFixed(1)}" text-anchor="middle" font-size="8" font-weight="700" fill="${d.col}">${d.t}</text>`;
+    }
+    return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
+  }
   function printSheet() {
     const img = snapshotForPrint();   // 白地・グリッドなしの線画
-    const nAng = northScreenAngleDeg();
+    const axisSvg = buildAxisGlyph();   // 左下の軸ギズモと同じXYZ軸（現在の向き）
     const no = esc($('dwgNo').value), name = esc($('dwgName').value);
     // 方位記号(P.N)以外の枠図（外枠・区域記号・部品表・仕様条件表・押印・備考・表題欄）は廃止。図面＋方位のみ。
     const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
@@ -4063,31 +4093,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
   .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
-  .north{position:absolute;left:8mm;top:6mm;width:21mm;height:27mm;}
-  .north .pn{font-size:3.4mm;font-weight:700;}
+  .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
   @media print{@page{size:A3 landscape;margin:8mm;}}
 </style></head><body>
   <div class="pg">
     <img src="${img}">
-    <svg class="north" viewBox="0 0 64 84">
-      <text class="pn" x="32" y="10" text-anchor="middle">P.N</text>
-      <g transform="rotate(${nAng.toFixed(1)} 32 46)">
-        <!-- 3Dコンパスローズ：二重リング＋4方位の星（各点を明/暗に割って立体感）。北の針を長く -->
-        <circle cx="32" cy="46" r="29" fill="none" stroke="#111" stroke-width="0.6"/>
-        <circle cx="32" cy="46" r="24.5" fill="none" stroke="#111" stroke-width="0.3"/>
-        <g stroke="#111" stroke-width="0.4" stroke-linejoin="round">
-          <polygon points="32,12 25,39 32,46" fill="#dcdcdc"/>
-          <polygon points="32,12 39,39 32,46" fill="#1b1b1b"/>
-          <polygon points="61,46 39,39 32,46" fill="#dcdcdc"/>
-          <polygon points="61,46 39,53 32,46" fill="#1b1b1b"/>
-          <polygon points="32,77 39,53 32,46" fill="#dcdcdc"/>
-          <polygon points="32,77 25,53 32,46" fill="#1b1b1b"/>
-          <polygon points="3,46 25,53 32,46" fill="#dcdcdc"/>
-          <polygon points="3,46 25,39 32,46" fill="#1b1b1b"/>
-        </g>
-        <circle cx="32" cy="46" r="2.4" fill="#111"/>
-      </g>
-    </svg>
+    ${axisSvg}
   </div>
 </body></html>`;
     printViaFrame(html);
