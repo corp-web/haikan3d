@@ -4079,16 +4079,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const mag = Math.max(Math.hypot(E.x, E.y), Math.hypot(S.x, S.y), 1e-6);
       const f = Rt / mag;
       const ex = E.x * f, ey = E.y * f, sx = S.x * f, sy = S.y * f, ux = U.x * f, uy = U.y * f;
-      const rf = 0.68;   // 円（リング）だけ小さく。指針(N/S)は従来どおり
-      // 地面リング（楕円・小さめ）
-      let pts = '';
-      for (let i = 0; i <= 48; i++) { const a = i / 48 * Math.PI * 2; pts += `${(C + (Math.cos(a) * ex + Math.sin(a) * sx) * rf).toFixed(1)},${(C + (Math.cos(a) * ey + Math.sin(a) * sy) * rf).toFixed(1)} `; }
+      const rf = 0.68;   // W-E線の長さ基準（円リングは廃止）
       const N = { x: C - sx, y: C - sy }, So = { x: C + sx, y: C + sy }, Ea = { x: C + ex, y: C + ey }, Wa = { x: C - ex, y: C - ey };
       const nlen = Math.hypot(sx, sy) || 1e-6, perpx = -sy / nlen, perpy = sx / nlen, ww = 3.4;
       const wL = { x: C + perpx * ww, y: C + perpy * ww }, wR = { x: C - perpx * ww, y: C - perpy * ww };
       const lab = (p, t) => `<text x="${(C + (p.x - C) * 1.22).toFixed(1)}" y="${(C + (p.y - C) * 1.22 + 3.2).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#333">${t}</text>`;
       let body = '';
-      body += `<polyline points="${pts.trim()}" fill="none" stroke="#8a8f99" stroke-width="0.9"/>`;
       body += `<line x1="${(C - ex * rf * 0.7).toFixed(1)}" y1="${(C - ey * rf * 0.7).toFixed(1)}" x2="${(C + ex * rf * 0.7).toFixed(1)}" y2="${(C + ey * rf * 0.7).toFixed(1)}" stroke="#8a8f99" stroke-width="0.9" stroke-linecap="round"/>`;
       body += `<polygon points="${So.x.toFixed(1)},${So.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/>`;
       body += `<polygon points="${N.x.toFixed(1)},${N.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/>`;
@@ -4096,7 +4092,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       body += lab(N, 'N');
       return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
     } catch (e) {
-      return `<svg class="north" viewBox="0 0 80 80"><ellipse cx="40" cy="42" rx="16" ry="8" fill="none" stroke="#8a8f99" stroke-width="0.9"/><line x1="29" y1="42" x2="51" y2="42" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,62 43.2,42 36.8,42" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/><polygon points="40,22 43.2,42 36.8,42" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#333">N</text></svg>`;
+      return `<svg class="north" viewBox="0 0 80 80"><line x1="29" y1="42" x2="51" y2="42" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,62 43.2,42 36.8,42" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/><polygon points="40,22 43.2,42 36.8,42" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#333">N</text></svg>`;
     }
   }
   function printSheet() {
@@ -4142,7 +4138,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .frame{position:absolute;inset:5mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
   .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
-  .panel{position:absolute;right:5mm;bottom:5mm;width:124mm;max-height:calc(100% - 11mm);background:#fff;border:0.2mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
+  .panel{position:absolute;right:5mm;bottom:5mm;width:124mm;max-height:calc(100% - 11mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
   .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;border-bottom:0.15mm solid #111;padding:1mm;letter-spacing:.5mm;}
   .panel .sc{overflow:hidden;}
   .panel table{width:100%;border-collapse:collapse;font-size:2.7mm;}
@@ -4158,7 +4154,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 </style></head><body>
   <div class="pg">
     <img src="${img}">
-    <div class="frame"></div>
     ${axisSvg}
     <div class="panel">
       <div class="hd">アイテムリスト</div>
@@ -4169,6 +4164,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       ${specCollapsed ? '' : `<div class="sec"><div class="t">図面仕様</div><table class="kv">${specHtml}</table></div>`}
       <div class="sec"><table class="kv">${infoHtml}</table></div>
     </div>
+    <div class="frame"></div>
   </div>
 </body></html>`;
     showPrintPreview(html);
