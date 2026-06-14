@@ -63,10 +63,40 @@ fill.position.set(-8, 4, -6); scene.add(fill);
 // ---- モデル空間（配管はここに入れる） ----
 const modelGroup = new THREE.Group();
 scene.add(modelGroup);
-const grid = new THREE.GridHelper(20, 40, 0x4a5a8a, 0x2a3a5c);
-grid.material.opacity = 0.6; grid.material.transparent = true;
-modelGroup.add(grid);
+let grid = null;
+function buildGrid(c1, c2) {
+  if (grid) { modelGroup.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
+  grid = new THREE.GridHelper(20, 40, c1, c2);
+  grid.material.opacity = 0.6; grid.material.transparent = true;
+  modelGroup.add(grid);
+}
+buildGrid(0x4a5a8a, 0x2a3a5c);
+// ---- 明暗テーマ（背景・グリッド・UI を一括切替） ----
+let lightMode = false;
+function setLightMode(on) {
+  lightMode = !!on;
+  const bg = lightMode ? 0xd2dbe8 : 0x141c33;   // 白モードは少し青みグレー＝白線も見やすく
+  scene.background = new THREE.Color(bg);
+  if (typeof renderer !== 'undefined' && renderer) renderer.setClearColor(bg, 1);
+  buildGrid(lightMode ? 0x8a96b4 : 0x4a5a8a, lightMode ? 0xb6c0d4 : 0x2a3a5c);
+  if (gizmo && gizmo.applyTheme) gizmo.applyTheme(lightMode);
+  if (window.__rebuildAllAnns) window.__rebuildAllAnns();   // 構築線・寸法線の合成方式を切替に反映（色を保つ）
+  document.body.classList.toggle('light', lightMode);
+  const b = document.getElementById('cmdTheme');
+  if (b) b.title = lightMode ? '背景をダークに戻す' : '背景をホワイトに切替';
+}
 // 座標軸は原点ではなく画面左下隅に小さく描く（axisGizmo・下部で構築/描画）
+
+// ---- アンドゥ／リドゥ：操作後に状態スナップショットを取る（capture最先頭で登録し、setTimeoutで操作完了後に実行）----
+['pointerup', 'keyup', 'input', 'change'].forEach(ev =>
+  window.addEventListener(ev, () => { if (window.__scheduleHistory) window.__scheduleHistory(); }, true));
+window.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;   // 入力欄はブラウザ標準のundoに任せる
+  const k = (e.key || '').toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); if (window.__undo) window.__undo(); }
+  else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); if (window.__redo) window.__redo(); }
+}, true);
 
 // ===================================================================
 //  ビューキューブ（画面右上の独立ギズモ・別シーン）
@@ -85,14 +115,20 @@ const gizmo = {};
   const globe = new THREE.Group();
   const cubeSize = 1.5;
 
+  // 明暗テーマの色（ダーク背景＝明るいキューブ／ホワイト背景＝濃いめのキューブ）
+  const GIZ_THEME = {
+    dark:  { g0: '#eef1f6', g1: '#d2d7e0', border: '#aab2c2', text: '#566072', edge: 0x9aa2b2, dir: '#cdd5e2' },
+    light: { g0: '#ccd4e2', g1: '#aab4c6', border: '#8b95aa', text: '#2a3344', edge: 0x7c8498, dir: '#46506a' },
+  };
+  let gizPal = GIZ_THEME.dark;
   function faceTexture(text) {
     const s = 256, cv = document.createElement('canvas'); cv.width = cv.height = s;
     const ctx = cv.getContext('2d');
     const g = ctx.createLinearGradient(0, 0, 0, s);
-    g.addColorStop(0, '#eef1f6'); g.addColorStop(1, '#d2d7e0');
+    g.addColorStop(0, gizPal.g0); g.addColorStop(1, gizPal.g1);
     ctx.fillStyle = g; ctx.fillRect(0, 0, s, s);
-    ctx.strokeStyle = '#aab2c2'; ctx.lineWidth = 6; ctx.strokeRect(3, 3, s - 6, s - 6);
-    ctx.fillStyle = '#566072';
+    ctx.strokeStyle = gizPal.border; ctx.lineWidth = 6; ctx.strokeRect(3, 3, s - 6, s - 6);
+    ctx.fillStyle = gizPal.text;
     ctx.font = '116px "Hiragino Kaku Gothic ProN","Meiryo","Segoe UI",sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(text, s / 2, s / 2 + 6);
@@ -100,19 +136,21 @@ const gizmo = {};
     tex.minFilter = THREE.LinearFilter; tex.anisotropy = 4;
     return tex;
   }
+  const FACE_TEXTS = ['右', '左', '上', '下', '前', '後'];
   const faceMat = t => new THREE.MeshStandardMaterial({ map: faceTexture(t), color: 0xffffff, roughness: 1.0 });
   const cube = new THREE.Mesh(
     new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize),
-    [faceMat('右'), faceMat('左'), faceMat('上'), faceMat('下'), faceMat('前'), faceMat('後')]
+    FACE_TEXTS.map(faceMat)
   );
   globe.add(cube);
   gizmo.cube = cube;
 
   const edges = new THREE.LineSegments(
     new THREE.EdgesGeometry(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize)),
-    new THREE.LineBasicMaterial({ color: 0x9aa2b2 })
+    new THREE.LineBasicMaterial({ color: gizPal.edge })
   );
   globe.add(edges);
+  const dirPlanes = [];   // 方位ラベル（北南東西）の再着色用
 
   function chevron() {
     const sh = new THREE.Shape();
@@ -142,18 +180,23 @@ const gizmo = {};
   compass.add(thinRing(ringInner - 0.04, ringInner));
   compass.add(thinRing(ringOuter - 0.05, ringOuter));
 
-  function dirPlane(text, rotZ) {
+  function dirTexture(text) {
     const s = 128, cv = document.createElement('canvas'); cv.width = cv.height = s;
     const ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, s, s);
-    ctx.fillStyle = '#cdd5e2';
+    ctx.fillStyle = gizPal.dir;
     ctx.font = 'bold 96px "Hiragino Kaku Gothic ProN","Meiryo","Segoe UI",sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(text, s / 2, s / 2 + 4);
     const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter; tex.anisotropy = 4;
+    return tex;
+  }
+  function dirPlane(text, rotZ) {
     const pl = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.72),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
-    pl.rotation.x = -Math.PI / 2; pl.rotation.z = rotZ; return pl;
+      new THREE.MeshBasicMaterial({ map: dirTexture(text), transparent: true, side: THREE.DoubleSide, depthWrite: false }));
+    pl.rotation.x = -Math.PI / 2; pl.rotation.z = rotZ;
+    dirPlanes.push({ mesh: pl, text });
+    return pl;
   }
   const RL = (ringInner + ringOuter) / 2;
   [{ t:'北', x:0, z:-RL, rz:0 }, { t:'南', x:0, z:RL, rz:Math.PI },
@@ -163,6 +206,13 @@ const gizmo = {};
   gScene.add(globe);
   gizmo.scene = gScene;
   gizmo.cam = gCam;
+  // 明暗テーマの適用（背景は透明＝3D背景に乗るので、キューブ自体の色を切替）
+  gizmo.applyTheme = (light) => {
+    gizPal = light ? GIZ_THEME.light : GIZ_THEME.dark;
+    FACE_TEXTS.forEach((t, i) => { const m = cube.material[i]; if (m.map) m.map.dispose(); m.map = faceTexture(t); m.needsUpdate = true; });
+    edges.material.color.setHex(gizPal.edge);
+    for (const d of dirPlanes) { if (d.mesh.material.map) d.mesh.material.map.dispose(); d.mesh.material.map = dirTexture(d.text); d.mesh.material.needsUpdate = true; }
+  };
 })();
 
 // ===================================================================
@@ -303,6 +353,54 @@ function rollView(sign) {
 document.getElementById('rollCCW').onclick = () => rollView(1);
 document.getElementById('rollCW').onclick  = () => rollView(-1);
 
+// ---- 尺度（平行投影での表示倍率）。CSS 96dpi 基準で 1モデルm→画面px を物理尺度に合わせる ----
+const PX_PER_M = 96 / 0.0254;   // CSS px / 物理m（96dpi）
+const SCALE_OPTS = [
+  ['1:1', 1], ['1:2', 0.5], ['1:4', 0.25], ['1:5', 0.2], ['1:8', 0.125], ['1:10', 0.1], ['1:16', 0.0625],
+  ['1:20', 0.05], ['1:30', 1 / 30], ['1:40', 0.025], ['1:50', 0.02], ['1:100', 0.01],
+  ['2:1', 2], ['4:1', 4], ['8:1', 8], ['10:1', 10], ['100:1', 100],
+];
+function setScale(f) {
+  if (!f || f <= 0 || tween) return;
+  if (!useOrtho) { useOrtho = true; controls.enabled = false; updateRollButtons(); }   // 尺度は平行投影で意味を持つ
+  const h = renderer.domElement.clientHeight || window.innerHeight;
+  const halfH = h / (2 * f * PX_PER_M);
+  const dist = halfH / Math.tan((camera.fov / 2) * Math.PI / 180);
+  const t = controls.target;
+  const dir = camera.position.clone().sub(t);
+  if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
+  dir.normalize();
+  camera.position.copy(t).addScaledVector(dir, dist);
+  camera.lookAt(t);
+  syncOrtho();
+}
+function currentScaleF() {
+  const dist = camera.position.distanceTo(controls.target);
+  const halfH = Math.tan((camera.fov / 2) * Math.PI / 180) * dist;
+  const h = renderer.domElement.clientHeight || window.innerHeight;
+  return halfH > 1e-9 ? (h / (2 * halfH)) / PX_PER_M : 0;
+}
+function fmtScaleF(f) {
+  if (!isFinite(f) || f <= 0) return '—';
+  if (f >= 1) { const n = Math.round(f * 10) / 10; return (Number.isInteger(n) ? n : n.toFixed(1)) + ':1'; }
+  return '1:' + Math.round(1 / f);
+}
+// 平行投影(尺度表示)中もホイールで拡縮できるように（OrbitControlsは停止中のため自前で）
+renderer.domElement.addEventListener('wheel', e => {
+  if (!useOrtho || tween) return;   // 透視投影は OrbitControls が処理
+  e.preventDefault();
+  zoomStep(e.deltaY > 0 ? 1.1 : 1 / 1.1);
+}, { passive: false });
+(function setupScale() {
+  const sel = document.getElementById('scaleSel');
+  if (!sel) return;
+  const ph = sel.options[0];   // 先頭の表示欄（value=""）に現在尺度を出す
+  for (const [label, f] of SCALE_OPTS) { const o = document.createElement('option'); o.value = String(f); o.textContent = label; sel.appendChild(o); }
+  sel.addEventListener('change', () => { const f = parseFloat(sel.value); if (f > 0) setScale(f); sel.value = ''; });
+  let last = '';
+  window.__updateScaleLabel = () => { const s = fmtScaleF(currentScaleF()); if (s !== last) { last = s; if (ph) ph.textContent = s; } };
+})();
+
 function updateRollButtons() {
   [document.getElementById('rollCCW'), document.getElementById('rollCW')].forEach(b => {
     if (b) b.classList.toggle('disabled', !useOrtho);
@@ -376,8 +474,7 @@ function renderGizmo() {
   renderer.setViewport(x, y, GIZMO_PX, GIZMO_PX);
   renderer.setScissor(x, y, GIZMO_PX, GIZMO_PX);
   renderer.setScissorTest(true);
-  renderer.setClearColor(0x141c33, 1);
-  renderer.clear(true, true, false);
+  renderer.clear(false, true, false);   // 色は消さず深度のみ＝背景は3Dシーンのまま（透明）。キューブが背景に乗る
   renderer.render(gizmo.scene, gizmo.cam);
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, w, h);
@@ -3333,6 +3430,7 @@ let prevT = performance.now();
   if (window.__updateDimTextFacing) window.__updateDimTextFacing();   // 寸法文字の裏表をカメラに合わせて補正
   if (window.__positionDimValueForm) window.__positionDimValueForm(); // 選択中の寸法線の「値」フォームを追従
   if (window.__posLineGuide) window.__posLineGuide();   // 線分描画中、三角形の脚にX/Z/Y入力欄を追従
+  if (window.__updateScaleLabel) window.__updateScaleLabel();   // 現在の表示尺度を右上に表示
   // パレットのサムネイル（静止表示）。非表示の部品は描画しない。
   for (const t of palThumbs) {
     if (t.tile && t.tile.style.display === 'none') continue;
@@ -3794,13 +3892,44 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (window.__bumpGroupSeq) window.__bumpGroupSeq(maxG);
     selectPart(null); refreshItemList();
   }
+  // ===== アンドゥ／リドゥ（状態スナップショット方式：serialize/applyData を流用） =====
+  let _hist = [], _hi = -1, _histSuppress = false, _histTimer = null;
+  function _snap() { try { return JSON.stringify(serialize()); } catch (e) { return null; } }
+  function updateUndoButtons() {
+    const u = document.getElementById('cmdUndo'), r = document.getElementById('cmdRedo');
+    if (u) u.classList.toggle('rb-dis', _hi <= 0);
+    if (r) r.classList.toggle('rb-dis', _hi >= _hist.length - 1);
+  }
+  function recordHistory() {
+    if (_histSuppress) return;
+    const s = _snap();
+    if (s == null) return;                        // まだ初期化途中などで取得不可なら見送る
+    if (_hi >= 0 && s === _hist[_hi]) return;     // 変化なしは記録しない
+    _hist = _hist.slice(0, _hi + 1);              // リドゥ側を切り捨て
+    _hist.push(s); _hi = _hist.length - 1;
+    if (_hist.length > 80) { _hist.shift(); _hi--; }   // 上限
+    updateUndoButtons();
+  }
+  function scheduleHistory() { if (_histTimer) clearTimeout(_histTimer); _histTimer = setTimeout(() => { _histTimer = null; recordHistory(); }, 140); }
+  function _applyHist(s) { _histSuppress = true; try { applyData(JSON.parse(s)); } finally { _histSuppress = false; } updateUndoButtons(); }
+  function undo() {
+    if (_histTimer) { clearTimeout(_histTimer); _histTimer = null; recordHistory(); }   // 保留中の変更を確定してから
+    if (_hi <= 0) return;
+    _hi--; _applyHist(_hist[_hi]);
+  }
+  function redo() { if (_hi >= _hist.length - 1) return; _hi++; _applyHist(_hist[_hi]); }
+  function resetHistory() { _hist = []; _hi = -1; recordHistory(); }
+  window.__scheduleHistory = scheduleHistory;
+  window.__recordHistory = recordHistory;
+  window.__undo = undo; window.__redo = redo; window.__resetHistory = resetHistory;
+  setTimeout(() => { try { recordHistory(); } catch (e) {} }, 0);   // 初期状態を基準として記録（初期化完了後に実行）
   function load() {
     const inp = document.createElement('input');
     inp.type = 'file'; inp.accept = '.json,application/json';
     inp.onchange = () => {
       const f = inp.files && inp.files[0]; if (!f) return;
       const r = new FileReader();
-      r.onload = () => { try { applyData(JSON.parse(r.result)); } catch (err) { alert('読込に失敗しました：' + err.message); } };
+      r.onload = () => { try { applyData(JSON.parse(r.result)); resetHistory(); } catch (err) { alert('読込に失敗しました：' + err.message); } };
       r.readAsText(f);
     };
     inp.click();
@@ -3815,57 +3944,195 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.render(scene, activeCam());
     return renderer.domElement.toDataURL('image/png');
   }
+  // 印刷用：白背景・グリッド非表示で撮る（図面らしい白地の線画にする）
+  function snapshotForPrint() {
+    const prevBg = scene.background;
+    const prevClear = renderer.getClearColor(new THREE.Color());
+    const prevAlpha = renderer.getClearAlpha();
+    const prevGrid = grid ? grid.visible : null;
+    scene.background = new THREE.Color(0xffffff);
+    renderer.setClearColor(0xffffff, 1);
+    if (grid) grid.visible = false;
+    renderer.setViewport(0, 0, renderer.domElement.clientWidth, renderer.domElement.clientHeight);
+    renderer.setScissorTest(false);
+    renderer.clear();
+    renderer.render(scene, activeCam());
+    const url = renderer.domElement.toDataURL('image/png');
+    scene.background = prevBg;
+    renderer.setClearColor(prevClear, prevAlpha);
+    if (grid) grid.visible = prevGrid;
+    renderer.clear();
+    renderer.render(scene, activeCam());
+    return url;
+  }
   function exportPng() {
     const url = snapshot();
     let nm = ($('dwgNo').value || '配管図').trim().replace(/[\\/:*?"<>|]/g, '_') || '配管図';
     const a = document.createElement('a'); a.href = url; a.download = nm + '.png'; a.click();
   }
-  function listRowsHtml() {
-    const trs = [...document.querySelectorAll('#ilBody tr')];
-    let html = '';
-    for (const tr of trs) {
-      if (tr.classList.contains('il-empty')) continue;
-      const tds = [...tr.children];
-      const get = i => { const td = tds[i]; if (!td) return ''; const inp = td.querySelector('input'); return inp ? inp.value : td.textContent; };
-      html += `<tr><td>${get(0)}</td><td>${get(1)}</td><td>${get(2)}</td><td>${get(3)}</td><td>${get(4)}</td><td style="text-align:right">${get(5)}</td><td>${get(6)}</td></tr>`;
+  // 配置部品を同仕様でまとめ、部品表の行データを返す（アイテムリストと同じ集計）
+  function partsRows() {
+    const byKey = new Map(), groups = [];
+    let seq = 0;
+    for (const p of placedParts) {
+      const c = partColumns(p);
+      const mat = (p.userData && p.userData.mat) || '';
+      const key = `${c.kind}|${c.type}|${c.size}|${c.cls}|${mat}`;
+      let g = byKey.get(key);
+      if (!g) { g = { c, mat, qty: 0, rank: partTypeRank(p), seq: seq++ }; byKey.set(key, g); groups.push(g); }
+      g.qty++;
     }
-    return html || '<tr><td colspan="7" style="text-align:center">（部品なし）</td></tr>';
+    groups.sort((a, b) => (a.rank - b.rank) || (a.seq - b.seq));
+    return groups.map((g, i) => ({ no: i + 1, kind: g.c.kind, type: g.c.type, size: g.c.size, cls: g.c.cls, mat: g.mat, qty: g.qty }));
   }
   function esc(s) { return String(s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+  const PRINT_COMPANY = '志基テクノ株式会社';
+  // 現在のビューでの「北（-Z）」が画面上どちらを向くか（度）。方位記号の回転に使う。
+  function northScreenAngleDeg() {
+    try {
+      const cam = activeCam(); cam.updateMatrixWorld();
+      const base = (typeof controls !== 'undefined' && controls.target) ? controls.target.clone() : new V3(0, 0, 0);
+      const o = base.clone().project(cam);
+      const n = base.clone().add(new V3(0, 0, -1)).project(cam);
+      const dx = n.x - o.x, dy = n.y - o.y;
+      if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return 0;
+      return Math.atan2(dx, dy) * 180 / Math.PI;   // SVG回転角（上向き基準・時計回り）
+    } catch (e) { return 0; }
+  }
   function printSheet() {
-    const img = snapshot();
-    const rows = listRowsHtml();
+    const img = snapshotForPrint();
+    const nAng = northScreenAngleDeg();
     const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
       name = esc($('dwgName').value), no = esc($('dwgNo').value);
+    // 区域記号（上下＝1〜8／左右＝A〜F）
+    const numCells = [1, 2, 3, 4, 5, 6, 7, 8].map(n => `<div>${n}</div>`).join('');
+    const letCells = ['A', 'B', 'C', 'D', 'E', 'F'].map(l => `<div>${l}</div>`).join('');
+    // 部品表（配置部品から自動集計）＝右側の縦帯。規格＝寸法・タイプ・クラスをまとめる
+    const rows = partsRows();
+    let prows = rows.map(r => {
+      const spec = [r.size, r.type, r.cls].filter(Boolean).join(' ');
+      return `<tr><td class="nc">${r.no}</td><td>${esc(r.kind)}</td><td class="spc">${esc(spec)}</td><td>${esc(r.mat) || '—'}</td><td class="qc">${r.qty}</td></tr>`;
+    }).join('');
+    if (!prows) prows = `<tr><td colspan="5" class="pe">（部品なし）</td></tr>`;
+    // 仕様条件表（値は次段で入力欄化。現状は空欄）
+    const specRows = [
+      ['法　規', 'クラス：'], ['設計温度', '℃'], ['常用温度', '℃'],
+      ['設計圧力', 'MPa'], ['常用圧力', 'MPa'], ['試験', '耐圧／気密'],
+      ['非破壊検査', 'R.T／P.T'], ['熱処理／洗浄', ''], ['塗装／保温', ''],
+    ].map(([k, v]) => `<tr><td class="sk">${k}</td><td class="sv">${v}</td></tr>`).join('');
+    // 押印欄
+    const apprCells = ['設計', '製図', '検図', '承認'].map(t =>
+      `<div class="cell"><div class="h">${t}</div><div class="b"></div></div>`).join('');
     const w = window.open('', '_blank');
     if (!w) { alert('ポップアップがブロックされました。印刷を許可してください。'); return; }
-    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name}</title>
+    w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
-  body { font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif; margin:14mm; color:#111; }
-  h1 { font-size:16px; margin:0 0 6px; }
-  .head { display:flex; justify-content:space-between; border-bottom:2px solid #333; padding-bottom:6px; margin-bottom:10px; }
-  .head .info div { font-size:12px; line-height:1.6; }
-  .head .info b { display:inline-block; width:78px; color:#555; }
-  img { width:100%; max-height:135mm; object-fit:contain; border:1px solid #bbb; }
-  table { width:100%; border-collapse:collapse; margin-top:10px; font-size:11px; }
-  th,td { border:1px solid #999; padding:3px 6px; }
-  th { background:#eef1f7; }
-  @media print { @page { size:A4 landscape; margin:10mm; } }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;background:#fff;}
+  .sheet{position:relative;width:408mm;height:285mm;margin:0 auto;background:#fff;}
+  .frame{position:absolute;inset:0;border:0.6mm solid #111;}
+  /* 区域記号 */
+  .zone{position:absolute;display:flex;font-size:3mm;color:#111;}
+  .zone.top{top:0;left:5mm;right:5mm;height:5mm;border-bottom:0.2mm solid #111;}
+  .zone.bottom{bottom:0;left:5mm;right:5mm;height:5mm;border-top:0.2mm solid #111;}
+  .zone.top>div,.zone.bottom>div{flex:1;display:flex;align-items:center;justify-content:center;border-left:0.2mm solid #111;}
+  .zone.top>div:first-child,.zone.bottom>div:first-child{border-left:none;}
+  .zone.left{top:5mm;bottom:5mm;left:0;width:5mm;flex-direction:column;border-right:0.2mm solid #111;}
+  .zone.right{top:5mm;bottom:5mm;right:0;width:5mm;flex-direction:column;border-left:0.2mm solid #111;}
+  .zone.left>div,.zone.right>div{flex:1;display:flex;align-items:center;justify-content:center;border-top:0.2mm solid #111;}
+  .zone.left>div:first-child,.zone.right>div:first-child{border-top:none;}
+  /* 内枠：左=図面+下帯／右=部品表の縦帯 */
+  .inner{position:absolute;inset:5mm;border:0.4mm solid #111;display:flex;flex-direction:row;}
+  .leftcol{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .draw{flex:1;position:relative;overflow:hidden;}
+  .draw img{width:100%;height:100%;object-fit:contain;}
+  .north{position:absolute;top:4mm;left:5mm;width:15mm;height:22mm;}
+  .north .pn{font-size:3.2mm;font-weight:700;}
+  /* 下帯（図面の下）：仕様条件表＋押印欄＋備考＋表題欄 */
+  .band{height:46mm;border-top:0.4mm solid #111;display:flex;}
+  .band>div{border-left:0.3mm solid #111;}
+  .band>div:first-child{border-left:none;}
+  .spec{width:58mm;}
+  .spec table{width:100%;height:100%;border-collapse:collapse;font-size:2.7mm;}
+  .spec td{border:0.2mm solid #111;padding:0.4mm 1.2mm;}
+  .spec .sk{background:#f1f1f1;white-space:nowrap;width:26mm;}
+  .appr{width:24mm;display:flex;flex-direction:column;}
+  .appr .cell{flex:1;display:flex;flex-direction:column;border-bottom:0.2mm solid #111;}
+  .appr .cell:last-child{border-bottom:none;}
+  .appr .cell .h{font-size:2.6mm;text-align:center;background:#f1f1f1;border-bottom:0.2mm solid #111;padding:0.3mm;}
+  .appr .cell .b{flex:1;}
+  .notes{flex:1;display:flex;flex-direction:column;min-width:0;}
+  .notes .ncap{font-size:2.6mm;background:#f1f1f1;border-bottom:0.2mm solid #111;padding:0.4mm 1.2mm;}
+  .notes .nbody{flex:1;}
+  .title{width:100mm;display:flex;flex-direction:column;font-size:2.9mm;}
+  .title>div{border-bottom:0.2mm solid #111;}
+  .title .trow{display:flex;}
+  .title .trow .k{width:18mm;background:#f1f1f1;padding:0.8mm 1.2mm;border-right:0.2mm solid #111;}
+  .title .trow .v{flex:1;padding:0.8mm 1.2mm;}
+  .title .co{flex:1;display:flex;align-items:center;justify-content:center;font-size:6mm;font-weight:700;letter-spacing:1.5mm;}
+  .title .tgrid{display:flex;border-bottom:none;}
+  .title .tgrid .g{flex:1;display:flex;flex-direction:column;border-right:0.2mm solid #111;}
+  .title .tgrid .g:last-child{border-right:none;flex:0 0 16mm;}
+  .title .tgrid .k2{background:#f1f1f1;text-align:center;font-size:2.5mm;border-bottom:0.2mm solid #111;padding:0.3mm;}
+  .title .tgrid .v2{flex:1;text-align:center;padding:0.8mm;}
+  /* 部品表＝右側の縦帯 */
+  .rightbom{width:82mm;border-left:0.4mm solid #111;display:flex;flex-direction:column;}
+  .rightbom .cap{font-size:2.9mm;font-weight:700;text-align:center;background:#f1f1f1;border-bottom:0.3mm solid #111;padding:0.6mm;}
+  .rightbom .sc{flex:1;overflow:hidden;}
+  .rightbom table{width:100%;border-collapse:collapse;font-size:2.5mm;table-layout:fixed;}
+  .rightbom th,.rightbom td{border:0.2mm solid #111;padding:0.4mm 1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rightbom th{background:#f1f1f1;}
+  .rightbom .nc{width:6mm;text-align:right;color:#555;}
+  .rightbom .qc{width:9mm;text-align:right;}
+  .rightbom td.spc{font-size:2.3mm;}
+  .rightbom .pe{text-align:center;color:#888;padding:4mm;}
+  @media print{@page{size:A3 landscape;margin:6mm;}.sheet{width:100%!important;height:100%!important;margin:0;}}
 </style></head><body>
-  <div class="head">
-    <div><h1>配管図 ${no ? '図番 ' + no : ''}</h1></div>
-    <div class="info">
-      <div><b>名称</b>${name || '—'}</div>
-      <div><b>場所</b>${place || '—'}</div>
-      <div><b>作成年月日</b>${date || '—'}</div>
+  <div class="sheet"><div class="frame">
+    <div class="zone top">${numCells}</div>
+    <div class="zone bottom">${numCells}</div>
+    <div class="zone left">${letCells}</div>
+    <div class="zone right">${letCells}</div>
+    <div class="inner">
+      <div class="leftcol">
+        <div class="draw">
+          <img src="${img}">
+          <svg class="north" viewBox="0 0 44 60">
+            <text class="pn" x="22" y="9" text-anchor="middle">P.N</text>
+            <circle cx="22" cy="35" r="13" fill="none" stroke="#111" stroke-width="1.1"/>
+            <g transform="rotate(${nAng.toFixed(1)} 22 35)">
+              <polygon points="22,20 28,48 22,40 16,48" fill="#111"/>
+              <polygon points="22,20 22,40 16,48" fill="#fff" stroke="#111" stroke-width="0.5"/>
+            </g>
+          </svg>
+        </div>
+        <div class="band">
+          <div class="spec"><table>${specRows}</table></div>
+          <div class="appr">${apprCells}</div>
+          <div class="notes"><div class="ncap">備　考</div><div class="nbody"></div></div>
+          <div class="title">
+            <div class="trow"><div class="k">客先名</div><div class="v">${place || ''}</div></div>
+            <div class="trow"><div class="k">図面名</div><div class="v">${name || ''}</div></div>
+            <div class="co">${PRINT_COMPANY}</div>
+            <div class="tgrid">
+              <div class="g"><div class="k2">図面番号</div><div class="v2">${no || ''}</div></div>
+              <div class="g"><div class="k2">年月日</div><div class="v2">${date || ''}</div></div>
+              <div class="g"><div class="k2">訂正</div><div class="v2">△0</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="rightbom">
+        <div class="cap">部　品　表</div>
+        <div class="sc"><table>
+          <thead><tr><th class="nc">No</th><th>品名</th><th>規格</th><th>材質</th><th class="qc">数量</th></tr></thead>
+          <tbody>${prows}</tbody>
+        </table></div>
+      </div>
     </div>
-  </div>
-  <img src="${img}">
-  <table>
-    <thead><tr><th>#</th><th>種別</th><th>タイプ</th><th>サイズ</th><th>クラス</th><th>数量</th><th>材質</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>
-  <script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script>
+  </div></div>
+  <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
 </body></html>`);
     w.document.close();
   }
@@ -3905,6 +4172,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   //   parallel=平行／angle=角度／radius=半径／diameter=直径／leader=引出。操作の基本仕様は全種別とも平行と同じ。
   let dimKind = 'parallel';
   const DIM_KIND_LABEL = { parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出' };
+  // 文字の既定書式（リボン「文字」右クリックで設定）。色＝シアン／飾り＝枠なし
+  const textOpts = { color: 0x00ffff, deco: 'none' };   // deco: none/box/underline/double
   function styleFor(type) {
     const s = toolStyle[type] || defaultStyle(type);
     const out = { color: s.color, ltype: s.ltype, width: s.width };
@@ -3957,7 +4226,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 色・線種の選択は無し（style は無視）。長尺だが円柱3本だけなので軽い。
   function laserTube(A, B, radius, color, opacity) {
     const len = A.distanceTo(B);
-    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, blending: THREE.AdditiveBlending });
+    // 白モードは加算合成だと色が白く飛ぶので通常合成＋不透明寄りにして本来の色を保つ（構築線=緑/寸法線=黄のまま）
+    const light = (typeof lightMode !== 'undefined') && lightMode;
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: light ? Math.min(1, opacity * 1.8) : opacity, depthTest: false, blending: light ? THREE.NormalBlending : THREE.AdditiveBlending });
     const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len, 8, 1, true), mat);
     m.position.copy(A).add(B).multiplyScalar(0.5);
     m.quaternion.setFromUnitVectors(new V3(0, 1, 0), B.clone().sub(A).normalize());
@@ -4000,17 +4271,27 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 寸法文字：枠・背景なしの赤文字スプライト。常にカメラ正対なので裏表・潰れが起きない。
   // 向きと位置は毎フレーム __updateDimTextFacing が画面投影に合わせて調整する
   // （画面上で寸法線と平行に回転し、画面で見て線の「上側」に出る）。
-  function dimTextSprite(text, A2, B2, vUp) {
-    const fs = 44, pad = 6;
+  function dimTextSprite(text, A2, B2, vUp, opt) {
+    let col = (opt && opt.color != null) ? opt.color : DIM_TEXT_CSS;   // 文字色（既定＝寸法の赤）
+    if (typeof col === 'number') col = '#' + ('000000' + (col >>> 0).toString(16)).slice(-6);
+    const deco = (opt && opt.deco) || 'none';                    // none / box / underline / double
+    const fs = 44, pad = (deco === 'box') ? 9 : 6;
+    const extra = deco === 'double' ? 9 : (deco === 'underline' ? 5 : 0);   // 下線ぶんの下余白
     const meas = document.createElement('canvas').getContext('2d');
     meas.font = `bold ${fs}px Meiryo, sans-serif`;
     const tw = Math.ceil(meas.measureText(text).width);
     const cv = document.createElement('canvas');
-    cv.width = tw + pad * 2; cv.height = fs + pad * 2;
+    cv.width = tw + pad * 2; cv.height = fs + pad * 2 + extra;
     const c = cv.getContext('2d');
     c.font = `bold ${fs}px Meiryo, sans-serif`;
-    c.fillStyle = DIM_TEXT_CSS; c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.fillText(text, cv.width / 2, cv.height / 2 + 2);
+    if (deco === 'box') { c.strokeStyle = col; c.lineWidth = 3; c.strokeRect(1.5, 1.5, cv.width - 3, cv.height - 3); }
+    c.fillStyle = col; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(text, cv.width / 2, pad + fs / 2 + 2);
+    if (deco === 'underline' || deco === 'double') {
+      const yb = pad + fs + 2; c.strokeStyle = col; c.lineWidth = 2.5;
+      c.beginPath(); c.moveTo(pad, yb); c.lineTo(cv.width - pad, yb); c.stroke();
+      if (deco === 'double') { c.beginPath(); c.moveTo(pad, yb + 5); c.lineTo(cv.width - pad, yb + 5); c.stroke(); }
+    }
     const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter;
     const s = 0.0011;
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
@@ -4026,9 +4307,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: (n.x * 0.5 + 0.5) * rect.width, y: (-n.y * 0.5 + 0.5) * rect.height }; };
     for (const rec of annStore) {
       if (rec.type !== 'dim') continue;
+      const isText = rec.style && rec.style.dimKind === 'text';
       rec.obj.traverse(o => {
         const dt = o.userData.dimText;
         if (!dt || !o.material) return;
+        if (isText) {                                        // 文字：配置点に置き、style.textRot で画面内回転（正立は0°）
+          o.material.rotation = (rec.style.textRot || 0) * Math.PI / 180;
+          const pm = scr(dt.a), pu = scr(dt.a.clone().addScaledVector(dt.vUp, 0.01));
+          const s = (pu.y <= pm.y) ? 1 : -1;
+          o.position.copy(dt.a).addScaledVector(dt.vUp, s * (dt.h / 2 + 0.004));
+          return;
+        }
         const pa = scr(dt.a), pb = scr(dt.b);
         let ang = Math.atan2(-(pb.y - pa.y), pb.x - pa.x);   // 画面上の寸法線の向き
         if (ang > Math.PI / 2) ang -= Math.PI;               // 上下逆さにならない範囲（±90°）へ折返し
@@ -4145,8 +4434,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         return g;
       };
       if (isText) {
-        // 文字：a=配置点。線は引かず、点aに常に正立した文字だけを置く（空なら何も描かない）。
-        if (shown !== '') grp.add(dimTextSprite(shown, a, a.clone(), new V3(0, 1, 0)));
+        // 文字：a=配置点。線は引かず、点aに常に正立した文字だけを置く（空なら何も描かない）。色・飾りはstyle。
+        if (shown !== '') grp.add(dimTextSprite(shown, a, a.clone(), new V3(0, 1, 0), { color: style.textColor, deco: style.textDeco }));
       } else if (isLeader) {
         // 引出線：a=矢印先端（指す点）／b=肘(knee)。bから水平に棚（横線）を自動で伸ばし、その上に注記文字を置く。
         grp.add(glowSeg(a, b));            // 斜めの引出線
@@ -4257,7 +4546,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return { A2: a.clone().add(dv).addScaledVector(u, k), B2: b.clone().add(dv).addScaledVector(u, k) };
   }
   function addAnnotation(type, a, b, style) {
-    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, rx: style.rx, rz: style.rz, quat: style.quat } : styleFor(type);
+    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
@@ -4786,6 +5075,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     annGroup.add(rec.obj);
     if (rec.type === 'xline') updateXlinePts();   // 構築線が動いたら交点を引き直す
   }
+  window.__rebuildAllAnns = () => { for (const r of annStore) rebuildAnn(r); refreshAnnHi(); };   // テーマ切替で合成方式を反映
   function clearDrawTemp() {    // 描画途中の状態を全消去（線は残す）
     drawState.first = null; drawState.cur = null; drawState.vert = false;
     drawState.locked = false; drawState.editRec = null; drawState.snapped = false;
@@ -4974,7 +5264,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (drawState.mode === 'text') {                          // 文字：点をクリックして配置→そのまま入力
       const r = pickFirstPoint(e.clientX, e.clientY);
       if (r.p) {
-        const st = Object.assign({}, styleFor('dim'), { dimKind: 'text' });
+        const st = Object.assign({}, styleFor('dim'), { dimKind: 'text', textColor: textOpts.color, textDeco: textOpts.deco });
         addAnnotation('dim', r.p.clone(), r.p.clone(), st);
         const rec = annStore[annStore.length - 1];
         cancelDraw();
@@ -5248,8 +5538,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function paintAnn(rec, on, color) {
     const fallback = rec.style ? rec.style.color : 0xffffff;
     const onCol = (color != null) ? color : SEL_COLOR;
+    const isTextAnn = rec.style && rec.style.dimKind === 'text';
     rec.obj.traverse(o => {
-      if (o.type === 'Sprite') return;
+      if (o.type === 'Sprite') {
+        if (isTextAnn && o.material && o.material.color) o.material.color.setHex(on ? onCol : 0xffffff);   // 文字注釈は選択時に着色して選択を可視化
+        return;
+      }
       if (!o.material || !o.material.color) return;
       // on＝指定色（既定は青の選択発光）。解除時は各メッシュ固有の色（レーザーの芯/暈）へ、無ければ線色へ戻す
       o.material.color.setHex(on ? onCol : (o.userData.baseColor != null ? o.userData.baseColor : fallback));
@@ -5296,6 +5590,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__annSelGroupIds = () => { const s = new Set(); for (const r of selAnns) if (r.groupId != null) s.add(r.groupId); return [...s]; };
   window.__annClearGroupIds = (gidSet) => { for (const r of annStore) if (r.groupId != null && gidSet.has(r.groupId)) r.groupId = null; };
   window.__annAddGroupToSel = (gid) => { let add = false; for (const r of annStore) if (r.groupId === gid && !selAnns.has(r)) { selAnns.add(r); add = true; } if (add) { refreshAnnHi(); refreshHandles(); } };
+  // 単独選択中の文字注釈（シーン右クリックで書式メニューを出す判定用）
+  window.__selSingleTextRec = () => (selAnns.size === 1 && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimKind === 'text') ? lineSel : null;
+  // 文字書式：選択中の文字注釈に色・飾りを適用（リボン文字右クリックメニューから）
+  window.__applyTextFmtToSel = (color, deco) => {
+    let any = false;
+    for (const r of selAnns) if (r.style && r.style.dimKind === 'text') { r.style.textColor = color; r.style.textDeco = deco; rebuildAnn(r); any = true; }
+    if (any) refreshAnnHi();
+  };
   window.__annDeselect = () => deselectLine();   // 構築線のEL→角度連鎖の「閉じ」用
   window.__annSelectRec = (rec) => { if (annStore.includes(rec)) selectLine(rec); };   // 寸法確定後に選択して「値」フォームを出す用
   window.__annDeleteRec = (rec) => {              // 特定の注釈を1件削除（スピナー中のDelete用）
@@ -5367,6 +5669,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   window.__annRotate = (shift) => {
     if (!selAnns.size) return;
+    // 文字（単独選択）：右クリック＝画面内で45°回転（Shiftで逆回り）
+    if (selAnns.size === 1 && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimKind === 'text') {
+      lineSel.style.textRot = (((lineSel.style.textRot || 0) + (shift ? -45 : 45)) % 360 + 360) % 360;
+      refreshAnnHi();
+      return;
+    }
     let pivot = dimRotPivot() || gripPt() || (lineSel ? lineSel.a : null);
     if (!pivot) { for (const r of selAnns) { pivot = r.a; break; } }
     if (!pivot) return;
@@ -5410,6 +5718,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let _rotSpin = null;
   window.__annRotateSpinStart = (shift) => {
     if (!selAnns.size) return false;
+    if (selAnns.size === 1 && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimKind === 'text') {
+      _rotSpin = { textRec: lineSel, startRot: lineSel.style.textRot || 0, pivot: lineSel.a.clone() };   // 文字：画面内回転
+      return true;
+    }
     let pivot = dimRotPivot() || gripPt() || (lineSel ? lineSel.a : null);
     if (!pivot) { for (const r of selAnns) { pivot = r.a; break; } }
     if (!pivot) return false;
@@ -5427,6 +5739,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   window.__annRotateSpinApply = (deg) => {
     if (!_rotSpin) return;
+    if (_rotSpin.textRec) { _rotSpin.textRec.style.textRot = (((_rotSpin.startRot + deg) % 360) + 360) % 360; return; }   // 文字：画面内角度
     const q = new THREE.Quaternion().setFromAxisAngle(_rotSpin.axis, deg * Math.PI / 180);
     for (const s of _rotSpin.snap) {
       const va = s.a.clone().sub(_rotSpin.pivot).applyQuaternion(q); s.r.a.copy(_rotSpin.pivot).add(va);
@@ -5448,6 +5761,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__annRotateSpinEnd = () => { _rotSpin = null; };
   window.__annRotateSpinCancel = () => {
     if (!_rotSpin) return;
+    if (_rotSpin.textRec) { _rotSpin.textRec.style.textRot = _rotSpin.startRot; _rotSpin = null; return; }
     for (const s of _rotSpin.snap) { s.r.a.copy(s.a); s.r.b.copy(s.b); if (s.r.type === 'circle' && s.quat) s.r.style.quat = { x: s.quat.x, y: s.quat.y, z: s.quat.z, w: s.quat.w }; if (s.ap) s.r.style.angP2 = s.ap.slice(); rebuildAnn(s.r); }
     _rotSpin = null; refreshAnnHi(); refreshHandles();
   };
@@ -5978,6 +6292,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 寸法の値（赤文字）をクリック＝その寸法線を選択して「値」入力を開く（文字の編集）
     {
       const recT = pickDimTextAt(e.clientX, e.clientY);
+      if (recT && recT.style && recT.style.dimKind === 'text') {
+        // 文字：シングルクリック＝選択（移動・削除）／ダブルクリック＝編集フォーム
+        const isDbl = (e.timeStamp - _lnLastT < 350) && Math.hypot(e.clientX - _lnLastX, e.clientY - _lnLastY) < 6 && _lnLastRec === recT;
+        _lnLastT = e.timeStamp; _lnLastX = e.clientX; _lnLastY = e.clientY; _lnLastRec = recT;
+        if (!selAnns.has(recT)) selectLine(recT);
+        if (isDbl) { if (window.__openDimValueForm) window.__openDimValueForm(true); if (window.__focusDimValueInput) window.__focusDimValueInput(); }
+        else {                                            // シングル＝ドラッグで移動できるよう sel を仕込む
+          const origin = recT.a.clone();
+          lineDrag = { mode: 'sel', free: false, origin, planeY: origin.y, gRec: recT, gEnd: 0, nearEnd: false,
+                       downX: e.clientX, downY: e.clientY, moved: false,
+                       annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: null })),
+                       partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
+        }
+        e.stopImmediatePropagation(); return;
+      }
       if (recT) {
         selectLine(recT);
         if (window.__openDimValueForm) window.__openDimValueForm(true);   // 値クリック＝編集フォームを開く（編集）
@@ -6179,10 +6508,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdCircle').onclick = () => setDrawMode('circle');
   $('cmdDim').onclick = () => setDrawMode('dim');
   $('cmdText').onclick = () => setDrawMode('text');
+  $('cmdTheme').onclick = () => setLightMode(!lightMode);
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
   $('cmdGroup').onclick = groupSelection;
   $('cmdUngroup').onclick = ungroupSelection;
+  $('cmdUndo').onclick = () => { if (window.__undo) window.__undo(); };
+  $('cmdRedo').onclick = () => { if (window.__redo) window.__redo(); };
   // 削除・ホームのリボンボタンは廃止（2026-06-13 社長指示）。削除＝Deleteキー、ホーム＝右上の家アイコン
   const zoomBtn = document.getElementById('zoomBtn');   // 範囲ズームは右上ホームの真下へ移設
   if (zoomBtn) zoomBtn.onclick = zoomExtents;
@@ -6223,7 +6555,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   function openToolFmtMenu(type, ax, atop) {
     fmtToolType = type;
-    if (drawState.mode !== type) setDrawMode(type);           // 設定対象のツールを起動（閉じたらすぐ描ける）
+    const sel = [...selAnns].filter(r => r.type === type);    // 選択中の同種オブジェクト（線分/円）
+    if (sel.length) {                                         // 選択中＝ツールを起動せず（選択維持）、その書式をメニューに反映
+      const s = sel[0].style; const st = toolStyle[type];
+      if (st && s) { if (s.ltype) st.ltype = s.ltype; if (s.color != null) st.color = s.color; }
+    } else if (drawState.mode !== type) setDrawMode(type);    // 選択が無い時だけツール起動（閉じたらすぐ描ける）
     fmtMenu.classList.toggle('is-xline', type === 'xline');   // 構築線は太さ非対応
     const ttl = fmtMenu.querySelector('.fm-ttl');
     if (ttl) ttl.textContent = (type === 'dim' ? '寸法線' : type === 'xline' ? '構築線' : type === 'circle' ? '円' : '線分') + 'の既定書式';
@@ -6278,16 +6614,62 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   });
   updateDimBtnTitle();
 
+  // ---- 文字の書式メニュー（リボン「文字」右クリック：色＋飾り） ----
+  const TEXT_COLORS = [['シアン', 0x00ffff], ['白', 0xffffff], ['黒', 0x000000], ['赤', 0xff4040]];
+  const TEXT_DECOS = [['none', '枠なし'], ['box', '枠あり'], ['underline', '下線'], ['double', '二重下線']];
+  const textMenu = document.createElement('div');
+  textMenu.id = 'textMenu';
+  textMenu.innerHTML = '<div class="dk-ttl">文字の色</div><div class="tm-cols">' +
+    TEXT_COLORS.map(([n, c]) => `<button class="tm-sw" data-color="${c}" title="${n}" style="background:${hexCss(c)}"></button>`).join('') + '</div>' +
+    '<div class="dk-ttl" style="margin-top:8px">飾り</div>' +
+    TEXT_DECOS.map(([k, n]) => `<button class="dk-bt" data-deco="${k}">${n}</button>`).join('');
+  document.body.appendChild(textMenu);
+  function markTextActive() {
+    textMenu.querySelectorAll('[data-color]').forEach(b => b.classList.toggle('on', Number(b.dataset.color) === textOpts.color));
+    textMenu.querySelectorAll('[data-deco]').forEach(b => b.classList.toggle('on', b.dataset.deco === textOpts.deco));
+  }
+  function closeTextMenu() { textMenu.style.display = 'none'; }
+  function openTextMenu(ax, atop, keepSel) {
+    const tsel = (selAnns.size === 1 && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimKind === 'text') ? lineSel : null;
+    if (tsel) { if (tsel.style.textColor != null) textOpts.color = tsel.style.textColor; textOpts.deco = tsel.style.textDeco || 'none'; }   // 選択中の文字の現在書式を表示
+    if (!keepSel && !tsel && drawState.mode !== 'text') setDrawMode('text');   // 選択が無い時だけ文字ツール起動（選択中は維持して変更）
+    markTextActive();
+    textMenu.style.display = 'block';
+    const mw = textMenu.offsetWidth, mh = textMenu.offsetHeight;
+    let px = ax; if (px + mw > window.innerWidth - 6) px = window.innerWidth - mw - 6;
+    let py = atop - mh - 6; if (py < 6) py = atop + 30;
+    textMenu.style.left = Math.max(6, px) + 'px';
+    textMenu.style.top = Math.max(6, py) + 'px';
+  }
+  // 配置済み文字の再選択→右クリックで開く（選択維持・現在の色/飾りを表示し、変更は選択中の文字へ反映）
+  window.__openTextFmtMenu = (x, y, rec) => {
+    if (rec && rec.style) { if (rec.style.textColor != null) textOpts.color = rec.style.textColor; textOpts.deco = rec.style.textDeco || 'none'; }
+    openTextMenu(x, y, true);
+  };
+  textMenu.addEventListener('click', e => {
+    const cs = e.target.closest('[data-color]'); const ds = e.target.closest('[data-deco]');
+    if (cs) textOpts.color = Number(cs.dataset.color);
+    else if (ds) textOpts.deco = ds.dataset.deco;
+    else return;
+    markTextActive();
+    if (window.__applyTextFmtToSel) window.__applyTextFmtToSel(textOpts.color, textOpts.deco);   // 選択中の文字にも反映
+  });
+
   function maybeCloseFmtMenu() {
     let closed = false;
     if (fmtMenu.style.display === 'block') { closeFmtMenu(); closed = true; }
     if (dimKindMenu.style.display === 'block') { closeDimKindMenu(); closed = true; }
+    if (textMenu.style.display === 'block') { closeTextMenu(); closed = true; }
     return closed;
   }
   function applyFmt(act, val) {
     const st = toolStyle[fmtToolType]; if (!st) return;
     if (act === 'ltype') { st.ltype = val; st.color = ltypeColor(val); st.width = 0.0006; }   // 色は線種で決定・太さは極細固定
     markFmtActive();
+    // 選択中の同種オブジェクト（線分/円）にも反映＝再選択して書式変更
+    let any = false;
+    for (const r of selAnns) if (r.type === fmtToolType) { r.style.ltype = st.ltype; r.style.color = st.color; r.style.width = st.width; rebuildAnn(r); any = true; }
+    if (any) refreshAnnHi();
   }
   fmtMenu.addEventListener('click', e => {
     const el = e.target.closest('[data-act]'); if (!el) return;
@@ -6323,19 +6705,32 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       openDimKindMenu(r.left, r.top);
     });
   }
+  // リボンの文字アイコンを右クリック → 文字の書式メニュー（色・飾り）
+  {
+    const b = $('cmdText');
+    if (b) b.addEventListener('contextmenu', e => {
+      e.preventDefault(); e.stopPropagation();
+      const r = b.getBoundingClientRect();
+      closeFmtMenu(); closeDimKindMenu();
+      openTextMenu(r.left, r.top);
+    });
+  }
   // メニュー外クリック / Esc / ホイールで閉じる
   window.addEventListener('pointerdown', e => {
     if (fmtMenu.style.display === 'block' && !fmtMenu.contains(e.target)) closeFmtMenu();
     if (dimKindMenu.style.display === 'block' && !dimKindMenu.contains(e.target)) closeDimKindMenu();
+    if (textMenu.style.display === 'block' && !textMenu.contains(e.target)) closeTextMenu();
   }, true);
   window.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
     if (fmtMenu.style.display === 'block') closeFmtMenu();
     if (dimKindMenu.style.display === 'block') closeDimKindMenu();
+    if (textMenu.style.display === 'block') closeTextMenu();
   });
   window.addEventListener('wheel', () => {
     if (fmtMenu.style.display === 'block') closeFmtMenu();
     if (dimKindMenu.style.display === 'block') closeDimKindMenu();
+    if (textMenu.style.display === 'block') closeTextMenu();
   }, { passive: true });
 })();
 
