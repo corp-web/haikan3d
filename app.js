@@ -3822,10 +3822,27 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
 
   // ================= ファイル：保存 / 開く =================
+  // 図面仕様・押印の入力欄（id→保存キー）。3D空間で入力し、保存・印刷に反映する。
+  const DWG_SPEC_FIELDS = [
+    ['dwgClass', 'cls'], ['dwgTempD', 'tempD'], ['dwgTempN', 'tempN'],
+    ['dwgPresD', 'presD'], ['dwgPresN', 'presN'], ['dwgTestP', 'testP'], ['dwgTestA', 'testA'],
+    ['dwgRT', 'rt'], ['dwgPT', 'pt'], ['dwgHeat', 'heat'], ['dwgWash', 'wash'],
+    ['dwgPaint', 'paint'], ['dwgInsul', 'insul'],
+    ['dwgDesign', 'design'], ['dwgDraw', 'draw'], ['dwgCheck', 'check'], ['dwgApprove', 'approve'],
+  ];
+  function gatherSpec() {
+    const o = {};
+    for (const [id, k] of DWG_SPEC_FIELDS) { const el = $(id); o[k] = el ? el.value : ''; }
+    return o;
+  }
+  function applySpec(s) {
+    s = s || {};
+    for (const [id, k] of DWG_SPEC_FIELDS) { const el = $(id); if (el) el.value = s[k] || ''; }
+  }
   function serialize() {
     return {
       app: '配管3D', version: 1,
-      drawing: { date: $('dwgDate').value, place: $('dwgPlace').value, name: $('dwgName').value, no: $('dwgNo').value },
+      drawing: { date: $('dwgDate').value, place: $('dwgPlace').value, name: $('dwgName').value, no: $('dwgNo').value, spec: gatherSpec() },
       parts: placedParts.map(p => ({
         partType: p.userData.partType,
         spec: specOf(p.userData),
@@ -3883,6 +3900,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const d = data.drawing || {};
     $('dwgDate').value = d.date || ''; $('dwgPlace').value = d.place || '';
     $('dwgName').value = d.name || ''; $('dwgNo').value = d.no || '';
+    applySpec(d.spec);
     if (Array.isArray(data.annotations)) {
       for (const a of data.annotations) { addAnnotation(a.type, new V3().fromArray(a.a), new V3().fromArray(a.b), a.style); if (a.groupId != null) annStore[annStore.length - 1].groupId = a.groupId; }
     }
@@ -4038,73 +4056,143 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const nAng = northScreenAngleDeg();
     const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
       name = esc($('dwgName').value), no = esc($('dwgNo').value);
-    const bg = (typeof window !== 'undefined' && window.__HAIKAN_FRAME_BG) || '';
-    // 部品表（配置部品から自動集計）＝右側の縦帯。規格＝寸法・タイプ・クラスをまとめる
+    const scale = (typeof fmtScaleF === 'function' && typeof currentScaleF === 'function') ? esc(fmtScaleF(currentScaleF())) : '';
+    // 区域記号（上下＝1〜8／左右＝A〜F）
+    const numCells = [1, 2, 3, 4, 5, 6, 7, 8].map(n => `<div>${n}</div>`).join('');
+    const letCells = ['A', 'B', 'C', 'D', 'E', 'F'].map(l => `<div>${l}</div>`).join('');
+    // 部品表（配置部品から自動集計）。規格＝寸法・タイプ・クラスをまとめる
     const rows = partsRows();
     let prows = rows.map(r => {
       const spec = [r.size, r.type, r.cls].filter(Boolean).join(' ');
       return `<tr><td class="nc">${r.no}</td><td>${esc(r.kind)}</td><td class="spc">${esc(spec)}</td><td>${esc(r.mat) || '—'}</td><td class="qc">${r.qty}</td></tr>`;
     }).join('');
     if (!prows) prows = `<tr><td colspan="5" class="pe">（部品なし）</td></tr>`;
+    // 仕様条件表・押印欄（3D空間の入力欄の値を流し込む）
+    const sp = gatherSpec();
+    const sv = k => esc(sp[k] || '');
+    const specRows =
+      `<tr><td class="sk">法　規</td><td class="sl">クラス</td><td class="sv" colspan="3">${sv('cls')}</td></tr>` +
+      `<tr><td class="sk">温度℃</td><td class="sl">設計</td><td class="sv">${sv('tempD')}</td><td class="sl">常用</td><td class="sv">${sv('tempN')}</td></tr>` +
+      `<tr><td class="sk">圧力MPa</td><td class="sl">設計</td><td class="sv">${sv('presD')}</td><td class="sl">常用</td><td class="sv">${sv('presN')}</td></tr>` +
+      `<tr><td class="sk">試験MPa</td><td class="sl">耐圧</td><td class="sv">${sv('testP')}</td><td class="sl">気密</td><td class="sv">${sv('testA')}</td></tr>` +
+      `<tr><td class="sk">非破壊</td><td class="sl">R.T</td><td class="sv">${sv('rt')}</td><td class="sl">P.T</td><td class="sv">${sv('pt')}</td></tr>` +
+      `<tr><td class="sk">熱処理</td><td class="sv" colspan="4">${sv('heat')}</td></tr>` +
+      `<tr><td class="sk">洗　浄</td><td class="sv" colspan="4">${sv('wash')}</td></tr>` +
+      `<tr><td class="sk">塗　装</td><td class="sv" colspan="4">${sv('paint')}</td></tr>` +
+      `<tr><td class="sk">保　温</td><td class="sv" colspan="4">${sv('insul')}</td></tr>`;
+    const apprCells = [['設計', 'design'], ['製図', 'draw'], ['検図', 'check'], ['承認', 'approve']].map(([t, k]) =>
+      `<div class="c"><div class="h">${t}</div><div class="b">${sv(k)}</div></div>`).join('');
     const w = window.open('', '_blank');
     if (!w) { alert('ポップアップがブロックされました。印刷を許可してください。'); return; }
-    // 社長の実物の空枠(枠１.pdf)をA3横の背景に固定し、その上に図・部品表・表題の値を重ねる。
-    // 座標(mm)は枠１を実測：描画領域 x12〜407.8 / y10.5〜269.9、表題欄の各セル位置など。
+    // ===== A3横の正式な配管図枠。ベクター(HTML/CSS)で白紙から構築（借り物の枠は使わない） =====
     w.document.write(`<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
   html,body{height:100%;background:#fff;}
-  body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;}
+  body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .sheet{position:relative;width:420mm;height:297mm;margin:0 auto;background:#fff;overflow:hidden;}
-  .sheet>.bg{position:absolute;inset:0;width:100%;height:100%;}
-  .ov{position:absolute;}
-  /* 図面領域（左の大部分）に3D線画を貼る */
-  .draw3d{left:12mm;top:10.5mm;width:310mm;height:259.4mm;}
-  .draw3d img{width:100%;height:100%;object-fit:contain;}
-  /* 方位記号（左上・ビュー方位に追従） */
-  .north{left:15mm;top:13mm;width:15mm;height:22mm;}
+  /* 外枠・区域記号 */
+  .outer{position:absolute;left:6mm;top:6mm;right:6mm;bottom:6mm;border:0.5mm solid #111;}
+  .z{position:absolute;display:flex;font-size:2.8mm;color:#111;}
+  .z.t,.z.b{left:12mm;right:12mm;height:6mm;}
+  .z.t{top:6mm;border-bottom:0.3mm solid #111;}
+  .z.b{bottom:6mm;border-top:0.3mm solid #111;}
+  .z.t>div,.z.b>div{flex:1;display:flex;align-items:center;justify-content:center;border-left:0.2mm solid #111;}
+  .z.t>div:first-child,.z.b>div:first-child{border-left:none;}
+  .z.l,.z.r{top:12mm;bottom:12mm;width:6mm;flex-direction:column;}
+  .z.l{left:6mm;border-right:0.3mm solid #111;}
+  .z.r{right:6mm;border-left:0.3mm solid #111;}
+  .z.l>div,.z.r>div{flex:1;display:flex;align-items:center;justify-content:center;border-top:0.2mm solid #111;}
+  .z.l>div:first-child,.z.r>div:first-child{border-top:none;}
+  /* 内枠＝作業領域 */
+  .inner{position:absolute;left:12mm;top:12mm;right:12mm;bottom:12mm;border:0.4mm solid #111;display:flex;flex-direction:column;}
+  .upper{flex:1;display:flex;min-height:0;}
+  .draw{flex:1;position:relative;overflow:hidden;}
+  .draw>img{width:100%;height:100%;object-fit:contain;}
+  .north{position:absolute;left:6mm;top:5mm;width:15mm;height:22mm;}
   .north .pn{font-size:3.2mm;font-weight:700;}
-  /* 部品表＝図面領域の右に縦帯で重ねる（行数を多く取れる） */
-  .bom{left:323mm;top:10.5mm;width:84.8mm;height:259.4mm;background:#fff;border:0.3mm solid #111;display:flex;flex-direction:column;}
-  .bom .cap{font-size:2.9mm;font-weight:700;text-align:center;background:#f1f1f1;border-bottom:0.3mm solid #111;padding:0.6mm;}
-  .bom .sc{flex:1;overflow:hidden;}
-  .bom table{width:100%;border-collapse:collapse;font-size:2.5mm;table-layout:fixed;}
-  .bom th,.bom td{border:0.2mm solid #111;padding:0.4mm 1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .bom th{background:#f1f1f1;}
-  .bom .nc{width:6mm;text-align:right;color:#555;}
-  .bom .qc{width:9mm;text-align:right;}
-  .bom td.spc{font-size:2.3mm;}
-  .bom .pe{text-align:center;color:#888;padding:4mm;}
-  /* 表題欄の値（枠の各セルに重ねる） */
-  .tv{font-size:3.2mm;white-space:nowrap;}
-  #nm{left:303mm;top:271.5mm;}
-  #cust{left:303mm;top:280mm;}
-  #dno{left:362mm;top:280mm;}
-  #ddate{left:391.8mm;top:274.2mm;width:15.6mm;text-align:center;font-size:2.0mm;}
+  /* 部品表（右の縦帯） */
+  .pcol{width:86mm;border-left:0.4mm solid #111;display:flex;flex-direction:column;min-width:0;}
+  .pcol .cap{font-size:3mm;font-weight:700;text-align:center;background:#f3f3f3;border-bottom:0.3mm solid #111;padding:0.7mm;}
+  .pcol .sc{flex:1;overflow:hidden;}
+  .pcol table{width:100%;border-collapse:collapse;font-size:2.6mm;table-layout:fixed;}
+  .pcol th,.pcol td{border:0.2mm solid #111;padding:0.5mm 1mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .pcol th{background:#f3f3f3;}
+  .pcol .nc{width:7mm;text-align:right;color:#555;}
+  .pcol .qc{width:11mm;text-align:right;}
+  .pcol td.spc{font-size:2.4mm;}
+  .pcol .pe{text-align:center;color:#888;padding:5mm;}
+  /* 下帯：仕様条件表｜押印｜備考｜表題欄 */
+  .band{height:36mm;display:flex;border-top:0.4mm solid #111;}
+  .band>div{min-width:0;}
+  .spec{width:66mm;border-right:0.3mm solid #111;}
+  .spec table{width:100%;height:100%;border-collapse:collapse;font-size:2.3mm;table-layout:fixed;}
+  .spec td{border:0.2mm solid #111;padding:0 0.8mm;overflow:hidden;white-space:nowrap;}
+  .spec td:first-child{border-left:none;}
+  .spec tr:first-child td{border-top:none;}
+  .spec .sk{background:#f3f3f3;width:16mm;}
+  .spec .sl{background:#f7f7f7;text-align:center;font-size:2.1mm;width:7mm;}
+  .spec .sv{text-align:center;}
+  .appr{width:24mm;border-right:0.3mm solid #111;display:flex;flex-direction:column;}
+  .appr .c{flex:1;display:flex;flex-direction:column;border-bottom:0.2mm solid #111;}
+  .appr .c:last-child{border-bottom:none;}
+  .appr .c .h{font-size:2.5mm;text-align:center;background:#f3f3f3;border-bottom:0.2mm solid #111;}
+  .appr .c .b{flex:1;display:flex;align-items:center;justify-content:center;font-size:2.6mm;}
+  .notes{flex:1;border-right:0.3mm solid #111;display:flex;flex-direction:column;}
+  .notes .h{font-size:2.6mm;background:#f3f3f3;border-bottom:0.2mm solid #111;padding:0.4mm 1.5mm;}
+  .notes .b{flex:1;}
+  /* 表題欄 */
+  .title{width:130mm;display:flex;flex-direction:column;}
+  .title .co{height:12mm;display:flex;align-items:center;justify-content:center;font-size:6mm;font-weight:700;letter-spacing:1.2mm;border-bottom:0.3mm solid #111;}
+  .title .trows{flex:1;display:flex;flex-direction:column;}
+  .title .trow{flex:1;display:flex;border-top:0.2mm solid #111;}
+  .title .trow:first-child{border-top:none;}
+  .title .k{display:flex;align-items:center;padding:0 1.5mm;font-size:2.7mm;background:#f3f3f3;border-right:0.2mm solid #111;white-space:nowrap;}
+  .title .v{flex:1;display:flex;align-items:center;padding:0 1.5mm;font-size:3mm;border-right:0.2mm solid #111;min-width:0;overflow:hidden;white-space:nowrap;}
+  .title .v:last-child{border-right:none;}
   @media print{@page{size:A3 landscape;margin:0;}.sheet{margin:0;}}
 </style></head><body>
   <div class="sheet">
-    ${bg ? `<img class="bg" src="${bg}">` : ''}
-    <div class="ov draw3d"><img src="${img}"></div>
-    <svg class="ov north" viewBox="0 0 44 60">
-      <text class="pn" x="22" y="9" text-anchor="middle">P.N</text>
-      <circle cx="22" cy="35" r="13" fill="none" stroke="#111" stroke-width="1.1"/>
-      <g transform="rotate(${nAng.toFixed(1)} 22 35)">
-        <polygon points="22,20 28,48 22,40 16,48" fill="#111"/>
-        <polygon points="22,20 22,40 16,48" fill="#fff" stroke="#111" stroke-width="0.5"/>
-      </g>
-    </svg>
-    <div class="ov bom">
-      <div class="cap">部　品　表</div>
-      <div class="sc"><table>
-        <thead><tr><th class="nc">No</th><th>品名</th><th>規格</th><th>材質</th><th class="qc">数量</th></tr></thead>
-        <tbody>${prows}</tbody>
-      </table></div>
+    <div class="outer"></div>
+    <div class="z t">${numCells}</div>
+    <div class="z b">${numCells}</div>
+    <div class="z l">${letCells}</div>
+    <div class="z r">${letCells}</div>
+    <div class="inner">
+      <div class="upper">
+        <div class="draw">
+          <img src="${img}">
+          <svg class="north" viewBox="0 0 44 60">
+            <text class="pn" x="22" y="9" text-anchor="middle">P.N</text>
+            <circle cx="22" cy="35" r="13" fill="none" stroke="#111" stroke-width="1.1"/>
+            <g transform="rotate(${nAng.toFixed(1)} 22 35)">
+              <polygon points="22,20 28,48 22,40 16,48" fill="#111"/>
+              <polygon points="22,20 22,40 16,48" fill="#fff" stroke="#111" stroke-width="0.5"/>
+            </g>
+          </svg>
+        </div>
+        <div class="pcol">
+          <div class="cap">部　品　表</div>
+          <div class="sc"><table>
+            <thead><tr><th class="nc">No</th><th>品名</th><th>規格</th><th>材質</th><th class="qc">数量</th></tr></thead>
+            <tbody>${prows}</tbody>
+          </table></div>
+        </div>
+      </div>
+      <div class="band">
+        <div class="spec"><table>${specRows}</table></div>
+        <div class="appr">${apprCells}</div>
+        <div class="notes"><div class="h">備　考</div><div class="b"></div></div>
+        <div class="title">
+          <div class="co">志基テクノ株式会社</div>
+          <div class="trows">
+            <div class="trow"><div class="k">図面名</div><div class="v">${name || ''}</div></div>
+            <div class="trow"><div class="k">客先名</div><div class="v">${place || ''}</div><div class="k">図　番</div><div class="v">${no || ''}</div></div>
+            <div class="trow"><div class="k">尺度</div><div class="v">${scale || ''}</div><div class="k">年月日</div><div class="v">${date || ''}</div><div class="k">訂正</div><div class="v" style="flex:0 0 9mm;text-align:center;justify-content:center">0</div></div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="ov tv" id="nm">${name || ''}</div>
-    <div class="ov tv" id="cust">${place || ''}</div>
-    <div class="ov tv" id="dno">${no || ''}</div>
-    <div class="ov tv" id="ddate">${date || ''}</div>
   </div>
   <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
 </body></html>`);
@@ -6723,4 +6811,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (caret) caret.textContent = collapsed ? '▸' : '▾';
     head.title = collapsed ? 'クリックで展開' : 'クリックで折りたたみ';
   });
+  // 図面仕様・押印セクションの開閉
+  const specHead = document.getElementById('dwgSpecHead');
+  const specBody = document.getElementById('dwgSpecBody');
+  if (specHead && specBody) {
+    specHead.addEventListener('click', () => {
+      const open = specBody.classList.toggle('open');
+      specHead.classList.toggle('open', open);
+    });
+  }
 })();

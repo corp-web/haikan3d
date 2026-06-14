@@ -101,6 +101,16 @@
   #itemList .il-foot input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
   #itemList .il-foot input:focus { outline: none; border-color: #2f7bff; }
   #itemList .il-foot input[type=date] { color-scheme: dark; }
+  /* 図面仕様・押印（折りたたみ） */
+  #itemList .dwg-sechead { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 700; color: #9fb2d6; cursor: pointer; padding: 4px 2px 2px; border-top: 1px solid #2a3450; margin-top: 2px; }
+  #itemList .dwg-sechead:hover { color: #cfe0fb; }
+  #itemList .dwg-caret { transition: transform .15s; }
+  #itemList .dwg-sechead.open .dwg-caret { transform: rotate(90deg); }
+  #itemList .dwg-secbody { display: none; flex-direction: column; gap: 5px; }
+  #itemList .dwg-secbody.open { display: flex; }
+  #itemList .dwg-secbody .dwg-row2 { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #9fb2d6; }
+  #itemList .dwg-secbody .dwg-row2 > span { width: 58px; flex: none; }
+  #itemList .dwg-secbody .dwg-row2 > input { flex: 1; min-width: 0; }
   /* ツールパレット（左側・部品の3Dアイコンを並べる） */
   #palette { position: fixed; left: 12px; top: 12px; width: 124px;
     background: rgba(20,28,51,.92); border: 1px solid #36436b; border-radius: 10px;
@@ -436,6 +446,19 @@
       <div class="dwg-row"><span>場所</span><input id="dwgPlace" type="text"></div>
       <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
       <div class="dwg-row"><span>図番</span><input id="dwgNo" type="text"></div>
+      <!-- 図面仕様・押印（折りたたみ。入力値は保存＆印刷の仕様条件表/押印欄へ反映） -->
+      <div class="dwg-sechead" id="dwgSpecHead" title="クリックで開閉">図面仕様・押印<span class="dwg-caret" id="dwgSpecCaret">▸</span></div>
+      <div class="dwg-secbody" id="dwgSpecBody">
+        <div class="dwg-row"><span>法規/クラス</span><input id="dwgClass" type="text"></div>
+        <div class="dwg-row2"><span>設計温度℃</span><input id="dwgTempD" type="text"><span>常用温度℃</span><input id="dwgTempN" type="text"></div>
+        <div class="dwg-row2"><span>設計圧力</span><input id="dwgPresD" type="text"><span>常用圧力</span><input id="dwgPresN" type="text"></div>
+        <div class="dwg-row2"><span>試験 耐圧</span><input id="dwgTestP" type="text"><span>気密</span><input id="dwgTestA" type="text"></div>
+        <div class="dwg-row2"><span>非破壊R.T</span><input id="dwgRT" type="text"><span>P.T</span><input id="dwgPT" type="text"></div>
+        <div class="dwg-row2"><span>熱処理</span><input id="dwgHeat" type="text"><span>洗浄</span><input id="dwgWash" type="text"></div>
+        <div class="dwg-row2"><span>塗装</span><input id="dwgPaint" type="text"><span>保温</span><input id="dwgInsul" type="text"></div>
+        <div class="dwg-row2"><span>設計</span><input id="dwgDesign" type="text"><span>製図</span><input id="dwgDraw" type="text"></div>
+        <div class="dwg-row2"><span>検図</span><input id="dwgCheck" type="text"><span>承認</span><input id="dwgApprove" type="text"></div>
+      </div>
     </div>
   </div>
   <!-- 選択部品の脇に出る高さ入力フォーム（高さ/COP を入れて Enter で確定） -->
@@ -494,7 +517,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="lib/frame_bg.js?v=20260614g"></script>
-  <script src="app.js?v=20260614g"></script>
+  <script src="app.js?v=20260614i"></script>
 </body>
 </html>
