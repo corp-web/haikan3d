@@ -4139,11 +4139,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
   .panel{position:absolute;right:5mm;bottom:5mm;width:124mm;max-height:calc(100% - 11mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
-  .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;border-bottom:0.15mm solid #111;padding:1mm;letter-spacing:.5mm;}
+  .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:1mm;letter-spacing:.5mm;}
   .panel .sc{overflow:hidden;}
   .panel table{width:100%;border-collapse:collapse;font-size:2.7mm;}
-  .panel th{background:#f0f0f0;border:0.12mm solid #111;padding:0.8mm 1.4mm;text-align:left;white-space:nowrap;}
   .panel td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;}
+  .panel td.hcell{background:#f0f0f0;font-weight:700;text-align:left;}
   .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
   .sec{border-top:0.15mm solid #111;padding:2mm 2.5mm;}
   .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
@@ -4158,8 +4158,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     <div class="panel">
       <div class="hd">アイテムリスト</div>
       <div class="sc"><table>
-        <thead><tr><th class="n">#</th><th>種別</th><th>タイプ</th><th>サイズ</th><th>クラス</th><th class="q">数量</th><th>材質</th></tr></thead>
-        <tbody>${ilRows}</tbody>
+        <tr><td class="hcell n">#</td><td class="hcell">種別</td><td class="hcell">タイプ</td><td class="hcell">サイズ</td><td class="hcell">クラス</td><td class="hcell q">数量</td><td class="hcell">材質</td></tr>
+        ${ilRows}
       </table></div>
       ${specCollapsed ? '' : `<div class="sec"><div class="t">図面仕様</div><table class="kv">${specHtml}</table></div>`}
       <div class="sec"><table class="kv">${infoHtml}</table></div>
