@@ -4051,41 +4051,38 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return Math.atan2(dx, dy) * 180 / Math.PI;   // SVG回転角（上向き基準・時計回り）
     } catch (e) { return 0; }
   }
-  // 左下の軸ギズモと同じ X(赤)/Y(緑)/Z(青) 3D軸＋北(N・黒・太)を、現在のビュー向きでSVGに。
-  // 北＝ワールド -Z（コンパスの北の向き）。Nを太く長くして方位を明示する。
+  // 地面(XZ平面)に乗った3Dコンパス：視点に合わせて傾く楕円リング＋赤い北磁針＋N/E/S/W＋上方向ヒント。
+  // 北＝ワールド -Z。現在ビューの向きで投影して描くので、視点を回すとコンパスも傾く。
   function buildAxisGlyph() {
-    const C = 40;
-    const defs = [
-      ['X', [1, 0, 0], '#e23b3b', false], ['Y', [0, 1, 0], '#1f9d4d', false], ['Z', [0, 0, 1], '#2f6df0', false],
-      ['N', [0, 0, -1], '#111', true],
-    ];
-    let dirs;
+    const C = 40, Rt = 24;
     try {
       const cam = activeCam(); cam.updateMatrixWorld();
       const base = (typeof controls !== 'undefined' && controls.target) ? controls.target.clone() : new V3(0, 0, 0);
       const o = base.clone().project(cam);
-      dirs = defs.map(([t, v, col, north]) => {
-        const p = base.clone().add(new V3(v[0], v[1], v[2])).project(cam);
-        const dx = p.x - o.x, dy = p.y - o.y, L = Math.hypot(dx, dy) || 1e-6;
-        return { t, col, north, depth: p.z - o.z, sx: dx / L, sy: -dy / L };   // SVGはy下向き
-      });
-      dirs.sort((a, b) => b.depth - a.depth);   // 奥から描く（Nは太いので最後に上書き気味）
-      dirs.sort((a, b) => (a.north ? 1 : 0) - (b.north ? 1 : 0));   // 北は最前面
+      const proj = v => { const p = base.clone().add(new V3(v[0], v[1], v[2])).project(cam); return { x: p.x - o.x, y: -(p.y - o.y) }; };  // SVGはy下向き
+      const E = proj([1, 0, 0]), S = proj([0, 0, 1]), U = proj([0, 1, 0]);
+      const mag = Math.max(Math.hypot(E.x, E.y), Math.hypot(S.x, S.y), 1e-6);
+      const f = Rt / mag;
+      const ex = E.x * f, ey = E.y * f, sx = S.x * f, sy = S.y * f, ux = U.x * f, uy = U.y * f;
+      // 地面リング（楕円）
+      let pts = '';
+      for (let i = 0; i <= 48; i++) { const a = i / 48 * Math.PI * 2; pts += `${(C + Math.cos(a) * ex + Math.sin(a) * sx).toFixed(1)},${(C + Math.cos(a) * ey + Math.sin(a) * sy).toFixed(1)} `; }
+      const N = { x: C - sx, y: C - sy }, So = { x: C + sx, y: C + sy }, Ea = { x: C + ex, y: C + ey }, Wa = { x: C - ex, y: C - ey };
+      const nlen = Math.hypot(sx, sy) || 1e-6, perpx = -sy / nlen, perpy = sx / nlen, ww = 3.4;
+      const wL = { x: C + perpx * ww, y: C + perpy * ww }, wR = { x: C - perpx * ww, y: C - perpy * ww };
+      const Utip = { x: C + ux * 0.6, y: C + uy * 0.6 };
+      const lab = (p, t, big) => `<text x="${(C + (p.x - C) * 1.2).toFixed(1)}" y="${(C + (p.y - C) * 1.2 + (big ? 3.2 : 2.2)).toFixed(1)}" text-anchor="middle" font-size="${big ? 9 : 5.5}" font-weight="700" fill="${big ? '#c0392b' : '#6b7280'}">${t}</text>`;
+      let body = '';
+      body += `<polyline points="${pts.trim()}" fill="none" stroke="#8a8f99" stroke-width="0.9"/>`;
+      body += `<line x1="40" y1="40" x2="${Utip.x.toFixed(1)}" y2="${Utip.y.toFixed(1)}" stroke="#9aa3b2" stroke-width="1" stroke-linecap="round"/>`;
+      body += `<polygon points="${So.x.toFixed(1)},${So.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#d3d7df" stroke="#7a8090" stroke-width="0.4"/>`;
+      body += `<polygon points="${N.x.toFixed(1)},${N.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#d23b3b" stroke="#9c1f1f" stroke-width="0.4"/>`;
+      body += `<circle cx="40" cy="40" r="2.2" fill="#2a3550"/>`;
+      body += lab(N, 'N', true) + lab(Ea, 'E', false) + lab(So, 'S', false) + lab(Wa, 'W', false);
+      return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
     } catch (e) {
-      dirs = [{ t: 'X', col: '#e23b3b', sx: 0.87, sy: 0.5 }, { t: 'Z', col: '#2f6df0', sx: -0.87, sy: 0.5 }, { t: 'Y', col: '#1f9d4d', sx: 0, sy: -1 }, { t: 'N', col: '#111', north: true, sx: 0.25, sy: -0.97 }];
+      return `<svg class="north" viewBox="0 0 80 80"><ellipse cx="40" cy="42" rx="24" ry="12" fill="none" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,22 43.2,42 36.8,42" fill="#d23b3b"/><polygon points="40,62 43.2,42 36.8,42" fill="#d3d7df"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#c0392b">N</text></svg>`;
     }
-    let body = '<circle cx="40" cy="40" r="2" fill="#555"/>';
-    for (const d of dirs) {
-      const R = d.north ? 29 : 23, w = d.north ? 3.2 : 2.2, ah = d.north ? 8 : 6, hw = d.north ? 4.8 : 3.4, fs = d.north ? 11 : 8, lo = d.north ? 8 : 6;
-      const tx = C + d.sx * R, ty = C + d.sy * R;
-      const bx = tx - d.sx * ah, by = ty - d.sy * ah;
-      const px = -d.sy * hw, py = d.sx * hw;
-      const lx = C + d.sx * (R + lo), ly = C + d.sy * (R + lo);
-      body += `<line x1="40" y1="40" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="${d.col}" stroke-width="${w}" stroke-linecap="round"/>`;
-      body += `<polygon points="${tx.toFixed(1)},${ty.toFixed(1)} ${(bx + px).toFixed(1)},${(by + py).toFixed(1)} ${(bx - px).toFixed(1)},${(by - py).toFixed(1)}" fill="${d.col}"/>`;
-      body += `<text x="${lx.toFixed(1)}" y="${(ly + (d.north ? 3.6 : 2.6)).toFixed(1)}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${d.col}">${d.t}</text>`;
-    }
-    return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
   }
   function printSheet() {
     const img = snapshotForPrint();   // 白地・グリッドなしの線画
