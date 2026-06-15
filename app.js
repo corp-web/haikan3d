@@ -4123,15 +4123,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return html;
     };
     const specHtml = kvRows(specPairs);
-    // 図面情報（12分割グリッド）：上=図番|改訂(狭)／中=名称|場所／下=作成年月日|社名(広)。尺度は無し
+    // 図面情報（24分割グリッド）：ラベル列は狭め(colspan3)。上=図番|改訂(狭)／中=名称|場所／下=年月日|社名(広)。尺度は無し
     const infoHtml =
-      `<colgroup>${'<col>'.repeat(12)}</colgroup>` +
-      `<tr><td class="k" colspan="2">図番</td><td colspan="8">${no}</td><td class="k">改訂</td><td>${sv('rev')}</td></tr>` +
-      `<tr><td class="k" colspan="2">名称</td><td colspan="4">${name}</td><td class="k" colspan="2">場所</td><td colspan="4">${place}</td></tr>` +
-      `<tr><td class="k" colspan="2">作成年月日</td><td colspan="4">${date}</td><td class="k" colspan="2">社名</td><td colspan="4" class="company">${sv('company')}</td></tr>`;
-    // モデル空間で「図面仕様」を折りたたんでいたら、印刷でも図面仕様を省略する
+      `<colgroup>${'<col>'.repeat(24)}</colgroup>` +
+      `<tr><td class="k" colspan="3">図番</td><td colspan="16">${no}</td><td class="k" colspan="3">改訂</td><td colspan="2">${sv('rev')}</td></tr>` +
+      `<tr><td class="k" colspan="3">名称</td><td colspan="9">${name}</td><td class="k" colspan="3">場所</td><td colspan="9">${place}</td></tr>` +
+      `<tr><td class="k" colspan="3">年月日</td><td colspan="9">${date}</td><td class="k" colspan="3">社名</td><td colspan="9" class="company">${sv('company')}</td></tr>`;
+    // モデル空間で折りたたんでいたら、印刷でもそのセクションを省略する
     const specEl = document.getElementById('specBodyWrap');
     const specCollapsed = !!(specEl && specEl.style.display === 'none');
+    const ilEl = document.getElementById('ilBodyWrap');
+    const ilCollapsed = !!(ilEl && ilEl.style.display === 'none');
     const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
@@ -4163,12 +4165,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     <img src="${img}">
     ${axisSvg}
     <div class="panel">
-      <div class="hd">アイテムリスト</div>
+      ${ilCollapsed ? '' : `<div class="hd">アイテムリスト</div>
       <div class="sc"><table class="items">
         <tr><td class="hcell n">#</td><td class="hcell">種別</td><td class="hcell">タイプ</td><td class="hcell">サイズ</td><td class="hcell">クラス</td><td class="hcell q">数量</td><td class="hcell">材質</td></tr>
         ${ilRows}
-      </table></div>
-      ${specCollapsed ? '' : `<div class="sec"><div class="t">図面仕様</div><table class="kv">${specHtml}</table></div>`}
+      </table></div>`}
+      ${specCollapsed ? '' : `<div class="sec"><div class="t">設計仕様</div><table class="kv">${specHtml}</table></div>`}
       <div class="sec"><table class="kv info">${infoHtml}</table></div>
     </div>
     <div class="frame"></div>
