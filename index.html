@@ -164,6 +164,7 @@
     background: transparent; color: #d3ddf2; cursor: pointer; font-size: 10px; font-weight: 600;
     padding: 2px 5px; white-space: nowrap; font-family: inherit; }
   #ribbon button .ic { font-size: 15px; line-height: 1; }
+  #ribbon button .ic svg { width: 15px; height: 15px; display: block; }   /* 画像ボタン用：文字色を継ぐモノクロ線画 */
   #ribbon button:hover { background: rgba(127,168,232,.16); border-color: #3c4f7e; }
   #ribbon button:active { background: rgba(127,168,232,.30); }
   #ribbon button.active { background: rgba(47,123,255,.32); border-color: #2f7bff; color: #eaf1ff; }
@@ -313,7 +314,7 @@
         <button id="cmdSave"  title="図面をファイルに保存（.p3d.json）"><span class="ic">💾</span>保存</button>
         <button id="cmdOpen"  title="保存した図面を開く"><span class="ic">📂</span>開く</button>
         <button id="cmdPrint" title="図面と部品表を印刷"><span class="ic">🖨</span>印刷</button>
-        <button id="cmdPng"   title="画面をPNG画像で書き出し"><span class="ic">🖼</span>画像</button>
+        <button id="cmdPng"   title="画面をPNG画像で書き出し"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="1.5"/><circle cx="8.5" cy="10" r="1.5" fill="currentColor" stroke="none"/><path d="M4 17l5-5 4 3 3-3 4 4"/></svg></span>画像</button>
       </div>
       <div class="rb-title">ファイル</div>
     </div>
@@ -444,8 +445,8 @@
     <div class="pal-opts" id="fittingOptsUI" style="display:none">
       <label>タイプ<select id="optFitType"></select></label>
       <label>呼び径<select id="optFitSize"></select></label>
-      <label id="optFitSizeBWrap" style="display:none">小径<select id="optFitSizeB"></select></label>
-      <label>Sch<select id="optFitSch"></select></label>
+      <label id="optFitSizeBWrap" style="display:none"><span id="optFitSizeBLabel">小径</span><select id="optFitSizeB"></select></label>
+      <label id="optFitSchWrap">Sch<select id="optFitSch"></select></label>
     </div>
   </div>
   <!-- 設置アイテム一覧（右側・表形式） -->
@@ -535,6 +536,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260615z"></script>
+  <script src="app.js?v=20260615valve2"></script>
 </body>
 </html>
