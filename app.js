@@ -4109,7 +4109,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const specPairs = [
       ['法規', sv('law')], ['クラス', sv('cls')], ['設計温度℃', sv('tempD')], ['常用温度℃', sv('tempN')],
       ['設計圧力', sv('presD')], ['常用圧力', sv('presN')], ['試験 耐圧', sv('testP')], ['気密', sv('testA')],
-      ['非破壊検査', [sv('rt'), sv('pt')].filter(Boolean).join(' / ')], ['熱処理', sv('heat')], ['洗浄', sv('wash')], ['塗装', sv('paint')],
+      ['非破壊検査', sv('rt')], ['非破壊検査', sv('pt')], ['熱処理', sv('heat')], ['洗浄', sv('wash')], ['塗装', sv('paint')],
       ['保温', sv('insul')], ['設計', sv('design')], ['製図', sv('draw')], ['検図', sv('check')], ['承認', sv('approve')],
     ];
     // キー値を2組/行のテーブル行に。端数は空セルで埋め、罫線が必ず閉じるようにする。
@@ -4128,7 +4128,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       `<colgroup>${'<col>'.repeat(12)}</colgroup>` +
       `<tr><td class="k" colspan="2">図番</td><td colspan="8">${no}</td><td class="k">改訂</td><td>${sv('rev')}</td></tr>` +
       `<tr><td class="k" colspan="2">名称</td><td colspan="4">${name}</td><td class="k" colspan="2">場所</td><td colspan="4">${place}</td></tr>` +
-      `<tr><td class="k" colspan="2">作成年月日</td><td colspan="3">${date}</td><td class="k" colspan="2">社名</td><td colspan="5" class="company">${sv('company')}</td></tr>`;
+      `<tr><td class="k" colspan="2">作成年月日</td><td colspan="4">${date}</td><td class="k" colspan="2">社名</td><td colspan="4" class="company">${sv('company')}</td></tr>`;
     // モデル空間で「図面仕様」を折りたたんでいたら、印刷でも図面仕様を省略する
     const specEl = document.getElementById('specBodyWrap');
     const specCollapsed = !!(specEl && specEl.style.display === 'none');
