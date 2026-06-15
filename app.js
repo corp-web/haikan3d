@@ -4123,11 +4123,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return html;
     };
     const specHtml = kvRows(specPairs);
-    // 図面情報：改訂の右に尺度／社名は最下行に大きく表示
+    // 図面情報（12分割グリッド）：上=図番|改訂(狭)／中=名称|場所／下=作成年月日|社名(広)。尺度は無し
     const infoHtml =
-      `<tr><td class="k">作成年月日</td><td>${date}</td><td class="k">改訂</td><td>${sv('rev')}</td><td class="k">尺度</td><td>${scale}</td></tr>` +
-      `<tr><td class="k">名称</td><td>${name}</td><td class="k">場所</td><td>${place}</td><td class="k">図番</td><td>${no}</td></tr>` +
-      `<tr><td class="k">社名</td><td colspan="5" class="company">${sv('company')}</td></tr>`;
+      `<colgroup>${'<col>'.repeat(12)}</colgroup>` +
+      `<tr><td class="k" colspan="2">図番</td><td colspan="8">${no}</td><td class="k">改訂</td><td>${sv('rev')}</td></tr>` +
+      `<tr><td class="k" colspan="2">名称</td><td colspan="4">${name}</td><td class="k" colspan="2">場所</td><td colspan="4">${place}</td></tr>` +
+      `<tr><td class="k" colspan="2">作成年月日</td><td colspan="3">${date}</td><td class="k" colspan="2">社名</td><td colspan="5" class="company">${sv('company')}</td></tr>`;
     // モデル空間で「図面仕様」を折りたたんでいたら、印刷でも図面仕様を省略する
     const specEl = document.getElementById('specBodyWrap');
     const specCollapsed = !!(specEl && specEl.style.display === 'none');
@@ -4149,6 +4150,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .panel td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;}
   .panel td.hcell{background:#f0f0f0;font-weight:700;text-align:left;}
   .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
+  table.kv.info td.k{width:auto;}   /* 情報表は colgroup(12分割)で幅を決める */
   table.kv td.company{font-weight:700;font-size:3.2mm;text-align:center;}
   .sec{padding:1.6mm 2.5mm;}
   .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
@@ -4167,7 +4169,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         ${ilRows}
       </table></div>
       ${specCollapsed ? '' : `<div class="sec"><div class="t">図面仕様</div><table class="kv">${specHtml}</table></div>`}
-      <div class="sec"><table class="kv">${infoHtml}</table></div>
+      <div class="sec"><table class="kv info">${infoHtml}</table></div>
     </div>
     <div class="frame"></div>
   </div>
