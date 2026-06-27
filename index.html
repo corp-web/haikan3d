@@ -443,7 +443,8 @@
       <label>長さ(mm)<input id="optPipeLen" type="number" step="10" min="1"></label>
     </div>
     <div class="pal-opts" id="fittingOptsUI" style="display:none">
-      <label>タイプ<select id="optFitType"></select></label>
+      <label id="optFitTypeWrap">タイプ<select id="optFitType"></select></label>
+      <label id="optFitClassWrap" style="display:none">クラス<select id="optFitClass"></select></label>
       <label>呼び径<select id="optFitSize"></select></label>
       <label id="optFitSizeBWrap" style="display:none"><span id="optFitSizeBLabel">小径</span><select id="optFitSizeB"></select></label>
       <label id="optFitSchWrap">Sch<select id="optFitSch"></select></label>
@@ -536,6 +537,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260615valve2"></script>
+  <script src="app.js?v=20260627a"></script>
 </body>
 </html>

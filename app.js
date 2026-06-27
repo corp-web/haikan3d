@@ -1519,7 +1519,9 @@ function valveFtF(kind, sizeA) {
   return 110 + dn * 0.95;   // gate/globe/ball
 }
 // 規格フランジ端（軸Y・フランジ面 y=0・本体側 -Y）。中空（ボア貫通）＋レイズドフェイス＋ハブ。
-function valveEndFlange(cls, sizeA, mat) {
+//   noHub=true：背面のハブ（首）を付けない。面間が短いバルブ（バタフライ＝ウエハー/ルグ形）用。
+//     ハブ長は呼び径比例で伸びるため、面間の短いバルブで付けると大口径で中心を突き抜けて反対側へ飛び出す。
+function valveEndFlange(cls, sizeA, mat, noHub) {
   const fd = flangeDim(cls, sizeA);
   const R = VMM(fd.D) / 2, t = VMM(fd.t);
   const RF = VMM(rfFaceDia(cls, sizeA) || fd.D * 0.72) / 2;
@@ -1534,7 +1536,7 @@ function valveEndFlange(cls, sizeA, mat) {
   const plate = plateWithHoles(R, t, holes); plate.translate(0, -t / 2, 0);                       // 前面 y=0／本体側 -Y
   g.add(new THREE.Mesh(plate, mat));
   const rf = ringGeo(RF, boreR, rfH); rf.translate(0, rfH / 2, 0); g.add(new THREE.Mesh(rf, mat)); // レイズドフェイス
-  const hubG = ringGeo(neckR, boreR, hub); hubG.translate(0, -t - hub / 2, 0); g.add(new THREE.Mesh(hubG, mat));  // ハブ（背面）
+  if (!noHub) { const hubG = ringGeo(neckR, boreR, hub); hubG.translate(0, -t - hub / 2, 0); g.add(new THREE.Mesh(hubG, mat)); }  // ハブ（背面）
   return g;
 }
 // ハンドル車（軸=+Z）。リム＋スポーク＋ハブ。R=リム半径(m)
@@ -1628,7 +1630,7 @@ function makeValve(opts) {
     g.add(vCylY(discR * 1.08, -halfL, halfL, bodyMat));                         // 薄い大径ボディ
     const disc = new THREE.Mesh(new THREE.CylinderGeometry(discR * 0.92, discR * 0.92, VMM(_vdn(sizeA) * 0.08 + 3), 36), opMat);
     disc.rotation.z = 0.18; g.add(disc);                                        // ディスク（少し開）
-    if (!wafer) { const f1 = valveEndFlange(cls, sizeA, bodyMat); f1.position.y = halfL; g.add(f1); const f2 = valveEndFlange(cls, sizeA, bodyMat); f2.position.y = -halfL; f2.rotation.x = Math.PI; g.add(f2); }
+    if (!wafer) { const f1 = valveEndFlange(cls, sizeA, bodyMat, true); f1.position.y = halfL; g.add(f1); const f2 = valveEndFlange(cls, sizeA, bodyMat, true); f2.position.y = -halfL; f2.rotation.x = Math.PI; g.add(f2); }   // ハブ無し（面間が短く大口径でハブが突き抜けるため）
     const stemTop = discR + VMM(_vdn(sizeA) * 0.2 + 10);
     g.add(vCylZ(rPipe * 0.2, discR * 0.9, stemTop, opMat));
     const gb = new THREE.Mesh(new THREE.BoxGeometry(discR * 0.7, discR * 0.7, discR * 0.5), opMat); gb.position.z = stemTop + discR * 0.25; g.add(gb);   // ギヤボックス
@@ -1682,8 +1684,11 @@ const SW800_SIZE_TBL = { '15A': 1, '20A': 1, '25A': 1, '32A': 1, '40A': 1, '50A'
 function clampValveSize(tbl) { tbl = tbl || VALVE_SIZE_TBL; return tbl[fittingOpts.sizeA] ? fittingOpts.sizeA : (tbl['50A'] ? '50A' : Object.keys(tbl)[0]); }
 function valveSizesFrom(a) { const i = VALVE_SIZES.indexOf(a); return i < 0 ? VALVE_SIZES.slice() : VALVE_SIZES.slice(i); }   // a以上（安全弁の出口=入口以上）
 function clampValveOutlet(a) { const c = valveSizesFrom(a); return (VALVE_SIZES.indexOf(fittingOpts.sizeB) >= VALVE_SIZES.indexOf(a)) ? fittingOpts.sizeB : (c[Math.min(1, c.length - 1)] || a); }
-// 規格(JIS10K/20K/JPI150/300)を「タイプ」variantにする共通ヘルパー
-function valveRatingVariants(kind) { return VALVE_RATINGS.map(rt => ({ t: rt, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind, sizeA: clampValveSize(), rating: rt }) })); }
+// バルブのクラス（圧力区分）。フランジ形は JIS10K/20K/JPI150/300 から選ぶ。SW形は Class800 固定。
+//   タイプ(接続形)＝variant とは別軸。現在選択中のクラスは valveOpts.cls に保持し、make() が valveCls() で参照する。
+const VALVE_CLASSES = VALVE_RATINGS;
+const valveOpts = { cls: 'JIS 10K' };
+function valveCls() { return VALVE_RATINGS.includes(valveOpts.cls) ? valveOpts.cls : 'JIS 10K'; }
 
 // 突合せ溶接継手（エルボ・キャップ等）共通の選択仕様。デフォルトは BW / 25A / Sch10S。
 // 接続タイプ：BW=突合せ溶接（現状）。将来 SW(差込み溶接)・SCRD(ねじ込み) を追加予定。
@@ -1735,22 +1740,29 @@ const TOOLS = [
     { t: 'SW', sizes: SW_SIZE_TBL, sw: true, make: _swBuild('BOSS') } ] },
   { type: 'union', name: 'ユニオン', curType: 'SW', build() { return famVariant(this).make(); }, variants: [
     { t: 'SW', sizes: SW_SIZE_TBL, sw: true, make: _swBuild('UNION') } ] },
-  // 一般工業用バルブ  フランジ形=規格(JIS10K/20K/JPI150/300LB)を「タイプ」で選択／SW形=Class800
-  { type: 'vBall', name: 'ボールバルブ', curType: 'JIS 10K', valve: true, build() { return famVariant(this).make(); }, variants: valveRatingVariants('ball') },
-  { type: 'vGate', name: 'ゲートバルブ', curType: 'JIS 10K', valve: true, build() { return famVariant(this).make(); }, variants: valveRatingVariants('gate') },
-  { type: 'vGlobe', name: 'グローブバルブ', curType: 'JIS 10K', valve: true, build() { return famVariant(this).make(); }, variants: valveRatingVariants('globe') },
-  { type: 'vCheck', name: 'チェッキバルブ', curType: 'JIS 10K', valve: true, build() { return famVariant(this).make(); }, variants: valveRatingVariants('check') },
-  { type: 'vStrainer', name: 'ストレーナー(Y)', curType: 'JIS 10K', valve: true, build() { return famVariant(this).make(); }, variants: valveRatingVariants('strainer') },
-  { type: 'vButterfly', name: 'バタフライバルブ', curType: 'フランジ', valve: true, build() { return famVariant(this).make(); }, variants: [
-    { t: 'フランジ', sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'butterfly', sizeA: clampValveSize(), rating: 'JIS 10K', style: 'flange' }) },
-    { t: 'ウエハー', sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'butterfly', sizeA: clampValveSize(), rating: 'JIS 10K', style: 'wafer' }) } ] },
-  { type: 'vSafety', name: '安全弁(アングル)', curType: 'JIS 10K', valve: true, build() { return famVariant(this).make(); },
-    variants: VALVE_RATINGS.map(rt => ({ t: rt, sizes: VALVE_SIZE_TBL, noSch: true, hasB: true, bLarger: true, bLabel: '出口',
-      make: () => { const a = clampValveSize(); return makeValve({ kind: 'safety', sizeA: a, sizeB: clampValveOutlet(a), rating: rt }); } })) },
-  { type: 'vSWgate', name: 'ゲートバルブ(800)', curType: 'SW800', valve: true, build() { return famVariant(this).make(); }, variants: [
-    { t: 'SW800', sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swgate', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
-  { type: 'vSWglobe', name: 'グローブバルブ(800)', curType: 'SW800', valve: true, build() { return famVariant(this).make(); }, variants: [
-    { t: 'SW800', sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swglobe', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
+  // 一般工業用バルブ：タイプ(接続形)＝variant、クラス(圧力区分 JIS10K/20K/JPI150/300)＝optFitClass(valveOpts.cls)。
+  //   ボール/ゲート/グローブ/チェッキ/ストレーナー/安全弁＝接続形は1種(タイプ欄なし)。バタフライのみ フランジ/ウエハー の2タイプ。
+  //   SW形(800)はクラス=Class800固定で rating を使わない。curType='—' は「タイプ無し」を表す内部値。
+  { type: 'vBall', name: 'ボールバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'ball', sizeA: clampValveSize(), rating: valveCls() }) } ] },
+  { type: 'vGate', name: 'ゲートバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'gate', sizeA: clampValveSize(), rating: valveCls() }) } ] },
+  { type: 'vGlobe', name: 'グローブバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'globe', sizeA: clampValveSize(), rating: valveCls() }) } ] },
+  { type: 'vCheck', name: 'チェッキバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'check', sizeA: clampValveSize(), rating: valveCls() }) } ] },
+  { type: 'vStrainer', name: 'ストレーナー(Y)', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'strainer', sizeA: clampValveSize(), rating: valveCls() }) } ] },
+  { type: 'vButterfly', name: 'バタフライバルブ', curType: 'フランジ', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: 'フランジ', sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'butterfly', sizeA: clampValveSize(), rating: valveCls(), style: 'flange' }) },
+    { t: 'ウエハー', sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'butterfly', sizeA: clampValveSize(), rating: valveCls(), style: 'wafer' }) } ] },
+  { type: 'vSafety', name: '安全弁(アングル)', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, hasB: true, bLarger: true, bLabel: '出口',
+      make: () => { const a = clampValveSize(); return makeValve({ kind: 'safety', sizeA: a, sizeB: clampValveOutlet(a), rating: valveCls() }); } } ] },
+  { type: 'vSWgate', name: 'ゲートバルブ(800)', curType: '—', valve: true, vclasses: ['Class800'], build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swgate', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
+  { type: 'vSWglobe', name: 'グローブバルブ(800)', curType: '—', valve: true, vclasses: ['Class800'], build() { return famVariant(this).make(); }, variants: [
+    { t: '—', single: true, sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swglobe', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
 ];
 // 突合せ溶接継手ツールか（パイプ・フランジ以外）／ツール検索／現在選択中のタイプ(variant)
 function isFittingType(type) { return type !== 'flange' && type !== 'pipe'; }
@@ -1939,6 +1951,19 @@ function rebuildFittingSize() {
   const isSW = !!(variant && variant.sw);
   // タイプ(variant)ドロップダウン
   fillSelect('optFitType', tool.variants.map(v => v.t), tool.curType);
+  const isValve = !!tool.valve;
+  // タイプ欄：継手は常時表示。バルブは接続形が複数ある時だけ表示（ボール/ゲート等は1種=タイプ無しなので隠す）
+  const typeWrap = document.getElementById('optFitTypeWrap');
+  if (typeWrap) typeWrap.style.display = (!isValve || tool.variants.length > 1) ? '' : 'none';
+  // クラス欄：バルブのみ表示（圧力区分 JIS10K/20K/JPI150/300、SW形は Class800 固定）
+  const clsWrap = document.getElementById('optFitClassWrap');
+  if (clsWrap) clsWrap.style.display = isValve ? '' : 'none';
+  if (isValve) {
+    const classes = tool.vclasses || VALVE_CLASSES;
+    // 多クラス(JIS/JPI)valveへ切替時、現在クラスが範囲外なら先頭へ。SW形(Class800固定)では valveOpts.cls を汚さない
+    if (!classes.includes(valveOpts.cls) && VALVE_RATINGS.includes(classes[0])) valveOpts.cls = classes[0];
+    fillSelect('optFitClass', classes, classes.includes(valveOpts.cls) ? valveOpts.cls : classes[0]);
+  }
   // 呼び径：選択中タイプの規格表に合わせる
   const sizes = Object.keys(variant.sizes);
   if (!sizes.includes(fittingOpts.sizeA)) fittingOpts.sizeA = sizes.includes('25A') ? '25A' : (sizes.includes('50A') ? '50A' : sizes[0]);
@@ -1972,10 +1997,11 @@ function onFitOptChange() {
   fittingOpts.sizeA = v('optFitSize');
   fittingOpts.sch = v('optFitSch');
   const b = v('optFitSizeB'); if (b !== undefined) fittingOpts.sizeB = b;
-  rebuildFittingSize();   // タイプ/sizeA 変更で 呼び径/Sch/sizeB 候補が変わるため作り直し
+  const cl = v('optFitClass'); if (cl !== undefined && VALVE_RATINGS.includes(cl)) valveOpts.cls = cl;   // クラスは多クラスvalveのみ記憶（Class800は無視）
+  rebuildFittingSize();   // タイプ/クラス/sizeA 変更で 呼び径/Sch/sizeB 候補が変わるため作り直し
   refreshThumbs();
 }
-['optFitType', 'optFitSize', 'optFitSch', 'optFitSizeB'].forEach(id => {
+['optFitType', 'optFitClass', 'optFitSize', 'optFitSch', 'optFitSizeB'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', onFitOptChange);
 });
@@ -3193,7 +3219,7 @@ function partColumns(p) {
     case 'tee':    { const o = u.tee || {};    const rt = (o.sizeB && o.sizeB !== o.sizeA); return { kind: 'ティー', type: rt ? 'BW(RT)' : 'BW(T)', size: rt ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: o.sch || '' }; }
     case 'reducer':{ const o = u.reducer || {};return { kind: 'レジューサ', type: o.ecc ? 'BW(E)' : 'BW(C)', size: `${o.sizeA || ''}×${o.sizeB || ''}`, cls: o.sch || '' }; }
     case 'sw':     { const o = u.sw || {}; const nm = {'90E':'90°エルボ','45E':'45°エルボ','T':'ティー','TR':'ティー','CROSS':'クロス','FC':'カップリング','HC':'カップリング','FCR':'カップリング','BOSS':'ボス','CAP':'キャップ','UNION':'ユニオン'}; const tp = {'FC':'FC','HC':'HC','FCR':'FCR','T':'SW(T)','TR':'SW(RT)'}[o.kind] || 'SW'; const rb = (o.sizeB && o.sizeB !== o.sizeA); return { kind: nm[o.kind] || 'SW継手', type: tp, size: rb ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: 'Sch80' }; }
-    case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'ゲートバルブ(800)',swglobe:'グローブバルブ(800)'}; let tp, sz = o.sizeA || ''; if (o.kind === 'butterfly') tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); else if (o.kind === 'swgate' || o.kind === 'swglobe') tp = 'SW800'; else tp = o.rating || ''; if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls: '' }; }
+    case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'ゲートバルブ(800)',swglobe:'グローブバルブ(800)'}; let tp = '', cls = '', sz = o.sizeA || ''; if (o.kind === 'butterfly') { tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); cls = o.rating || ''; } else if (o.kind === 'swgate' || o.kind === 'swglobe') { cls = 'Class800'; } else { cls = o.rating || ''; } if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls }; }
     default: return { kind: u.partType || 'アイテム', type: '', size: '', cls: '' };
   }
 }
