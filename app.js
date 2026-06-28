@@ -3776,11 +3776,13 @@ function endRotSpin(commit) {
   // 寸法線の連鎖：逃げ量スピナーを確定したら、立面寸法は続けて方位スピナーへ。
   // 連鎖が終わったら寸法線を選択状態にし、「値」フォームで数字を任意に変えられるようにする
   if (_dimChainRec) {
-    const r = _dimChainRec;
+    const r = _dimChainRec, chainNext = _dimChainNext;
     _dimChainRec = null; _dimChainNext = null;
     if (commit && wasDimOff) {
       const dx = r.b.x - r.a.x, dz = r.b.z - r.a.z;
-      if (dx * dx + dz * dz < 1e-9 && r.style.dimOff && r.style.dimDir) {
+      // 立面寸法は逃げ量の後に方位スピナーへ連鎖（作成時のみ）。
+      // 再選択での足の長さ調整は next='none' で連鎖させない＝逃げ方向（＝元の平行）を保ったまま長さだけ変える。
+      if (chainNext !== 'none' && dx * dx + dz * dz < 1e-9 && r.style.dimOff && r.style.dimDir) {
         startDimDirSpin(r);
         _dimChainRec = r;   // 方位スピナーの確定後にも「値」フォームへつなぐ
         return;
@@ -7251,7 +7253,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       //   タッチではキーボードを出さず ▲▼ ボタンで1mm刻み→3D画面タップで確定（立面は続けて方位スピナーへ連鎖）。
       //   端点(補助線の先)の付け替えは端の近くを掴んだ時だけ(=nearEnd)なので、!nearEnd を条件にして競合させない。
       else if (!moved && !nearEnd && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir)
-        startDimOffSpin(lineSel, null, e.pointerType !== 'mouse');
+        startDimOffSpin(lineSel, 'none', e.pointerType !== 'mouse');   // 'none'＝方位連鎖なし。足の長さだけ調整し、元の逃げ方向（平行）を保つ
       // 半径/直径/角度の再選択（クリックのみ）＝逃げ（リーダー長・円弧半径/位置）の再調整に入る
       else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind)) drawState.dimReadjust = { rec: lineSel };
     }
