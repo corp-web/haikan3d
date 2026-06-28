@@ -1518,7 +1518,7 @@ function valveFtF(kind, sizeA) {
   if (kind === 'butterfly') return 40 + dn * 0.18;
   if (kind === 'check') return 90 + dn * 1.0;
   if (kind === 'strainer') return 95 + dn * 1.05;
-  if (kind === 'swgate' || kind === 'swglobe') return 55 + dn * 0.7;
+  if (kind === 'swgate' || kind === 'swglobe') return 46 + dn * 0.55;   // 鍛造SW弁はコンパクト：面間を短くして両端ソケットを中央ボディへ寄せる（社長指示・実物カタログに合わせ）
   return 110 + dn * 0.95;   // gate/globe/ball
 }
 // 規格フランジ端（軸Y・フランジ面 y=0・本体側 -Y）。中空（ボア貫通）＋レイズドフェイス＋ハブ。
@@ -2080,9 +2080,14 @@ const DIR_STEP = Math.PI / 4;   // 45°刻み
 // pipeEndDrag: 端ドラッグ中の状態 {part, grabbedEnd, sx, sy, moved, origLen}
 let pipeEndSel = null;
 let pipeEndDrag = null;
+// 端をスライド(ドラッグ)で伸縮した後、離してもCOPに戻さず「長さ」入力モードを維持するフラグ。
+// これでスライド→キーボードで長さ微調整、という流れができる。端のクリック(=COP/傾け)や別選択で解除。
+let pipeLenSticky = false;
 function pipeSelected() {
   return !!(selectedPart && selectedPart.userData.partType === 'pipe' && !dirActive());
 }
+// いま「長さ」入力モードか（端スライド中 or スライド後のスティッキー）。pipeEndSel が必要。
+function pipeLenInputMode() { return pipeSelected() && !!pipeEndSel && (pipeLenSticky || (pipeEndDrag && pipeEndDrag.part === selectedPart)); }
 function pipeLenMode() { return pipeSelected() && !!pipeEndSel; }   // 起点選択済み＝長さモード
 // パイプの長さ(mm)を変更し、keepEnd('face'|'back')の端を同じ位置に保って作り直す
 function rebuildPipe(part, lengthMm, keepEnd) {
@@ -2153,8 +2158,10 @@ function tiltPipeEndY(part, movingEnd, copYmm) {
 // 入力フォームの長さ→パイプを伸縮（選択(緑)端を動かし、反対端を固定）
 function applyPipeLength() {
   if (!pipeLenMode()) return;
+  if (hYInput.value.trim() === '') return;             // 空欄の間は適用しない（全消去で1mmに潰れないように）
   const fixed = pipeEndSel === 'face' ? 'back' : 'face';
-  rebuildPipe(selectedPart, parseFloat(hYInput.value) || 1, fixed);
+  rebuildPipe(selectedPart, Math.max(parseFloat(hYInput.value) || 1, 1), fixed);
+  if (typeof refreshItemList === 'function') refreshItemList();
 }
 // カーソルに近いパイプの端を返す（'face'|'back'|null）
 function nearestPipeEnd(part, clientX, clientY) {
@@ -2838,7 +2845,11 @@ function nearestDirSnap(startOrigin, dir, clientX, clientY, exParts) {
 function updateDirMove(clientX, clientY) {
   const hit = planeHitAt(clientX, clientY, dirDrag.planeY);
   if (!hit) return;
-  const vx = hit.x - dirDrag.startOrigin.x, vz = hit.z - dirDrag.startOrigin.z;
+  // 移動量は「指を置いた地点(startHit)からの差分」で測る。原点基準だと、原点から離れた所を
+  // 掴んだ瞬間にそのオフセット分だけ飛んでしまう（タップでも瞬間移動する不具合）。差分基準なら
+  // タップ＝移動量ゼロ＝動かない、ドラッグした分だけ動く（掴んだ位置のオフセットも保持される）。
+  const base = dirDrag.startHit || dirDrag.startOrigin;
+  const vx = hit.x - base.x, vz = hit.z - base.z;
   const ang = Math.round(Math.atan2(vz, vx) / DIR_STEP) * DIR_STEP;     // 45°スナップ
   const dir = new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang));
   let dist = Math.max(0, vx * dir.x + vz * dir.z);                      // 進行方向への投影距離
@@ -2913,9 +2924,9 @@ function updateForm() {
     return;
   }
   if (pipeSelected()) {
-    if (pipeEndDrag && pipeEndDrag.part === selectedPart) {   // 端ドラッグ中＝長さ
+    if (pipeLenInputMode()) {   // 端スライド中／スライド後＝「長さ」をキーボード入力
       if (hLabel) hLabel.textContent = '長さ';
-      hYInput.value = Math.round(selectedPart.userData.pipe.length);
+      if (document.activeElement !== hYInput) hYInput.value = Math.round(selectedPart.userData.pipe.length);   // 編集中は上書きしない
     } else {                                                  // それ以外＝COP（端選択時はその端、未選択はface端）
       if (hLabel) hLabel.textContent = heightLabelFor(selectedPart);
       const endLocal = pipeEndSel === 'back' ? selectedPart.userData.backLocal : selectedPart.userData.faceLocal;
@@ -3037,7 +3048,8 @@ if (hYInput) {
   const applyHY = () => {
     if (dirActive()) applyDistInput();
     else if (lineElRef()) window.__lineApplyEl(parseFloat(hYInput.value) || 0);   // 線分EL（起点指定の有無で全体/片側）
-    else if (pipeSelected()) applyPipeCOP();   // パイプCOP（端選択＝その端だけ傾け／未選択＝全体）。長さはドラッグ
+    else if (pipeLenInputMode()) applyPipeLength();   // 端スライド後＝長さをキーボードで伸縮（起点側が動く）
+    else if (pipeSelected()) applyPipeCOP();   // パイプCOP（端クリック＝その端だけ傾け／未選択＝全体）
     else applyHeightInput();
   };
   hYInput.addEventListener('input', applyHY);    // スピナー長押し・連続増減でも追従
@@ -3065,8 +3077,10 @@ if (hYInput) {
         if (window.__annSelIsXline && window.__annSelIsXline()) { _xlineChainClose = true; hYInput.blur(); startRotSpin(true, 0, 0); }
       }
       else if (selectedParts.size > 1) { applyHeightInput(); updateForm(); }  // 複数選択EL一括確定（選択は維持）
-      else if (pipeSelected()) { applyPipeCOP(); updateForm(); }              // パイプCOP確定（端選択＝傾け／未選択＝全体。長さはドラッグ）
+      else if (pipeLenInputMode()) { applyPipeLength(); updateForm(); }        // 端スライド後＝長さ確定（選択は維持）
+      else if (pipeSelected()) { applyPipeCOP(); updateForm(); }              // パイプCOP確定（端クリック＝傾け／未選択＝全体）
       else { applyHeightInput(); selectPart(null); }                          // フランジCOP確定→選択解除
+      hYInput.blur();   // iPad：確定したらキーボードを閉じる（xline連鎖は上で既にblur済み・二重でも無害）
     }
     e.stopPropagation();
   });
@@ -3076,7 +3090,7 @@ if (hYInput) {
   inp.addEventListener('input', applyLegInputs);    // スピナー長押し・連続増減でも追従
   inp.addEventListener('change', applyLegInputs);
   inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { applyLegInputs(); dirDrag = null; clearMarkers(); updateForm(); }  // 確定→ロック解除・補助線消去
+    if (e.key === 'Enter') { applyLegInputs(); dirDrag = null; clearMarkers(); updateForm(); inp.blur(); }  // 確定→ロック解除・補助線消去＋キーボードを閉じる（iPad）
     e.stopPropagation();
   });
 });
@@ -3133,7 +3147,7 @@ function selectPart(obj, additive = false) {
   if (window.__annClearSel) window.__annClearSel();   // 部品を単独選択/解除したら線選択も解除（部品と排他）
   if (pipeEndDrag && pipeEndDrag.part !== obj) { pipeEndDrag = null; controls.enabled = true; }
   if (dirDrag && dirDrag.part !== obj) { dirDrag = null; controls.enabled = true; clearMarkers(); }
-  if (selectedPart !== obj) pipeEndSel = null;   // 別部品/解除なら起点選択を外す（_idleSigは更新判定に任せる）
+  if (selectedPart !== obj) { pipeEndSel = null; pipeLenSticky = false; }   // 別部品/解除なら起点選択・長さモードを外す（_idleSigは更新判定に任せる）
   // 既存の複数選択を一旦すべて解除してから1つだけ選ぶ
   for (const p of selectedParts) setEmissive(p, 0x000000);
   selectedParts.clear();
@@ -3383,7 +3397,8 @@ window.addEventListener('pointermove', e => {
   }
   else if (movingPart) moveExistingPart(e.clientX, e.clientY);
   else if (dirDrag && !dirDrag.locked) {
-    if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > 4) dirDrag.started = true;
+    const moveTh = (e.pointerType !== 'mouse') ? 10 : 4;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらないように）
+    if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > moveTh) dirDrag.started = true;
     if (dirDrag.started) updateDirMove(e.clientX, e.clientY);
   }
 });
@@ -3440,7 +3455,8 @@ renderer.domElement.addEventListener('pointerdown', e => {
     // 本体つかみでは起点(pipeEndSel)を保持＝選択した端を起点に移動できる（COP解除は端の再クリックで）
   }
   const o = originModelPos(part);
-  dirDrag = { part, sx: e.clientX, sy: e.clientY, startOrigin: o.clone(), planeY: o.y, dir: null, dist: 0, started: false, locked: false,
+  const sh = planeHitAt(e.clientX, e.clientY, o.y);   // 指を置いた地点の平面ヒット（移動量の基準。タップでズレないように）
+  dirDrag = { part, sx: e.clientX, sy: e.clientY, startOrigin: o.clone(), startHit: sh ? sh.clone() : o.clone(), planeY: o.y, dir: null, dist: 0, started: false, locked: false,
               group, primaryStartPos: part.position.clone(), annFollow: false };
   if (window.__annHasSel && window.__annHasSel()) { window.__annMoveStart(); dirDrag.annFollow = true; }   // 窓選択の線も一緒に直行移動
   controls.enabled = false;                // ドラッグ中はオービット停止
@@ -3449,7 +3465,8 @@ window.addEventListener('pointerup', e => {
   if (e.button !== 0) return;
   if (movingPart && movingByDrag) { dropMovingPart(); return; }   // ダブルクリック自由移動：離して確定
   if (pipeEndDrag) {                                  // 伸縮確定 or 端クリックで起点選択
-    if (!pipeEndDrag.moved) { pipeEndSel = (pipeEndSel === pipeEndDrag.grabbedEnd) ? null : pipeEndDrag.grabbedEnd; resetPipeRotState(); }   // クリック＝この端を起点に（同じ端を再クリックで起点解除＝COPモード）
+    if (!pipeEndDrag.moved) { pipeEndSel = (pipeEndSel === pipeEndDrag.grabbedEnd) ? null : pipeEndDrag.grabbedEnd; resetPipeRotState(); pipeLenSticky = false; }   // クリック＝この端を起点に（COP/傾け）。長さモードは解除
+    else { pipeLenSticky = true; }                    // スライド(ドラッグ)した＝離してもCOPに戻さず「長さ」入力モードを維持
     pipeEndDrag = null; controls.enabled = true; _idleSig = null; updateForm();
     return;
   }
@@ -3459,6 +3476,14 @@ window.addEventListener('pointerup', e => {
   if (dirDrag.started) { dirDrag.locked = true; updateForm(); }   // 方向ロック→距離入力可
   else { dirDrag = null; clearMarkers(); _idleSig = null; }       // ドラッグせず＝選択のみ（補助線消去・端表示は再判定）
 });
+
+// iPad：3Dビューに触れたら、開いている入力欄を確定してフォーカスを外す（＝キーボードを閉じる）。
+// フローティング/テンキーのキーボードには改行(Enter)キーが無いため、画面タップで閉じられるようにする。
+// blur で change が発火し、入力値もそのまま確定される。（captureで最初に実行）
+renderer.domElement.addEventListener('pointerdown', () => {
+  const ae = document.activeElement;
+  if (ae && /^(INPUT|TEXTAREA)$/.test(ae.tagName) && typeof ae.blur === 'function') ae.blur();
+}, true);
 
 // ビュー上のクリック：配置中は配置／移動中は確定／それ以外は選択。
 // いずれも視点ドラッグと区別するため移動量をみる。
@@ -3559,6 +3584,9 @@ window.addEventListener('pointerup', e => {
 window.addEventListener('keydown', e => {
   if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) {
     if (e.key === 'Escape') e.target.blur();   // 入力欄でEsc＝入力モード解除（フォーカスを外す）
+    // iPad保険：個別ハンドラの無い入力欄（パイプ長さ・図面欄・材質欄など）も Enter で確定＆キーボードを閉じる。
+    // 専用ハンドラを持つ欄は e.stopPropagation() するためここへ来ない（各自で blur 済み）。
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur();
     return;                                     // それ以外は入力優先で無視
   }
   if (e.key === 'Escape') {
@@ -5752,7 +5780,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     inp.addEventListener('change', () => { if (inp.value.trim() === '') return; applyLineLegs(false); });
     inp.addEventListener('keydown', e => {
       e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); applyLineLegs(true); }
+      if (e.key === 'Enter') { e.preventDefault(); applyLineLegs(true); inp.blur(); }   // 確定＋キーボードを閉じる（iPad）
       else if (e.key === 'Escape') { e.preventDefault(); inp.blur(); }
     });
   });
@@ -5762,7 +5790,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     lnD.addEventListener('change', () => { if (lnD.value.trim() === '') return; applyLineDistance(false); });
     lnD.addEventListener('keydown', e => {
       e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); applyLineDistance(true); }
+      if (e.key === 'Enter') { e.preventDefault(); applyLineDistance(true); lnD.blur(); }   // 確定＋キーボードを閉じる（iPad）
       else if (e.key === 'Escape') { e.preventDefault(); lnD.blur(); }
     });
   }

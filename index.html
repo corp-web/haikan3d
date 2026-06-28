@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>配管3D — SKT-HD ♦</title>
 <style>
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }   /* iPad長押しのコピー/検索メニュー・テキスト選択を無効化 */
+  input, textarea { -webkit-touch-callout: default; -webkit-user-select: text; user-select: text; }   /* 値の入力欄だけは選択・編集できる */
   html, body { margin: 0; height: 100%; overflow: hidden;
     font-family: "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif; background: #0d1326; }
   #viewport { position: fixed; inset: 0; }
@@ -537,6 +539,6 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260628h"></script>
+  <script src="app.js?v=20260628o"></script>
 </body>
 </html>
