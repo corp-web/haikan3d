@@ -2492,6 +2492,7 @@ function startFollow(tool, tile, x, y) {
   });
   modelGroup.add(followPreview);
   updateFollowPreview(x, y);
+  if (window.__syncTouchOrbit) window.__syncTouchOrbit();   // 配置中は1本指の視点回転を止める（線分の作図と同じ。2本指パン/ズームは維持）
 }
 function stopFollow() {
   if (followTool) followTool.tile.classList.remove('selected');
@@ -2502,6 +2503,7 @@ function stopFollow() {
   }
   followTool = null;
   clearMarkers();
+  if (window.__syncTouchOrbit) window.__syncTouchOrbit();   // 配置終了＝1本指の視点回転を元に戻す
 }
 // プレビューを「起点が指す点」に置く＋向き適用＋機点スナップ
 function updateFollowPreview(clientX, clientY) {
@@ -5202,7 +5204,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     syncTouchOrbit();
   }
   // タッチ操作：作図モード中／Ctrl ON 中は1本指の視点回転を無効化（1本指＝作図・窓選択／2本指＝パン・ズームは維持）
-  function syncTouchOrbit() { if (controls && controls.touches) controls.touches.ONE = (drawActive() || touchCtrl) ? null : THREE.TOUCH.ROTATE; }
+  function syncTouchOrbit() { if (controls && controls.touches) controls.touches.ONE = (drawActive() || touchCtrl || followTool) ? null : THREE.TOUCH.ROTATE; }
   window.__syncTouchOrbit = syncTouchOrbit;
   // ---- 描画用スナップ＆点決め ----
   // 注釈レコードのスナップ点（起点）。線分＝端点＋中点／円＝中心＋四半円点(±X,±Z)／寸法ほか＝両端。
