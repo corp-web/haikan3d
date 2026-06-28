@@ -5476,6 +5476,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }));
     m.position.copy(p); m.renderOrder = 999; lineGuideGroup.add(m);
   }
+  // 画面に正対する十字（クロス）カーソル。modelGroup は無変換なのでローカル＝ワールド。
+  // 大きさはカメラ距離/ズームに比例させ、見た目をほぼ一定に保つ。
+  function guideCross(p, color) {
+    const cam = activeCam();
+    const right = new V3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+    const up = new V3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+    const s = cam.isOrthographicCamera
+      ? (cam.top - cam.bottom) / (cam.zoom || 1) * 0.025
+      : cam.position.distanceTo(p) * 0.02;
+    const g = new THREE.BufferGeometry().setFromPoints([
+      p.clone().addScaledVector(right, -s), p.clone().addScaledVector(right, s),
+      p.clone().addScaledVector(up,    -s), p.clone().addScaledVector(up,    s),
+    ]);
+    const ln = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }));
+    ln.renderOrder = 999; lineGuideGroup.add(ln);
+  }
   // 起点 a→終点 b の補助線。成分(X→Z→Y)を段状に分け、存在する脚ごとに補助線＋斜辺を引く。
   // これで X/Z/Y/L の入力欄に対応した補助線（X脚・Z脚・Y脚）がそれぞれ出る。
   function drawTriangle3D(a, b, vert, snapped) {
@@ -5755,9 +5771,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   //  ② 押す→ドラッグ→離す：1ジェスチャで起点～終点を確定。
   // どちらも確定後は確定待ち(locked)になり、脚入力で寸法を編集できる。
   let drawDown = null, drawRDown = null;
-  // タッチ/ペンの作図：AutoCAD iPad風に「1本指でドラッグ→離した所に点が決まる／2本指で視点移動」。
+  // タッチ/ペンの作図：1本指でドラッグ＝十字カーソルの位置決め（離してもまだ確定しない）、
+  // タップ＝その点を確定。2本指は視点パン/ズーム（その間は点を打たない）。
   const drawPointers = new Set();   // 現在キャンバスに触れているタッチ/ペンの本数を数える
   let drawMulti = false;            // 2本指以上＝視点操作中（その間は点を打たない）
+  const TAP_MOVE = 10;              // 離すまでの移動が この距離(px)以内なら「タップ」＝確定。超えたら位置決めのみ
   // ---- 寸法線の「逃げ」（補助線の長さ）調整 ----
   // 2点目確定後、カーソル移動で寸法線を起点から離す距離を決め、3回目のクリックで確定する。
   function startDimAdjust() {
@@ -5837,10 +5855,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     return rec;
   }
-  // ---- タッチ/ペン：押下では決めず、指/ペンを離した位置に1点ずつ打つ（AutoCAD iPad風） ----
-  // ドラッグ中はカーソル＝プレビューが追従し、離した所がその点になる。2本指の間は drawMulti で抑止。
+  // ---- タッチ/ペン：ドラッグで十字カーソルを位置決め（離してもまだ確定しない）、タップでその点を確定 ----
   function placeTouchPoint(e) {
-    if (!drawState.first) {                              // タップ1回目＝起点を決める
+    if (!drawState.first) {                              // タップ1回目＝起点を確定
       const r = pickFirstPoint(e.clientX, e.clientY);
       if (r.p) {
         drawState.first = r.p; drawState.cur = r.p.clone();
@@ -5849,7 +5866,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         clearPreview();
         if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);
       }
-    } else {                                             // タップ2回目＝終点で確定
+    } else {                                             // タップ2回目＝終点を確定
       const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
       const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
       if (r.p && drawState.mode === 'xline') r.p.y = drawState.first.y;
@@ -5857,6 +5874,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
       else if (drawState.mode === 'dim') startDimAdjust();                    // 平行寸法は確定せず逃げ調整へ
       else commitGuide();
+      clearLineGuide();                                  // 残った十字カーソルを消す
     }
   }
   window.addEventListener('pointerdown', e => {
@@ -5970,9 +5988,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const moved = Math.hypot(e.clientX - drawDown.x, e.clientY - drawDown.y);
     drawDown = null;
     e.stopImmediatePropagation();
-    if (touch) {                                        // タッチ/ペン：1本指で離した位置に点を打つ（移動量は問わない＝AutoCAD風）
-      if (dimAdj) { commitDimWithOffset(); return; }    // 寸法の逃げをこの位置で確定
-      placeTouchPoint(e);                               // 1点目／2点目で確定
+    if (touch) {                                        // タッチ/ペン
+      if (moved > TAP_MOVE) return;                     // ドラッグ＝位置決めのみ。十字カーソルは離した所に残り、まだ確定しない
+      if (dimAdj) { commitDimWithOffset(); return; }    // タップ＝寸法の逃げをこの位置で確定
+      placeTouchPoint(e);                               // タップ＝1点目／2点目を確定
       return;
     }
     if (!drawState.first) return;
@@ -6042,11 +6061,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       annGroup.add(drawState.preview);
       return;
     }
-    if (!drawState.first) {                             // ホバー/スライド中：カーソルとスナップ印
+    if (!drawState.first) {                             // ドラッグ中：十字カーソル（離した所に残る）とスナップ印
       clearLineGuide();
       const r = pickFirstPoint(e.clientX, e.clientY);
-      if (r.p && r.snapped) guideDot(r.p, 0x39ff8a, 0.0042);                       // 吸着＝緑
-      else if (r.p && e.pointerType !== 'mouse') guideDot(r.p, 0xffd479, 0.0036);   // タッチ/ペン＝黄カーソル（吸着前でも位置が見える）
+      if (r.p && e.pointerType !== 'mouse') guideCross(r.p, r.snapped ? 0x39ff8a : 0x49c5ff);   // タッチ/ペン＝十字カーソル（吸着＝緑）
+      else if (r.p && r.snapped) guideDot(r.p, 0x39ff8a, 0.0042);                                // マウスは従来どおり吸着印
       return;
     }
     const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし（常に水平）
@@ -6060,6 +6079,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; });
     annGroup.add(drawState.preview);
     if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, r.p, drawState.vert, drawState.snapped);   // 円は脚三角形を出さない
+    else clearLineGuide();
+    if (e.pointerType !== 'mouse') guideCross(r.p, drawState.snapped ? 0x39ff8a : 0x49c5ff);   // タッチ/ペン＝2点目も十字カーソル（離した所に残る）
   }, true);
   window.addEventListener('contextmenu', e => {
     if (!drawActive()) return;
