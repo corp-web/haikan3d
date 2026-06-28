@@ -220,6 +220,9 @@ const gizmo = {};
 // ===================================================================
 const AXIS_PX = 84;            // 描画サイズ(px)・ビューキューブより小さく
 const AXIS_MARGIN = 12;
+// タッチコントローラー（向き/ひねり/シフト/コントロール/削除/取消・左下に幅54pxで縦並び）と
+// 座標軸インジケータが重なるため、ボタン列の右側へ少し逃がす横オフセット。
+const AXIS_X_SHIFT = 150;      // ボタン列(12〜66px)を十分に避けるよう右へ大きくずらす
 const axisGizmo = {};
 (function buildAxisGizmo() {
   const aScene = new THREE.Scene();
@@ -487,7 +490,7 @@ function renderAxisGizmo() {
   axisGizmo.cam.up.copy(camera.up);
   axisGizmo.cam.lookAt(0, 0, 0);
   const w = renderer.domElement.clientWidth, h = renderer.domElement.clientHeight;
-  const x = AXIS_MARGIN, y = AXIS_MARGIN + RIBBON_H;   // 左下（WebGLは下原点）。下部リボンに隠れぬよう上へ逃がす
+  const x = AXIS_MARGIN + AXIS_X_SHIFT, y = AXIS_MARGIN + RIBBON_H;   // 左下（WebGLは下原点）。下部リボンに隠れぬよう上へ逃がし、タッチボタン列を避けて右へずらす
   renderer.setViewport(x, y, AXIS_PX, AXIS_PX);
   renderer.setScissor(x, y, AXIS_PX, AXIS_PX);
   renderer.setScissorTest(true);
