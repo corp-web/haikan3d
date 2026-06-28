@@ -3701,9 +3701,13 @@ function startDimSkewSpin(rec) {
 }
 // 寸法線スピナーの連鎖対象。next='dir'（配置直後：立面なら方位スピナーへ）／'el'（再選択：EL調整へ）
 let _dimChainRec = null, _dimChainNext = null;
+// スピナーをタッチで開く時は true：自動フォーカスせずキーボードを出さない（▲▼ボタンで操作・3D画面タップで確定）。
+// 逃げ量→方位の連鎖でも引き継ぐので、立面寸法の再調整も通してキーボードレスになる。endNudge の最後で false に戻す。
+let _spinNoKbd = false;
 // 寸法線の逃げ量スピナー（配置確定直後・再選択時に呼ばれる）
-function startDimOffSpin(rec, next) {
+function startDimOffSpin(rec, next, noKbd) {
   if (!(window.__dimOffSpinStart && window.__dimOffSpinStart(rec))) return;
+  _spinNoKbd = !!noKbd;
   _nudgeMode = 'dimoff';
   _dimChainRec = rec;
   _dimChainNext = next || 'dir';
@@ -3711,7 +3715,7 @@ function startDimOffSpin(rec, next) {
   rotAInput.value = window.__dimOffSpinStartMm ? String(window.__dimOffSpinStartMm()) : '0';
   positionRotForm(0, 0);
   rotForm.style.display = 'flex';
-  rotAInput.focus(); rotAInput.select();
+  if (!_spinNoKbd) { rotAInput.focus(); rotAInput.select(); }   // タッチ再選択時はキーボードを出さない
   if (typeof updateForm === 'function') updateForm();
 }
 // 立面寸法線の逃げ方位スピナー（逃げ量スピナーの後に呼ばれる）
@@ -3722,7 +3726,7 @@ function startDimDirSpin(rec) {
   rotAInput.value = window.__dimDirSpinStartDeg ? window.__dimDirSpinStartDeg().toFixed(1) : '0';
   positionRotForm(0, 0);
   rotForm.style.display = 'flex';
-  rotAInput.focus(); rotAInput.select();
+  if (!_spinNoKbd) { rotAInput.focus(); rotAInput.select(); }   // 逃げ量からの連鎖がタッチなら方位もキーボードレス
   if (typeof updateForm === 'function') updateForm();
 }
 function positionRotForm(cx, cy) {
@@ -3786,6 +3790,7 @@ function endRotSpin(commit) {
       if (window.__annSelectRec) window.__annSelectRec(r);
     }
   }
+  _spinNoKbd = false;   // 連鎖が終わってスピナーが閉じた＝次回は通常どおり（方位へ連鎖する時は上で return 済みなのでここは通らない）
   if (typeof updateForm === 'function') updateForm();   // スピナーを閉じたらEL入力等を出し直す
 }
 renderer.domElement.addEventListener('pointerdown', e => {
@@ -7242,9 +7247,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (typeof updateForm === 'function') updateForm();   // 移動後はELフォームを戻す
       // 構築線の再選択（クリックのみ）＝EL欄へ即フォーカス → Enterで角度 → Enterで閉じの連鎖を開始
       if (!moved && lineSel && lineSel.type === 'xline') focusElInputSoon();
-      // 寸法線（直線寸法）の再選択では逃げ量スピナーを自動で開かない。
-      //   タッチで再選択＝端点(補助線の先)を掴んで動かしたいだけなのに、スピナーが開いて寸法が動く/キーボードが出る不具合のため無効化。
-      //   （逃げ量は作成直後のスピナー、または本体ドラッグで調整できる）
+      // 寸法線（平行/立面）の本体クリックのみ再選択＝逃げ量スピナーを開いて逃げを再調整。
+      //   タッチではキーボードを出さず ▲▼ ボタンで1mm刻み→3D画面タップで確定（立面は続けて方位スピナーへ連鎖）。
+      //   端点(補助線の先)の付け替えは端の近くを掴んだ時だけ(=nearEnd)なので、!nearEnd を条件にして競合させない。
+      else if (!moved && !nearEnd && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir)
+        startDimOffSpin(lineSel, null, e.pointerType !== 'mouse');
       // 半径/直径/角度の再選択（クリックのみ）＝逃げ（リーダー長・円弧半径/位置）の再調整に入る
       else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind)) drawState.dimReadjust = { rec: lineSel };
     }
