@@ -436,6 +436,14 @@ function inGizmo(px, py) {
   return px >= r.x0 && px <= r.x0 + r.size && py >= r.y0 && py <= r.y0 + r.size;
 }
 
+// ortho解除の判定：pointerdown開始時点で「何か選択中」だったかを最初に記録する
+// （後段の deselect より前に走るよう、window capture で早く登録）。
+let _orthoHadSel = false;
+window.addEventListener('pointerdown', () => {
+  _orthoHadSel = !!(selectedPart || (selectedParts && selectedParts.size)
+                 || (window.__annHasSel && window.__annHasSel()));
+}, true);
+
 renderer.domElement.addEventListener('pointerdown', e => {
   const rect = renderer.domElement.getBoundingClientRect();
   const px = e.clientX - rect.left, py = e.clientY - rect.top;
@@ -443,8 +451,15 @@ renderer.domElement.addEventListener('pointerdown', e => {
     gizmoDown = { x: e.clientX, y: e.clientY };
     return;
   }
-  // ギズモ外をドラッグし始めたら、平行投影モードを抜けて自由操作へ
-  if (useOrtho && !tween) exitOrtho();
+  // ギズモ外の「空きスペース」ドラッグでだけ平行投影を抜けて自由操作へ。
+  //   ・何か選択中（部品/線/寸法を編集中）＝抜けない（編集中に3D空間が動くのを防ぐ）
+  //   ・部品や線/寸法の上＝抜けない（選択・掴みなので視点を動かさない）
+  //   空きスペースで視点を回したい時は、一度タップして選択を解除してからドラッグ。
+  if (useOrtho && !tween && !_orthoHadSel
+      && !(typeof pickPlacedAt === 'function' && pickPlacedAt(e.clientX, e.clientY))
+      && !(window.__pickAnnAt && window.__pickAnnAt(e.clientX, e.clientY))) {
+    exitOrtho();
+  }
 });
 
 renderer.domElement.addEventListener('pointerup', e => {
@@ -6949,6 +6964,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (best && bestExt && typeof pickPlacedAt === 'function' && pickPlacedAt(cx, cy)) return null;
     return best;
   }
+  window.__pickAnnAt = (cx, cy) => pickAnnAt(cx, cy);   // ortho解除判定用：その位置に線/寸法があるか
   // カーソル近傍の端点（0=a,1=b）。無ければ null。
   function endpointAt(rec, cx, cy, touch) {
     if (rec.type === 'xline') return null;   // 構築線は端点伸縮しない（中心グリップで全体移動のみ）
