@@ -5660,19 +5660,26 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!drawState.first || !drawState.cur) { hideLineBoxes(); return; }
     // 構築線（無限長）は距離Lが無意味なので脚X/Z/Yのみ出し、距離Lは隠す。中心(a)からの向き入力に使う
     const isXlineNow = drawState.mode === 'xline' || (drawState.editRec && drawState.editRec.type === 'xline');
+    const isLineNow = drawState.mode === 'line' || (drawState.editRec && drawState.editRec.type === 'line');
+    // 線分：その方向の「長さ L」を1欄だけ出す（プレビュー＝2点目前 も 確定線の編集 も共通）。
+    // X/Z/Y を並べない＝値を消しても別軸の欄が出ず、方向が変わらない。
+    // 方向は「現在の向き」、長さ0に潰れたら「保持中の editDir」を使い、欄と方向を保つ。
+    if (isLineNow && !isXlineNow) {
+      if (lnXBox) lnXBox.style.display = 'none';
+      if (lnZBox) lnZBox.style.display = 'none';
+      if (lnYBox) lnYBox.style.display = 'none';
+      const a0 = drawState.first;
+      const dlen = a0.distanceTo(drawState.cur);
+      const dir = dlen >= 1e-6 ? drawState.cur.clone().sub(a0).normalize() : (drawState.editDir ? drawState.editDir.clone() : null);
+      if (!dir) { if (lnDBox) lnDBox.style.display = 'none'; return; }   // まだ方向が無い＝出さない
+      const bShown = dlen >= 0.003 ? drawState.cur : a0.clone().addScaledVector(dir, 0.001);
+      placeDistanceBox(a0, bShown);   // 距離 L のみ（方向は固定）
+      return;
+    }
     // 1点目を置いただけ（ほぼ動いていない）うちは脚ボックスを出さない。動き出してから表示
     if (drawState.first.distanceTo(drawState.cur) < 0.003) { hideLineBoxes(); return; }
     const a = drawState.first, b = drawState.cur;
     if (isXlineNow) { hideLineBoxes(); showXlineAngle(a, b); return; }   // 構築線は寸法を出さず角度のみ
-    // プレビュー（2点目を決める前＝editRec無し）：その方向の「長さ L」を1欄だけ出す。
-    // X/Z/Y を並べると混乱する（タッチの微ブレで複数軸が出る）ため、線分はその方向の長さで入力する。
-    if (!drawState.editRec && drawState.mode === 'line') {
-      if (lnXBox) lnXBox.style.display = 'none';
-      if (lnZBox) lnZBox.style.display = 'none';
-      if (lnYBox) lnYBox.style.display = 'none';
-      placeDistanceBox(a, b);   // 距離 L のみ
-      return;
-    }
     if (drawState.vert) {
       const dx = b.x - a.x, dz = b.z - a.z, dy = b.y - a.y, useX = Math.abs(dx) >= Math.abs(dz);
       const corner = new V3(b.x, a.y, b.z);
@@ -5785,6 +5792,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (preview) {   // プレビューはほぼ軸に沿っていれば主要軸へスナップ（Z方向の線がきれいにZになる）
       const ax = Math.abs(dir.x), ay = Math.abs(dir.y), az = Math.abs(dir.z), mx = Math.max(ax, ay, az);
       if (mx > 0.97) dir = new V3(ax === mx ? Math.sign(dir.x) : 0, ay === mx ? Math.sign(dir.y) : 0, az === mx ? Math.sign(dir.z) : 0);
+      drawState.editDir = dir.clone();   // 固定方向として保持（値を消しても同じ向きで引き直せる）
     }
     const D = Math.max(0, (parseFloat(lnD.value) || 0) / 1000);
     const b = a.clone().addScaledVector(dir, D);
