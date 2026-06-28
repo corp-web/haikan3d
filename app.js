@@ -6950,11 +6950,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return best;
   }
   // カーソル近傍の端点（0=a,1=b）。無ければ null。
-  function endpointAt(rec, cx, cy) {
+  function endpointAt(rec, cx, cy, touch) {
     if (rec.type === 'xline') return null;   // 構築線は端点伸縮しない（中心グリップで全体移動のみ）
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
     const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z }; };
-    const sa = scr(rec.a), sb = scr(rec.b), TH = SNAP_PX + 6;
+    const sa = scr(rec.a), sb = scr(rec.b), TH = SNAP_PX + (touch ? 22 : 6);   // タッチは指が太いので端点掴みを広げる（外して視点が回るのを防ぐ）
     const da = Math.hypot(sa.x - cx, sa.y - cy), db = Math.hypot(sb.x - cx, sb.y - cy);
     if (rec.type === 'circle') return (db < TH && sb.z < 1) ? 1 : null;   // 円は半径ハンドル(b)だけ掴める（中心aは移動グリップ）
     if (da <= db && da < TH && sa.z < 1) return 0;
@@ -7067,7 +7067,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           e.stopImmediatePropagation(); return;
         }
       } else {
-        const end = endpointAt(lineSel, e.clientX, e.clientY);
+        const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');
         if (end !== null) {
           if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで別の機点へ付け替える
             lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
@@ -7218,8 +7218,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (typeof updateForm === 'function') updateForm();   // 移動後はELフォームを戻す
       // 構築線の再選択（クリックのみ）＝EL欄へ即フォーカス → Enterで角度 → Enterで閉じの連鎖を開始
       if (!moved && lineSel && lineSel.type === 'xline') focusElInputSoon();
-      // 寸法線の再選択（クリックのみ）＝逃げ量スピナーを開く（EL機能は廃止）。引出は値（文字）クリックのみ編集なのでここでは何もしない
-      else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir) startDimOffSpin(lineSel);
+      // 寸法線（直線寸法）の再選択では逃げ量スピナーを自動で開かない。
+      //   タッチで再選択＝端点(補助線の先)を掴んで動かしたいだけなのに、スピナーが開いて寸法が動く/キーボードが出る不具合のため無効化。
+      //   （逃げ量は作成直後のスピナー、または本体ドラッグで調整できる）
       // 半径/直径/角度の再選択（クリックのみ）＝逃げ（リーダー長・円弧半径/位置）の再調整に入る
       else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind)) drawState.dimReadjust = { rec: lineSel };
     }
