@@ -5834,6 +5834,29 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     return rec;
   }
+  // ---- タッチ/ペン：押下では点を決めず、タップ（ほぼ動かさず離す）で1点ずつ打つ ----
+  // スライド（指/ペンを大きく動かす）はカーソル＝プレビューを動かすだけで確定しない。
+  const TAP_MOVE = 10;   // この距離(px)以内で離したら「タップ」＝確定とみなす
+  function placeTouchPoint(e) {
+    if (!drawState.first) {                              // タップ1回目＝起点を決める
+      const r = pickFirstPoint(e.clientX, e.clientY);
+      if (r.p) {
+        drawState.first = r.p; drawState.cur = r.p.clone();
+        drawState.vert = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
+        drawState.snapped = r.snapped; drawState.locked = false; drawState.editRec = null;
+        clearPreview();
+        if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);
+      }
+    } else {                                             // タップ2回目＝終点で確定
+      const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
+      const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
+      if (r.p && drawState.mode === 'xline') r.p.y = drawState.first.y;
+      if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
+      if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
+      else if (drawState.mode === 'dim') startDimAdjust();                    // 平行寸法は確定せず逃げ調整へ
+      else commitGuide();
+    }
+  }
   window.addEventListener('pointerdown', e => {
     if (!drawActive()) return;
     if (e.button === 2) { drawRDown = { x: e.clientX, y: e.clientY }; return; }   // 右=視点パン（横取りしない）
@@ -5897,13 +5920,18 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       drawDown = null; e.stopImmediatePropagation();
       return;
     }
-    if (drawState.mode === 'dim' && drawState.dimAdjust) {   // 寸法線：3回目クリック＝補助線の長さ（逃げ）を確定
-      commitDimWithOffset();
-      drawDown = null;
+    if (drawState.mode === 'dim' && drawState.dimAdjust) {   // 寸法線：3回目＝補助線の長さ（逃げ）を確定
+      if (e.pointerType === 'mouse') { commitDimWithOffset(); drawDown = null; }   // マウス＝クリックで即確定
+      else drawDown = { x: e.clientX, y: e.clientY, touch: true, dimAdj: true };   // タッチ/ペン＝離してタップなら確定（スライド＝逃げ調整）
       e.stopImmediatePropagation();
       return;
     }
     if (drawState.locked) finishGuide();                // 直前の確定待ちを終え、新しい線を始める
+    if (e.pointerType !== 'mouse') {                    // タッチ/ペン：押下では決めない。スライドでカーソル移動／離してタップで点を打つ
+      drawDown = { x: e.clientX, y: e.clientY, touch: true };
+      e.stopImmediatePropagation();
+      return;
+    }
     const hadFirst = !!drawState.first;
     if (!hadFirst) {                                    // ①の1回目／②の押下＝起点を決める
       const r = pickFirstPoint(e.clientX, e.clientY);
@@ -5925,9 +5953,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.addEventListener('pointerup', e => {
     if (!drawActive() || e.button !== 0 || !drawDown) return;
     const moved = Math.hypot(e.clientX - drawDown.x, e.clientY - drawDown.y);
-    const armed = drawDown.armed;
+    const touch = drawDown.touch, dimAdj = drawDown.dimAdj, armed = drawDown.armed;
     drawDown = null;
     e.stopImmediatePropagation();
+    if (touch) {                                        // タッチ/ペン：タップ＝確定／スライド＝カーソル移動のみ
+      if (moved > TAP_MOVE) return;                     // スライド（大きく動いた）は確定しない＝カーソルだけ移動
+      if (dimAdj) { commitDimWithOffset(); return; }    // 寸法の逃げをこの位置で確定
+      placeTouchPoint(e);                               // この場所で1点ずつ打つ／2点目で確定
+      return;
+    }
     if (!drawState.first) return;
     if (armed) {                                        // 起点を立てた押下
       if (moved > 6) {
@@ -5989,10 +6023,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       annGroup.add(drawState.preview);
       return;
     }
-    if (!drawState.first) {                             // ホバー中：スナップ印だけ出す（吸着可視化）
+    if (!drawState.first) {                             // ホバー/スライド中：カーソルとスナップ印
       clearLineGuide();
       const r = pickFirstPoint(e.clientX, e.clientY);
-      if (r.snapped && r.p) guideDot(r.p, 0x39ff8a, 0.0042);
+      if (r.p && r.snapped) guideDot(r.p, 0x39ff8a, 0.0042);                       // 吸着＝緑
+      else if (r.p && e.pointerType !== 'mouse') guideDot(r.p, 0xffd479, 0.0036);   // タッチ/ペン＝黄カーソル（吸着前でも位置が見える）
       return;
     }
     const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし（常に水平）
