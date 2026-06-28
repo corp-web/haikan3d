@@ -5755,6 +5755,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   //  ② 押す→ドラッグ→離す：1ジェスチャで起点～終点を確定。
   // どちらも確定後は確定待ち(locked)になり、脚入力で寸法を編集できる。
   let drawDown = null, drawRDown = null;
+  // タッチ/ペンの作図：AutoCAD iPad風に「1本指でドラッグ→離した所に点が決まる／2本指で視点移動」。
+  const drawPointers = new Set();   // 現在キャンバスに触れているタッチ/ペンの本数を数える
+  let drawMulti = false;            // 2本指以上＝視点操作中（その間は点を打たない）
   // ---- 寸法線の「逃げ」（補助線の長さ）調整 ----
   // 2点目確定後、カーソル移動で寸法線を起点から離す距離を決め、3回目のクリックで確定する。
   function startDimAdjust() {
@@ -5834,9 +5837,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     return rec;
   }
-  // ---- タッチ/ペン：押下では点を決めず、タップ（ほぼ動かさず離す）で1点ずつ打つ ----
-  // スライド（指/ペンを大きく動かす）はカーソル＝プレビューを動かすだけで確定しない。
-  const TAP_MOVE = 10;   // この距離(px)以内で離したら「タップ」＝確定とみなす
+  // ---- タッチ/ペン：押下では決めず、指/ペンを離した位置に1点ずつ打つ（AutoCAD iPad風） ----
+  // ドラッグ中はカーソル＝プレビューが追従し、離した所がその点になる。2本指の間は drawMulti で抑止。
   function placeTouchPoint(e) {
     if (!drawState.first) {                              // タップ1回目＝起点を決める
       const r = pickFirstPoint(e.clientX, e.clientY);
@@ -5866,6 +5868,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof maybeCloseFmtMenu === 'function' && maybeCloseFmtMenu()) { e.stopImmediatePropagation(); drawDown = null; return; }
     const rect = renderer.domElement.getBoundingClientRect();
     if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;   // ビューキューブは通す
+    if (e.pointerType !== 'mouse') {                     // タッチ/ペン：本数を数え、2本目が触れたら視点操作＝作図しない
+      drawPointers.add(e.pointerId);
+      if (drawPointers.size >= 2) { drawMulti = true; drawDown = null; clearPreview(); clearLineGuide(); e.stopImmediatePropagation(); return; }
+    }
     if (drawState.mode === 'text') {                          // 文字：点をクリックして配置→そのまま入力
       const r = pickFirstPoint(e.clientX, e.clientY);
       if (r.p) {
@@ -5927,7 +5933,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return;
     }
     if (drawState.locked) finishGuide();                // 直前の確定待ちを終え、新しい線を始める
-    if (e.pointerType !== 'mouse') {                    // タッチ/ペン：押下では決めない。スライドでカーソル移動／離してタップで点を打つ
+    if (e.pointerType !== 'mouse') {                    // タッチ/ペン：押下では決めず、ドラッグでカーソル移動／離した位置に点を打つ
       drawDown = { x: e.clientX, y: e.clientY, touch: true };
       e.stopImmediatePropagation();
       return;
@@ -5951,15 +5957,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     e.stopImmediatePropagation();
   }, true);
   window.addEventListener('pointerup', e => {
-    if (!drawActive() || e.button !== 0 || !drawDown) return;
-    const moved = Math.hypot(e.clientX - drawDown.x, e.clientY - drawDown.y);
+    if (!drawActive() || e.button !== 0) return;
+    if (e.pointerType !== 'mouse') {                    // タッチ/ペン：離れた本数を反映
+      drawPointers.delete(e.pointerId);
+      if (drawMulti) {                                  // 2本指（視点操作）の指離し＝点は打たない
+        if (drawPointers.size === 0) drawMulti = false; // 全部離れたら通常へ戻す
+        drawDown = null; e.stopImmediatePropagation(); return;
+      }
+    }
+    if (!drawDown) return;
     const touch = drawDown.touch, dimAdj = drawDown.dimAdj, armed = drawDown.armed;
+    const moved = Math.hypot(e.clientX - drawDown.x, e.clientY - drawDown.y);
     drawDown = null;
     e.stopImmediatePropagation();
-    if (touch) {                                        // タッチ/ペン：タップ＝確定／スライド＝カーソル移動のみ
-      if (moved > TAP_MOVE) return;                     // スライド（大きく動いた）は確定しない＝カーソルだけ移動
+    if (touch) {                                        // タッチ/ペン：1本指で離した位置に点を打つ（移動量は問わない＝AutoCAD風）
       if (dimAdj) { commitDimWithOffset(); return; }    // 寸法の逃げをこの位置で確定
-      placeTouchPoint(e);                               // この場所で1点ずつ打つ／2点目で確定
+      placeTouchPoint(e);                               // 1点目／2点目で確定
       return;
     }
     if (!drawState.first) return;
@@ -5976,8 +5989,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       else commitGuide();                               // 同一点でゼロ長なら確定されず、起点を保持して継続
     }
   }, true);
+  window.addEventListener('pointercancel', e => {       // OSがタッチを取り消した時：本数と状態を片付ける
+    if (e.pointerType === 'mouse') return;
+    drawPointers.delete(e.pointerId);
+    if (drawPointers.size === 0) { drawMulti = false; drawDown = null; }
+  }, true);
   window.addEventListener('pointermove', e => {
     if (!drawActive()) return;
+    if (drawMulti) return;                              // 2本指＝視点操作中はプレビューを動かさない
     if (overLineBox(e.clientX, e.clientY)) return;      // 脚入力欄の上ではプレビュー凍結（方向を保つ）
     if (drawState.locked) return;                       // 確定待ちは固定（脚入力で編集）
     if (drawState.mode === 'dim' && dimKind === 'angle') {   // 角度：2本目を取った後だけ円弧プレビューを出す（選択前は何も出さない）
