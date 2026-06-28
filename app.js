@@ -3932,6 +3932,14 @@ let prevT = performance.now();
   if (tween) updateTween(dt);
   else if (!useOrtho) controls.update();   // 平行投影固定中は controls を回さない
   if (useOrtho) syncOrtho();
+  // 視点ロック（透視投影時）：コマンド/アイテム挿入時と同様、選択中・配置/移動中は3D空間を固定。
+  // 何も選択していない空き状態のときだけ視点操作を許可（空きスペースのドラッグで回せる）。
+  if (!useOrtho && !tween) {
+    const lock = followTool || movingPart || dirDrag || pipeEndDrag
+              || selectedPart || (selectedParts && selectedParts.size)
+              || (window.__annHasSel && window.__annHasSel());
+    controls.enabled = !lock;
+  }
   updateIdleMarkers();         // 選択中パイプの両端センターを表示（アイドル時）
   renderer.clear();
   renderer.render(scene, activeCam());
