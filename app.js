@@ -5664,6 +5664,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (drawState.first.distanceTo(drawState.cur) < 0.003) { hideLineBoxes(); return; }
     const a = drawState.first, b = drawState.cur;
     if (isXlineNow) { hideLineBoxes(); showXlineAngle(a, b); return; }   // 構築線は寸法を出さず角度のみ
+    // プレビュー（2点目を決める前＝editRec無し）：その方向の「長さ L」を1欄だけ出す。
+    // X/Z/Y を並べると混乱する（タッチの微ブレで複数軸が出る）ため、線分はその方向の長さで入力する。
+    if (!drawState.editRec && drawState.mode === 'line') {
+      if (lnXBox) lnXBox.style.display = 'none';
+      if (lnZBox) lnZBox.style.display = 'none';
+      if (lnYBox) lnYBox.style.display = 'none';
+      placeDistanceBox(a, b);   // 距離 L のみ
+      return;
+    }
     if (drawState.vert) {
       const dx = b.x - a.x, dz = b.z - a.z, dy = b.y - a.y, useX = Math.abs(dx) >= Math.abs(dz);
       const corner = new V3(b.x, a.y, b.z);
@@ -5772,6 +5781,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       dir = drawState.editDir.clone();          // 長さ0でも直前の向きで伸ばし直せる
     } else {
       return;                                   // 向きが全く無い時のみ何もしない
+    }
+    if (preview) {   // プレビューはほぼ軸に沿っていれば主要軸へスナップ（Z方向の線がきれいにZになる）
+      const ax = Math.abs(dir.x), ay = Math.abs(dir.y), az = Math.abs(dir.z), mx = Math.max(ax, ay, az);
+      if (mx > 0.97) dir = new V3(ax === mx ? Math.sign(dir.x) : 0, ay === mx ? Math.sign(dir.y) : 0, az === mx ? Math.sign(dir.z) : 0);
     }
     const D = Math.max(0, (parseFloat(lnD.value) || 0) / 1000);
     const b = a.clone().addScaledVector(dir, D);
