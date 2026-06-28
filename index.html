@@ -539,6 +539,8 @@
 
   <script src="lib/three.min.js"></script>
   <script src="lib/OrbitControls.js"></script>
-  <script src="app.js?v=20260629d"></script>
+  <!-- app.js は読み込み時刻でキャッシュ回避して取得（GitHub PagesがHTMLを10分キャッシュしても、常に最新JSを読む）。
+       v=20260629d 相当。安定後は固定バージョンに戻してよい。 -->
+  <script>document.write('<scr' + 'ipt src="app.js?v=' + Date.now() + '"></scr' + 'ipt>');</script>
 </body>
 </html>
