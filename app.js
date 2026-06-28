@@ -222,7 +222,7 @@ const AXIS_PX = 84;            // 描画サイズ(px)・ビューキューブよ
 const AXIS_MARGIN = 12;
 // タッチコントローラー（向き/ひねり/シフト/コントロール/削除/取消・左下に幅54pxで縦並び）と
 // 座標軸インジケータが重なるため、ボタン列の右側へ少し逃がす横オフセット。
-const AXIS_X_SHIFT = 150;      // ボタン列(12〜66px)を十分に避けるよう右へ大きくずらす
+const AXIS_X_SHIFT = 80;       // ボタン列(12〜66px)の右へ。重ならず、かつ寄り過ぎない位置
 const axisGizmo = {};
 (function buildAxisGizmo() {
   const aScene = new THREE.Scene();
@@ -5651,6 +5651,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function clearDrawTemp() {    // 描画途中の状態を全消去（線は残す）
     drawState.first = null; drawState.cur = null; drawState.vert = false;
     drawState.locked = false; drawState.editRec = null; drawState.snapped = false;
+    drawState.editDir = null;   // 端点編集用に保持していた向きを解除
     drawState.dimAdjust = null; drawState.dimOff = 0; drawState.dimDir = null;   // 寸法線の逃げ調整状態も解除
     drawState.circDim = null;   // 半径/直径：ロック中の円も解除
     drawState.dimReadjust = null;   // 寸法の逃げ再調整も解除
@@ -5699,9 +5700,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 距離入力 → 現在の向きを保ったまま、その長さに終点を伸縮
   function applyLineDistance(finalize) {
     const rec = drawState.editRec; if (!rec) return;
-    const a = rec.a, dir = rec.b.clone().sub(a), len = dir.length();
-    if (len < 1e-9) return;
-    dir.divideScalar(len);
+    const a = rec.a;
+    let dir = rec.b.clone().sub(a); const len = dir.length();
+    if (len >= 1e-9) {
+      dir.divideScalar(len);
+      drawState.editDir = dir.clone();          // 有効な向きを保持（0に潰れた後の復元用）
+    } else if (drawState.editDir) {
+      dir = drawState.editDir.clone();          // 長さ0でも直前の向きで伸ばし直せる
+    } else {
+      return;                                   // 向きが全く無い時のみ何もしない
+    }
     const D = Math.max(0, (parseFloat(lnD.value) || 0) / 1000);
     rec.b.copy(a).addScaledVector(dir, D); rebuildAnn(rec);
     drawState.cur = rec.b.clone();
@@ -5711,8 +5719,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   [lnX, lnZ, lnY].forEach(inp => {
     if (!inp) return;
-    inp.addEventListener('input', () => applyLineLegs(false));    // スピナー長押し・連続増減でも追従
-    inp.addEventListener('change', () => applyLineLegs(false));
+    // 空欄の間は適用しない（全消去しても線を潰さず＝消さず、続けて打ち直せる）
+    inp.addEventListener('input', () => { if (inp.value.trim() === '') return; applyLineLegs(false); });    // スピナー長押し・連続増減でも追従
+    inp.addEventListener('change', () => { if (inp.value.trim() === '') return; applyLineLegs(false); });
     inp.addEventListener('keydown', e => {
       e.stopPropagation();
       if (e.key === 'Enter') { e.preventDefault(); applyLineLegs(true); }
@@ -5720,8 +5729,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     });
   });
   if (lnD) {
-    lnD.addEventListener('input', () => applyLineDistance(false));   // スピナー長押しでも追従
-    lnD.addEventListener('change', () => applyLineDistance(false));
+    // 空欄の間は適用しない（全消去でも線を残し、続けて入力できる）
+    lnD.addEventListener('input', () => { if (lnD.value.trim() === '') return; applyLineDistance(false); });   // スピナー長押しでも追従
+    lnD.addEventListener('change', () => { if (lnD.value.trim() === '') return; applyLineDistance(false); });
     lnD.addEventListener('keydown', e => {
       e.stopPropagation();
       if (e.key === 'Enter') { e.preventDefault(); applyLineDistance(true); }
