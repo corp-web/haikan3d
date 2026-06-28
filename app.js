@@ -2039,6 +2039,7 @@ let followOrient = DEFAULT_DIR;  // 配置の方向(dir) index（右クリック
 let followRoll = 0;              // 配置のひねり(roll)（Shift+右クリックで切替）
 let followQuat = null;           // 追従中に線分式回転で保持する向き（パイプ・エルボ・キャップ用。null=離散dir/roll系）
 let followPreview = null;     // 追従中の半透明3Dプレビュー（実物と同じ形）
+let followParked = null;      // タッチ：直近にドラッグして離した位置(client座標)。設置タップはこの位置に置く（タップ座標に引っ張られない）
 
 // ---- 再移動（配置済み部品を掴んで動かす） ----
 let movingPart = null;        // 移動中の配置済み部品（null=移動していない）
@@ -2502,6 +2503,7 @@ function stopFollow() {
     followPreview = null;
   }
   followTool = null;
+  followParked = null;
   clearMarkers();
   if (window.__syncTouchOrbit) window.__syncTouchOrbit();   // 配置終了＝1本指の視点回転を元に戻す
 }
@@ -3374,7 +3376,11 @@ window.addEventListener('pointermove', e => {
     if (pipeEndDrag.moved) stretchPipe(e.clientX, e.clientY);
     return;
   }
-  if (followTool) moveFollow(e.clientX, e.clientY);
+  if (followTool) {
+    if (e.pointerType !== 'mouse' && viewDown && Math.hypot(e.clientX - viewDown.x, e.clientY - viewDown.y) <= 6) return;   // タップ判定中はプレビューを動かさず、離した位置を保持
+    moveFollow(e.clientX, e.clientY);
+    if (e.pointerType !== 'mouse') followParked = { x: e.clientX, y: e.clientY };   // ドラッグ＝離した位置を記録（設置はここに置く）
+  }
   else if (movingPart) moveExistingPart(e.clientX, e.clientY);
   else if (dirDrag && !dirDrag.locked) {
     if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > 4) dirDrag.started = true;
@@ -3471,7 +3477,10 @@ renderer.domElement.addEventListener('pointerup', e => {
   if (pipeEndDrag) return;               // パイプ端を掴み中＝クリック選択しない（重なり時の誤選択防止）
   if (moved > 6) return;                 // ドラッグ（視点操作）はクリック扱いしない
   if (followTool) {
-    const obj = placeToolAt(followTool.tool, e.clientX, e.clientY);  // 仮配置
+    const px = (e.pointerType !== 'mouse' && followParked) ? followParked.x : e.clientX;   // 離した位置（プレビューが止まった所）に設置
+    const py = (e.pointerType !== 'mouse' && followParked) ? followParked.y : e.clientY;
+    followParked = null;
+    const obj = placeToolAt(followTool.tool, px, py);  // 仮配置
     if (obj) { stopFollow(); selectPart(obj); }   // 追従終了→選択して高さ入力フォームを出す
   } else if (movingPart) {
     dropMovingPart();                    // 移動モード：現在位置で仮確定（選択は継続）
@@ -5670,6 +5679,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     drawState.first = null; drawState.cur = null; drawState.vert = false;
     drawState.locked = false; drawState.editRec = null; drawState.snapped = false;
     drawState.editDir = null;   // 端点編集用に保持していた向きを解除
+    drawParked = null;          // パーク位置（離した所）も解除
     drawState.dimAdjust = null; drawState.dimOff = 0; drawState.dimDir = null;   // 寸法線の逃げ調整状態も解除
     drawState.circDim = null;   // 半径/直径：ロック中の円も解除
     drawState.dimReadjust = null;   // 寸法の逃げ再調整も解除
@@ -5778,6 +5788,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const drawPointers = new Set();   // 現在キャンバスに触れているタッチ/ペンの本数を数える
   let drawMulti = false;            // 2本指以上＝視点操作中（その間は点を打たない）
   const TAP_MOVE = 10;              // 離すまでの移動が この距離(px)以内なら「タップ」＝確定。超えたら位置決めのみ
+  let drawParked = null;            // 直近にドラッグして離した位置(client座標)。タップ確定はこの位置で打つ（タップ座標に引っ張られない）
   // ---- 寸法線の「逃げ」（補助線の長さ）調整 ----
   // 2点目確定後、カーソル移動で寸法線を起点から離す距離を決め、3回目のクリックで確定する。
   function startDimAdjust() {
@@ -5859,8 +5870,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // ---- タッチ/ペン：ドラッグで十字カーソルを位置決め（離してもまだ確定しない）、タップでその点を確定 ----
   function placeTouchPoint(e) {
+    const px = drawParked ? drawParked.x : e.clientX;   // 離した位置（カーソルが止まった所）で確定。タップ座標には引っ張られない
+    const py = drawParked ? drawParked.y : e.clientY;
     if (!drawState.first) {                              // タップ1回目＝起点を確定
-      const r = pickFirstPoint(e.clientX, e.clientY);
+      const r = pickFirstPoint(px, py);
       if (r.p) {
         drawState.first = r.p; drawState.cur = r.p.clone();
         drawState.vert = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
@@ -5872,7 +5885,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
     } else {                                             // タップ2回目＝終点を確定
       const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
-      const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
+      const r = pickSecondPoint(px, py, drawState.first, sh);
       if (r.p && drawState.mode === 'xline') r.p.y = drawState.first.y;
       if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
       if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
@@ -5880,6 +5893,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       else commitGuide();
       clearLineGuide();                                  // 残った十字カーソルを消す
     }
+    drawParked = null;                                   // 使ったら解除（次の点は新しいドラッグで決める）
   }
   window.addEventListener('pointerdown', e => {
     if (!drawActive()) return;
@@ -6020,6 +6034,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.addEventListener('pointermove', e => {
     if (!drawActive()) return;
     if (drawMulti) return;                              // 2本指＝視点操作中はプレビューを動かさない
+    if (e.pointerType !== 'mouse' && drawDown && drawDown.touch) {   // タッチ/ペンのジェスチャ中
+      if (Math.hypot(e.clientX - drawDown.x, e.clientY - drawDown.y) <= TAP_MOVE) return;   // タップ判定中はカーソルを動かさず、離した位置を保持
+      drawParked = { x: e.clientX, y: e.clientY };      // ドラッグ＝離した位置を記録（タップ確定はここで打つ）
+    }
     if (overLineBox(e.clientX, e.clientY)) return;      // 脚入力欄の上ではプレビュー凍結（方向を保つ）
     if (drawState.locked) return;                       // 確定待ちは固定（脚入力で編集）
     if (drawState.mode === 'dim' && dimKind === 'angle') {   // 角度：2本目を取った後だけ円弧プレビューを出す（選択前は何も出さない）
