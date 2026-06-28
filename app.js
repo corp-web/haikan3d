@@ -5865,6 +5865,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         drawState.snapped = r.snapped; drawState.locked = false; drawState.editRec = null;
         clearPreview();
         if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);
+        else clearLineGuide();
+        if (e.pointerType !== 'mouse') guideCross(drawState.first, drawState.snapped ? 0x39ff8a : 0x49c5ff);   // 1点目確定後もカーソル（十字）を残す
       }
     } else {                                             // タップ2回目＝終点を確定
       const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
