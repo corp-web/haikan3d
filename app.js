@@ -5780,7 +5780,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     inp.addEventListener('change', () => { if (inp.value.trim() === '') return; applyLineLegs(false); });
     inp.addEventListener('keydown', e => {
       e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); applyLineLegs(true); inp.blur(); }   // 確定＋キーボードを閉じる（iPad）
+      if (e.key === 'Enter') { e.preventDefault(); applyLineLegs(true); }   // 値を確定（blurはしない＝iPadで巻き戻る不具合回避。キーボードは3D画面タップで閉じる）
       else if (e.key === 'Escape') { e.preventDefault(); inp.blur(); }
     });
   });
@@ -5790,7 +5790,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     lnD.addEventListener('change', () => { if (lnD.value.trim() === '') return; applyLineDistance(false); });
     lnD.addEventListener('keydown', e => {
       e.stopPropagation();
-      if (e.key === 'Enter') { e.preventDefault(); applyLineDistance(true); lnD.blur(); }   // 確定＋キーボードを閉じる（iPad）
+      if (e.key === 'Enter') { e.preventDefault(); applyLineDistance(true); }   // 値を確定（blurはしない＝iPadで巻き戻る不具合回避。キーボードは3D画面タップで閉じる）
       else if (e.key === 'Escape') { e.preventDefault(); lnD.blur(); }
     });
   }
