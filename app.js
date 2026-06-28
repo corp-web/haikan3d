@@ -5731,33 +5731,40 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     addAnnotation(drawState.mode, drawState.first, drawState.cur);
     return annStore[annStore.length - 1];
   }
-  // 脚入力 → 確定済みレコードの終点を更新（向きは現状を踏襲）。finalize=Enterで編集終了
+  // 脚入力 → 終点を更新。確定済みレコード(editRec)があればそれを、無ければ作図プレビュー(first→cur)を編集。
+  // finalize=Enter：editRecなら編集終了、プレビューなら「2点目を決める前でも」その値で線を確定する。
   function applyLineLegs(finalize) {
-    const rec = drawState.editRec; if (!rec) return;
-    const a = rec.a;
+    const rec = drawState.editRec;
+    const preview = !rec && drawState.mode === 'line' && drawState.first && drawState.cur;   // 2点目未確定のプレビュー段階
+    if (!rec && !preview) return;
+    const a = rec ? rec.a : drawState.first;
+    const cur = rec ? rec.b : drawState.cur;    // 向き・符号の基準（現在の終点/プレビュー先）
     let b;
     if (drawState.vert) {                       // 鉛直：水平脚(X か Z) ＋ Y脚
-      const dxs = rec.b.x - a.x, dzs = rec.b.z - a.z, useX = Math.abs(dxs) >= Math.abs(dzs);
-      const yv = (Math.abs(parseFloat(lnY.value)) || 0) / 1000 * (Math.sign(rec.b.y - a.y) || 1);
+      const dxs = cur.x - a.x, dzs = cur.z - a.z, useX = Math.abs(dxs) >= Math.abs(dzs);
+      const yv = (Math.abs(parseFloat(lnY.value)) || 0) / 1000 * (Math.sign(cur.y - a.y) || 1);
       if (useX) b = new V3(a.x + (Math.abs(parseFloat(lnX.value)) || 0) / 1000 * (Math.sign(dxs) || 1), a.y + yv, a.z);
       else      b = new V3(a.x, a.y + yv, a.z + (Math.abs(parseFloat(lnZ.value)) || 0) / 1000 * (Math.sign(dzs) || 1));
     } else {                                    // 水平：X脚 ＋ Z脚（＋3D斜め線ならY脚も）
-      const sx = Math.sign(rec.b.x - a.x) || 1, sz = Math.sign(rec.b.z - a.z) || 1;
-      const dyNow = rec.b.y - a.y;
+      const sx = Math.sign(cur.x - a.x) || 1, sz = Math.sign(cur.z - a.z) || 1;
+      const dyNow = cur.y - a.y;
       const yv = Math.abs(dyNow) > 1e-4 ? (Math.abs(parseFloat(lnY.value)) || 0) / 1000 * (Math.sign(dyNow) || 1) : 0;
       b = new V3(a.x + (Math.abs(parseFloat(lnX.value)) || 0) / 1000 * sx, a.y + yv, a.z + (Math.abs(parseFloat(lnZ.value)) || 0) / 1000 * sz);
     }
-    rec.b.copy(b); rebuildAnn(rec);
-    drawState.cur = rec.b.clone();
-    drawTriangle3D(a, rec.b, drawState.vert, false);
-    if (lineSel === rec) { showLineHandles(rec); refreshAnnHi(); }
-    if (finalize) finishGuide();
+    if (rec) { rec.b.copy(b); rebuildAnn(rec); drawState.cur = rec.b.clone(); }
+    else { drawState.cur = b.clone(); }
+    drawTriangle3D(a, b, drawState.vert, false);
+    if (rec && lineSel === rec) { showLineHandles(rec); refreshAnnHi(); }
+    if (finalize) { if (rec) finishGuide(); else { commitGuide(); finishGuide(); } }   // プレビューなら線を作成して確定
   }
-  // 距離入力 → 現在の向きを保ったまま、その長さに終点を伸縮
+  // 距離入力 → 現在の向きを保ったまま、その長さに終点を伸縮（editRecが無ければプレビューを確定）
   function applyLineDistance(finalize) {
-    const rec = drawState.editRec; if (!rec) return;
-    const a = rec.a;
-    let dir = rec.b.clone().sub(a); const len = dir.length();
+    const rec = drawState.editRec;
+    const preview = !rec && drawState.mode === 'line' && drawState.first && drawState.cur;
+    if (!rec && !preview) return;
+    const a = rec ? rec.a : drawState.first;
+    const cur = rec ? rec.b : drawState.cur;
+    let dir = cur.clone().sub(a); const len = dir.length();
     if (len >= 1e-9) {
       dir.divideScalar(len);
       drawState.editDir = dir.clone();          // 有効な向きを保持（0に潰れた後の復元用）
@@ -5767,11 +5774,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return;                                   // 向きが全く無い時のみ何もしない
     }
     const D = Math.max(0, (parseFloat(lnD.value) || 0) / 1000);
-    rec.b.copy(a).addScaledVector(dir, D); rebuildAnn(rec);
-    drawState.cur = rec.b.clone();
-    drawTriangle3D(a, rec.b, drawState.vert, false);
-    if (lineSel === rec) { showLineHandles(rec); refreshAnnHi(); }
-    if (finalize) finishGuide();
+    const b = a.clone().addScaledVector(dir, D);
+    if (rec) { rec.b.copy(b); rebuildAnn(rec); drawState.cur = rec.b.clone(); }
+    else { drawState.cur = b.clone(); }
+    drawTriangle3D(a, b, drawState.vert, false);
+    if (rec && lineSel === rec) { showLineHandles(rec); refreshAnnHi(); }
+    if (finalize) { if (rec) finishGuide(); else { commitGuide(); finishGuide(); } }
   }
   [lnX, lnZ, lnY].forEach(inp => {
     if (!inp) return;
