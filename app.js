@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-M';
+const APP_VER = 'v0629-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4774,7 +4774,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     holder.appendChild(ifr); scroll.appendChild(holder);
     ov.append(bar, scroll); document.body.appendChild(ov);
     const idoc = ifr.contentWindow.document; idoc.open(); idoc.write(html); idoc.close();
-    let z = 1;
+    let z = 0.7;   // 既定は70%表示（社長指示）
     const applyZoom = () => { ifr.style.transform = `scale(${z})`; holder.style.width = (PW * z) + 'px'; holder.style.height = (PH * z) + 'px'; zlabel.textContent = Math.round(z * 100) + '%'; };
     const fitW = () => { z = Math.max(0.1, Math.min(2, (scroll.clientWidth - 40) / PW)); applyZoom(); };
     zo.onclick = () => { z = Math.max(0.1, z / 1.2); applyZoom(); };
@@ -4785,7 +4785,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     cl.onclick = close;
     const onkey = e => { if (e.key === 'Escape') close(); };
     document.addEventListener('keydown', onkey);
-    applyZoom();   // 既定は100%表示（全体表示ボタンで幅に合わせる）
+    applyZoom();   // 既定は70%表示（全体表示ボタンで幅に合わせる）
   }
   // （未使用・保険）ポップアップを使わず非表示iframeで直接印刷
   function printViaFrame(html) {
