@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-K';
+const APP_VER = 'v0629-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5985,8 +5985,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const rec = annStore[annStore.length - 1];
     clearDrawTemp();
     cancelDraw();   // ツールを抜ける（構築線と同様、以後クリックや窓で再選択できる）
-    // 確定直後に逃げ量スピナー（mm・1mm刻み）。立面寸法はその確定後に方位スピナー（0.5°刻み）が続く
-    if (rec.style.dimDir) startDimOffSpin(rec);
+    // 逃げ位置を決めた3回目クリックで確定とする＝ここでフォーム/キーボードは出さない（社長要望）。
+    // 逃げの微調整は、後から再選択してタップ＝スピナー／本体ドラッグで行える。
   }
   function commitLeader() {                             // 引出：a=矢印先端(1点目)・b=肘(2点目)で確定。棚と文字はbから自動生成
     if (!drawState.first || !drawState.cur || drawState.cur.distanceTo(drawState.first) <= 1e-6) { clearDrawTemp(); return; }
