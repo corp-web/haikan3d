@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-G';
+const APP_VER = 'v0629-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7132,20 +7132,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       } else {
         const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');   // 端点(足の起点)は広いしきい値で掴める
         if (end !== null) {
-          // 単独選択の平行寸法：足の起点(測定点a/b)を掴んでも測定点は動かさず、逃げ(足の長さ)調整(mode 'sel')に回す。
-          // ＝起点はちゃんと掴めるが、ドラッグしても寸法は傾かず、元の水平/垂直(平行)を維持する（社長要望）。
-          // nearEnd:false にして、起点をタップ(動かさず)した時は逃げ量スピナーが開くようにする。
-          if (lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir && selAnns.size === 1) {
-            const info = nearestEndpointInfo(lineSel, e.clientX, e.clientY);
-            const origin = info.pt.clone();
-            lineDrag = { mode: 'sel', free: false, origin, planeY: origin.y, gRec: lineSel, gEnd: info.end, nearEnd: false,
-                         downX: e.clientX, downY: e.clientY, moved: false,
-                         annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: null })),
-                         partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
-            e.stopImmediatePropagation(); return;
-          }
-          if (lineSel.type === 'dim') {                  // その他の寸法：起点をつかんで別の機点へ付け替える
-            lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
+          if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで測定点を動かす（付け替え）
+            // 単独選択の平行寸法は keepAxis を持たせる＝測定点を「元の寸法軸」に沿ってだけ動かす。
+            // → 測定点は動くが寸法線は元の水平/垂直のまま傾かない（社長要望）。逃げ(足の長さ)は本体ドラッグで別途調整。
+            let keepAxis = null;
+            if (lineSel.style && lineSel.style.dimDir && selAnns.size === 1) {
+              const u = lineSel.b.clone().sub(lineSel.a); const ul = u.length();
+              keepAxis = (ul > 1e-6) ? u.multiplyScalar(1 / ul) : new THREE.Vector3(1, 0, 0);
+            }
+            lineDrag = { mode: 'dimend', rec: lineSel, end, keepAxis, downX: e.clientX, downY: e.clientY, moved: false };
             e.stopImmediatePropagation(); return;
           }
           startEndpointEdit(lineSel, end);
@@ -7255,6 +7250,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     } else if (lineDrag.mode === 'dimend') {             // 寸法線の起点付け替え：機点・交点へスナップ（無ければ水平面）
       const rec = lineDrag.rec;
       const cur = lineDrag.end === 0 ? rec.a : rec.b;
+      if (lineDrag.keepAxis) {                            // 単独平行寸法：測定点を「元の寸法軸」上にだけ動かす＝寸法は傾かず元の水平/垂直を保つ
+        const fixed = lineDrag.end === 0 ? rec.b : rec.a;
+        const t = projectOffsetAlongDir(e.clientX, e.clientY, fixed, lineDrag.keepAxis);   // カーソルを軸へ最近接投影
+        if (t == null) return;
+        cur.copy(fixed.clone().addScaledVector(lineDrag.keepAxis, t));
+        rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+        if (typeof updateForm === 'function') updateForm();
+        e.stopImmediatePropagation();
+        return;
+      }
       const ex = new Set([rec]);
       const snap = moveSnapForGrip(e.clientX, e.clientY, new Set(), ex);
       let pos = snap;
