@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-F';
+const APP_VER = 'v0629-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7130,13 +7130,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           e.stopImmediatePropagation(); return;
         }
       } else {
-        // 単独選択の平行寸法は、端点(測定点a/b)を掴んでも「付け替え」にしない＝測定点は動かさない。
-        // 補助線の起点を掴んでも、ドラッグは逃げスライド(mode 'sel')へ回し、足の長さだけ変えて
-        // 元の向き（水平/垂直＝平行）をキープする（社長要望：起点ドラッグで寸法が傾かないように）。
-        const tightDim = lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir && selAnns.size === 1;
-        const end = tightDim ? null : endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');
+        const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');   // 端点(足の起点)は広いしきい値で掴める
         if (end !== null) {
-          if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで別の機点へ付け替える
+          // 単独選択の平行寸法：足の起点(測定点a/b)を掴んでも測定点は動かさず、逃げ(足の長さ)調整(mode 'sel')に回す。
+          // ＝起点はちゃんと掴めるが、ドラッグしても寸法は傾かず、元の水平/垂直(平行)を維持する（社長要望）。
+          // nearEnd:false にして、起点をタップ(動かさず)した時は逃げ量スピナーが開くようにする。
+          if (lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir && selAnns.size === 1) {
+            const info = nearestEndpointInfo(lineSel, e.clientX, e.clientY);
+            const origin = info.pt.clone();
+            lineDrag = { mode: 'sel', free: false, origin, planeY: origin.y, gRec: lineSel, gEnd: info.end, nearEnd: false,
+                         downX: e.clientX, downY: e.clientY, moved: false,
+                         annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: null })),
+                         partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
+            e.stopImmediatePropagation(); return;
+          }
+          if (lineSel.type === 'dim') {                  // その他の寸法：起点をつかんで別の機点へ付け替える
             lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
             e.stopImmediatePropagation(); return;
           }
