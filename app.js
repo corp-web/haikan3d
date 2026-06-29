@@ -7,6 +7,20 @@
             画面をドラッグしたら up を(0,1,0)に戻してから OrbitControls を再開する
             （OrbitControls に Y以外の up を絶対に渡さない＝フリーズ防止）。 */
 
+// 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
+// （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
+const APP_VER = 'v0629-C';
+(function showVer() {
+  const brand = document.querySelector('.brand');
+  if (!brand) return;
+  brand.querySelectorAll('span').forEach(s => { if (/^v\d{4}-/.test((s.textContent || '').trim())) s.remove(); });   // 旧版数spanを除去
+  const tag = document.createElement('span');
+  tag.className = 'appver';
+  tag.style.cssText = 'font-size:11px;opacity:.65;margin-left:7px;font-weight:normal;letter-spacing:.5px;';
+  tag.textContent = APP_VER;
+  brand.appendChild(tag);
+})();
+
 const vp = document.getElementById('viewport');
 
 // ---- レンダラ ----
