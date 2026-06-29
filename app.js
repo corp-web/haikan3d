@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-H';
+const APP_VER = 'v0629-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7132,15 +7132,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       } else {
         const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');   // 端点(足の起点)は広いしきい値で掴める
         if (end !== null) {
-          if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで測定点を動かす（付け替え）
-            // 単独選択の平行寸法は keepAxis を持たせる＝測定点を「元の寸法軸」に沿ってだけ動かす。
-            // → 測定点は動くが寸法線は元の水平/垂直のまま傾かない（社長要望）。逃げ(足の長さ)は本体ドラッグで別途調整。
-            let keepAxis = null;
-            if (lineSel.style && lineSel.style.dimDir && selAnns.size === 1) {
-              const u = lineSel.b.clone().sub(lineSel.a); const ul = u.length();
-              keepAxis = (ul > 1e-6) ? u.multiplyScalar(1 / ul) : new THREE.Vector3(1, 0, 0);
-            }
-            lineDrag = { mode: 'dimend', rec: lineSel, end, keepAxis, downX: e.clientX, downY: e.clientY, moved: false };
+          if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで測定点を自由に動かす（機点へスナップ）
+            // 逃げ方向(dimDir)は固定のままなので、矢印の補助線(足)は平行を維持する。
+            // 測定点はどこへでも動かせて、近い機点(各起点)へ吸着する（社長要望）。
+            lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
             e.stopImmediatePropagation(); return;
           }
           startEndpointEdit(lineSel, end);
@@ -7250,16 +7245,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     } else if (lineDrag.mode === 'dimend') {             // 寸法線の起点付け替え：機点・交点へスナップ（無ければ水平面）
       const rec = lineDrag.rec;
       const cur = lineDrag.end === 0 ? rec.a : rec.b;
-      if (lineDrag.keepAxis) {                            // 単独平行寸法：測定点を「元の寸法軸」上にだけ動かす＝寸法は傾かず元の水平/垂直を保つ
-        const fixed = lineDrag.end === 0 ? rec.b : rec.a;
-        const t = projectOffsetAlongDir(e.clientX, e.clientY, fixed, lineDrag.keepAxis);   // カーソルを軸へ最近接投影
-        if (t == null) return;
-        cur.copy(fixed.clone().addScaledVector(lineDrag.keepAxis, t));
-        rebuildAnn(rec); refreshAnnHi(); refreshHandles();
-        if (typeof updateForm === 'function') updateForm();
-        e.stopImmediatePropagation();
-        return;
-      }
       const ex = new Set([rec]);
       const snap = moveSnapForGrip(e.clientX, e.clientY, new Set(), ex);
       let pos = snap;
