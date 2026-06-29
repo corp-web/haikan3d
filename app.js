@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-P';
+const APP_VER = 'v0629-Q';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7586,6 +7586,37 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       openTextMenu(r.left, r.top);
     });
   }
+  // ===== iPad/タッチ：右クリックが無いので「アイコン長押し」で同じメニューを開く =====
+  // メニューはアイコンの上に出る＝指(ボタン上)とは重ならないので、離しても誤選択しない。
+  // 長押しで開いた直後の「そのボタンへのタップ(=ツール起動)」だけを1回無効化する。
+  let _lpSuppressClick = false, _lpBtn = null;
+  window.addEventListener('click', e => {
+    if (_lpSuppressClick && _lpBtn && (e.target === _lpBtn || _lpBtn.contains(e.target))) {
+      _lpSuppressClick = false; e.preventDefault(); e.stopImmediatePropagation();
+    }
+  }, true);
+  function bindLongPress(btn, openFn) {
+    if (!btn) return;
+    let timer = null, sx = 0, sy = 0;
+    const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    btn.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse') return;     // マウスは従来どおり右クリックでメニュー
+      sx = e.clientX; sy = e.clientY; clear();
+      timer = setTimeout(() => {
+        timer = null; _lpSuppressClick = true; _lpBtn = btn;
+        setTimeout(() => { _lpSuppressClick = false; }, 1000);   // 念のための自動解除（タップが来なくても残さない）
+        const r = btn.getBoundingClientRect();
+        openFn(r.left, r.top);
+      }, 500);   // 0.5秒押し続けたら長押し成立
+    });
+    btn.addEventListener('pointermove', e => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) clear(); });
+    btn.addEventListener('pointerup', clear);
+    btn.addEventListener('pointercancel', clear);
+  }
+  bindLongPress($('cmdLine'),   (x, y) => openToolFmtMenu('line', x, y));
+  bindLongPress($('cmdCircle'), (x, y) => openToolFmtMenu('circle', x, y));
+  bindLongPress($('cmdDim'),    (x, y) => { closeFmtMenu(); openDimKindMenu(x, y); });
+  bindLongPress($('cmdText'),   (x, y) => { closeFmtMenu(); closeDimKindMenu(); openTextMenu(x, y); });
   // メニュー外クリック / Esc / ホイールで閉じる
   window.addEventListener('pointerdown', e => {
     if (fmtMenu.style.display === 'block' && !fmtMenu.contains(e.target)) closeFmtMenu();
