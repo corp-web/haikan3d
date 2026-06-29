@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-D';
+const APP_VER = 'v0629-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2815,6 +2815,24 @@ function planeHitAt(clientX, clientY, planeY) {
   const hit = new THREE.Vector3();
   if (!placeRay.ray.intersectPlane(plane, hit)) return null;
   return modelGroup.worldToLocal(hit);
+}
+// カーソル(ray)を「点 mid を通り dir 方向の直線」へ最近接投影し、mid からの符号付き距離を返す（modelGroupローカル）。
+// 逃げ方向(dir)は水平でも垂直でも斜めでもよく、それを固定したまま“足の長さ＝逃げ量”だけを取り出すのに使う。
+function projectOffsetAlongDir(cx, cy, mid, dir) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  placeNdc.x = ((cx - rect.left) / rect.width) * 2 - 1;
+  placeNdc.y = -((cy - rect.top) / rect.height) * 2 + 1;
+  placeRay.setFromCamera(placeNdc, activeCam());
+  const O = modelGroup.worldToLocal(placeRay.ray.origin.clone());                                  // レイ起点（ローカル）
+  const D = modelGroup.worldToLocal(placeRay.ray.origin.clone().add(placeRay.ray.direction)).sub(O); // レイ方向（ローカル）
+  const v = new THREE.Vector3(dir.x, dir.y, dir.z);
+  if (v.lengthSq() < 1e-12) return null;
+  v.normalize();
+  const w0 = O.clone().sub(mid);
+  const a = D.dot(D), b = D.dot(v), d = D.dot(w0), e = v.dot(w0);   // 2直線の最近接点（offset直線側の媒介変数tを解く）
+  const denom = a - b * b;
+  if (Math.abs(denom) < 1e-9) return null;   // レイと逃げ方向が平行＝決められない
+  return (a * e - b * d) / denom;            // dir方向の符号付き距離＝新しい逃げ量
 }
 // 線分を markerGroup に足す
 function addGuideSeg(aModel, bModel, color) {
@@ -7159,12 +7177,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const dRec = lineDrag.gRec;
       if (dRec && dRec.type === 'dim' && dRec.style && dRec.style.dimDir
           && lineDrag.annSnap.length === 1 && !lineDrag.partSnap.length) {
-        const dd = dRec.style.dimDir;
-        if (lineDrag.moved && Math.abs(dd.y) < 0.7) {   // 横方向の逃げ＝水平面へ投影。タップ(moved前)では触らずスピナーに任せる
+        if (lineDrag.moved) {   // タップ(moved前)では触らずスピナーに任せる。ドラッグ＝逃げ量(足の長さ)だけ更新
           const mid = dRec.a.clone().add(dRec.b).multiplyScalar(0.5);
-          const hit = planeHitAt(e.clientX, e.clientY, mid.y);
-          if (hit) {
-            dRec.style.dimOff = (hit.x - mid.x) * dd.x + (hit.z - mid.z) * dd.z;   // 単位ベクトル dimDir への投影＝新しい逃げ量（符号で逆側へも。向きは保持）
+          const off = projectOffsetAlongDir(e.clientX, e.clientY, mid, dRec.style.dimDir);   // 逃げ方向(水平/垂直)は固定し長さだけ＝元の向きをキープ
+          if (off != null) {
+            dRec.style.dimOff = off;
             rebuildAnn(dRec); refreshAnnHi(); refreshHandles();
             if (typeof updateForm === 'function') updateForm();
           }
