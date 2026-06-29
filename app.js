@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-O';
+const APP_VER = 'v0629-P';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -376,17 +376,12 @@ const SCALE_OPTS = [
   ['1:20', 0.05], ['1:30', 1 / 30], ['1:40', 0.025], ['1:50', 0.02], ['1:100', 0.01],
   ['2:1', 2], ['4:1', 4], ['8:1', 8], ['10:1', 10], ['100:1', 100],
 ];
-const DEFAULT_SCALE_F = 0.1;   // 既定尺度 1:10（平行投影へ切り替えた時の初期尺度・社長指示）
-// 尺度f（モデルm→画面）を満たすカメラ距離（透視カメラのfov基準）
-function distForScale(f) {
-  const h = renderer.domElement.clientHeight || window.innerHeight;
-  const halfH = h / (2 * f * PX_PER_M);
-  return halfH / Math.tan((camera.fov / 2) * Math.PI / 180);
-}
 function setScale(f) {
   if (!f || f <= 0 || tween) return;
   if (!useOrtho) { useOrtho = true; controls.enabled = false; updateRollButtons(); }   // 尺度は平行投影で意味を持つ
-  const dist = distForScale(f);
+  const h = renderer.domElement.clientHeight || window.innerHeight;
+  const halfH = h / (2 * f * PX_PER_M);
+  const dist = halfH / Math.tan((camera.fov / 2) * Math.PI / 180);
   const t = controls.target;
   const dir = camera.position.clone().sub(t);
   if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
@@ -431,8 +426,7 @@ function updateRollButtons() {
 // ---- ビューキューブ面クリック → 正対＋平行投影（なめらかに移行） ----
 function snapToDir(dir) {
   const t = controls.target;
-  // 平行投影へ「初めて」切り替える時は既定尺度1:10で入る（社長指示）。既に平行投影中なら今の尺度を保つ。
-  const dist = useOrtho ? camera.position.distanceTo(t) : distForScale(DEFAULT_SCALE_F);
+  const dist = camera.position.distanceTo(t);
   const endPos = t.clone().add(dir.clone().multiplyScalar(dist));
   const endUp = Math.abs(dir.y) > 0.99
     ? new THREE.Vector3(0, 0, dir.y > 0 ? -1 : 1)
