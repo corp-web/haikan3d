@@ -7133,7 +7133,28 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }, true);
   window.addEventListener('pointermove', e => {
     if (drawActive() || !lineDrag) return;
-    if (Math.hypot(e.clientX - lineDrag.downX, e.clientY - lineDrag.downY) > 3) lineDrag.moved = true;
+    const moveTh = (e.pointerType !== 'mouse') ? 10 : 3;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらない＝タップは確実にスピナーへ）
+    if (Math.hypot(e.clientX - lineDrag.downX, e.clientY - lineDrag.downY) > moveTh) lineDrag.moved = true;
+    // 単独選択の平行寸法をドラッグ＝逃げ（足の長さ）だけ調整。向き(dimDir)＝元の平行は固定し、全体は動かさない。
+    // 全体移動は Ctrl で複数選択した時（annSnap が2つ以上 or 部品を含む）だけ（社長指示：単独再選択のドラッグで全体が動くのを止める）。
+    if (lineDrag.mode === 'sel') {
+      const dRec = lineDrag.gRec;
+      if (dRec && dRec.type === 'dim' && dRec.style && dRec.style.dimDir
+          && lineDrag.annSnap.length === 1 && !lineDrag.partSnap.length) {
+        const dd = dRec.style.dimDir;
+        if (lineDrag.moved && Math.abs(dd.y) < 0.7) {   // 横方向の逃げ＝水平面へ投影。タップ(moved前)では触らずスピナーに任せる
+          const mid = dRec.a.clone().add(dRec.b).multiplyScalar(0.5);
+          const hit = planeHitAt(e.clientX, e.clientY, mid.y);
+          if (hit) {
+            dRec.style.dimOff = (hit.x - mid.x) * dd.x + (hit.z - mid.z) * dd.z;   // 単位ベクトル dimDir への投影＝新しい逃げ量（符号で逆側へも。向きは保持）
+            rebuildAnn(dRec); refreshAnnHi(); refreshHandles();
+            if (typeof updateForm === 'function') updateForm();
+          }
+        }
+        e.stopImmediatePropagation();   // 全体移動の処理へは進ませない
+        return;
+      }
+    }
     if (lineDrag.mode === 'circleaxis') {                // 円：四半円点を掴んで半径変更。通常＝真円・Shift＝その軸だけ＝楕円
       const rec = lineDrag.rec, c = rec.a;
       const sp = axisStretchPoint(e.clientX, e.clientY, c, lineDrag.dir);   // 軸（向き込み）に沿ってカーソルへ最も近い点
