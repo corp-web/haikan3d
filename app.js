@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-I';
+const APP_VER = 'v0629-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5054,6 +5054,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (kind === 'radius') return 'R' + mm;
     if (kind === 'diameter') return 'φ' + mm;
     if (kind === 'leader' || kind === 'text') return '';   // 引出・文字は既定文字なし（入力した文字だけ表示）
+    if (style && style.dimFixDir) {   // リニア化した平行寸法は固定方向への投影長を測る（測定点を動かしても水平/垂直の寸法値）
+      const u = new V3(style.dimFixDir.x, style.dimFixDir.y, style.dimFixDir.z);
+      if (u.lengthSq() > 1e-9) { u.normalize(); return (Math.abs(b.clone().sub(a).dot(u)) * 1000).toFixed(1); }
+    }
     return String(mm);
   }
   // 角度寸法の幾何（頂点V・両方向の単位ベクトル・円弧半径R・円弧点列）を返す。buildAnn と当たり判定で共用。
@@ -5219,6 +5223,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function dimLineEnds(a, b, style) {
     const off = (style && style.dimOff) || 0;
     const dd = style && style.dimDir;
+    // リニア寸法：寸法線を固定方向(dimFixDir)・固定基準(dimFixPt)に保ち、測定点a/bをその線へ投影する。
+    // ＝測定点を動かしても寸法線は元の向き(水平/垂直)のまま傾かない。逃げ(dimOff)は基準点からの距離で従来どおり調整可。
+    if (style && style.dimFixDir && style.dimFixPt) {
+      const u = new V3(style.dimFixDir.x, style.dimFixDir.y, style.dimFixDir.z);
+      if (u.lengthSq() < 1e-9) u.set(1, 0, 0); else u.normalize();
+      const dvL = dd ? new V3(dd.x, dd.y, dd.z).multiplyScalar(off) : new V3(0, 0, 0);
+      const anchor = new V3(style.dimFixPt.x, style.dimFixPt.y, style.dimFixPt.z).add(dvL);   // 現在の逃げ位置で線上の1点
+      const A2 = anchor.clone().addScaledVector(u, a.clone().sub(anchor).dot(u));               // aを線へ投影
+      const B2 = anchor.clone().addScaledVector(u, b.clone().sub(anchor).dot(u));               // bを線へ投影
+      return { A2, B2 };
+    }
     if (!off || !dd) return null;
     const dv = new V3(dd.x, dd.y, dd.z).multiplyScalar(off);
     const ab = b.clone().sub(a), l = ab.length();
@@ -5228,7 +5243,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return { A2: a.clone().add(dv).addScaledVector(u, k), B2: b.clone().add(dv).addScaledVector(u, k) };
   }
   function addAnnotation(type, a, b, style) {
-    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat } : styleFor(type);
+    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
@@ -7133,8 +7148,18 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');   // 端点(足の起点)は広いしきい値で掴める
         if (end !== null) {
           if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで測定点を自由に動かす（機点へスナップ）
-            // 逃げ方向(dimDir)は固定のままなので、矢印の補助線(足)は平行を維持する。
-            // 測定点はどこへでも動かせて、近い機点(各起点)へ吸着する（社長要望）。
+            // 単独の平行寸法は、起点ドラッグ開始時に「リニア化」＝今の向き(dimFixDir)と基準点(dimFixPt)を固定。
+            // 以後は測定点を自由に動かしても寸法線はこの向き(元の水平/垂直)を保ち、2点を結ぶ向きには傾かない。
+            const s = lineSel.style;
+            if (s && s.dimDir && selAnns.size === 1 && !s.dimFixDir) {
+              const u = lineSel.b.clone().sub(lineSel.a); const ul = u.length();
+              if (ul > 1e-6) {
+                u.multiplyScalar(1 / ul);
+                s.dimFixDir = { x: u.x, y: u.y, z: u.z };
+                const m = lineSel.a.clone().add(lineSel.b).multiplyScalar(0.5);
+                s.dimFixPt = { x: m.x, y: m.y, z: m.z };
+              }
+            }
             lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
             e.stopImmediatePropagation(); return;
           }
@@ -7176,8 +7201,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (dRec && dRec.type === 'dim' && dRec.style && dRec.style.dimDir
           && lineDrag.annSnap.length === 1 && !lineDrag.partSnap.length) {
         if (lineDrag.moved) {   // タップ(moved前)では触らずスピナーに任せる。ドラッグ＝逃げ量(足の長さ)だけ更新
-          const mid = dRec.a.clone().add(dRec.b).multiplyScalar(0.5);
-          const off = projectOffsetAlongDir(e.clientX, e.clientY, mid, dRec.style.dimDir);   // 逃げ方向(水平/垂直)は固定し長さだけ＝元の向きをキープ
+          // リニア化済みは固定基準(dimFixPt)から、未リニアは2点の中点から、逃げ方向へ投影して逃げ量を出す
+          const ref = dRec.style.dimFixPt ? new V3(dRec.style.dimFixPt.x, dRec.style.dimFixPt.y, dRec.style.dimFixPt.z)
+                                          : dRec.a.clone().add(dRec.b).multiplyScalar(0.5);
+          const off = projectOffsetAlongDir(e.clientX, e.clientY, ref, dRec.style.dimDir);   // 逃げ方向(水平/垂直)は固定し長さだけ＝元の向きをキープ
           if (off != null) {
             dRec.style.dimOff = off;
             rebuildAnn(dRec); refreshAnnHi(); refreshHandles();
