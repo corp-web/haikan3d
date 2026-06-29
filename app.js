@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-C';
+const APP_VER = 'v0629-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6995,11 +6995,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   window.__pickAnnAt = (cx, cy) => pickAnnAt(cx, cy);   // ortho解除判定用：その位置に線/寸法があるか
   // カーソル近傍の端点（0=a,1=b）。無ければ null。
-  function endpointAt(rec, cx, cy, touch) {
+  function endpointAt(rec, cx, cy, touch, thOverride) {
     if (rec.type === 'xline') return null;   // 構築線は端点伸縮しない（中心グリップで全体移動のみ）
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
     const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z }; };
-    const sa = scr(rec.a), sb = scr(rec.b), TH = SNAP_PX + (touch ? 22 : 6);   // タッチは指が太いので端点掴みを広げる（外して視点が回るのを防ぐ）
+    const sa = scr(rec.a), sb = scr(rec.b), TH = (thOverride != null) ? thOverride : SNAP_PX + (touch ? 22 : 6);   // タッチは指が太いので端点掴みを広げる（外して視点が回るのを防ぐ）。thOverrideでこの幅を絞れる
     const da = Math.hypot(sa.x - cx, sa.y - cy), db = Math.hypot(sb.x - cx, sb.y - cy);
     if (rec.type === 'circle') return (db < TH && sb.z < 1) ? 1 : null;   // 円は半径ハンドル(b)だけ掴める（中心aは移動グリップ）
     if (da <= db && da < TH && sa.z < 1) return 0;
@@ -7112,7 +7112,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           e.stopImmediatePropagation(); return;
         }
       } else {
-        const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');
+        // 単独選択の平行寸法は、測定点(a/b)の付け替えを「ごく近く(SNAP_PX)」に限定。
+        // それ以外を掴んだドラッグは端点付け替えにせず、逃げスライド(mode 'sel')へ回す＝
+        // スライドで足の長さだけ調整し、a/b を動かさず平行をキープする（社長要望）。
+        const tightDim = lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir && selAnns.size === 1;
+        const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse', tightDim ? SNAP_PX : undefined);
         if (end !== null) {
           if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで別の機点へ付け替える
             lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
