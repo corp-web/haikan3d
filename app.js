@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-J';
+const APP_VER = 'v0629-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5054,9 +5054,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (kind === 'radius') return 'R' + mm;
     if (kind === 'diameter') return 'φ' + mm;
     if (kind === 'leader' || kind === 'text') return '';   // 引出・文字は既定文字なし（入力した文字だけ表示）
-    if (style && style.dimFixDir) {   // リニア化した平行寸法は固定方向への投影長を測る（測定点を動かしても水平/垂直の寸法値）
-      const u = new V3(style.dimFixDir.x, style.dimFixDir.y, style.dimFixDir.z);
-      if (u.lengthSq() > 1e-9) { u.normalize(); return (Math.abs(b.clone().sub(a).dot(u)) * 1000).toFixed(1); }
+    if (style && style.dimFixDir && style.dimDir) {   // リニア寸法は逃げ方向に垂直な成分の長さ＝寸法線の実長（足を下ろした水平/垂直の寸法値）
+      const dn = new V3(style.dimDir.x, style.dimDir.y, style.dimDir.z);
+      if (dn.lengthSq() > 1e-9) { dn.normalize(); const ab = b.clone().sub(a); return (ab.addScaledVector(dn, -ab.dot(dn)).length() * 1000).toFixed(1); }
     }
     return String(mm);
   }
@@ -5226,12 +5226,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // リニア寸法：寸法線を固定方向(dimFixDir)・固定基準(dimFixPt)に保ち、測定点a/bをその線へ投影する。
     // ＝測定点を動かしても寸法線は元の向き(水平/垂直)のまま傾かない。逃げ(dimOff)は基準点からの距離で従来どおり調整可。
     if (style && style.dimFixDir && style.dimFixPt) {
-      const u = new V3(style.dimFixDir.x, style.dimFixDir.y, style.dimFixDir.z);
-      if (u.lengthSq() < 1e-9) u.set(1, 0, 0); else u.normalize();
-      const dvL = dd ? new V3(dd.x, dd.y, dd.z).multiplyScalar(off) : new V3(0, 0, 0);
-      const anchor = new V3(style.dimFixPt.x, style.dimFixPt.y, style.dimFixPt.z).add(dvL);   // 現在の逃げ位置で線上の1点
-      const A2 = anchor.clone().addScaledVector(u, a.clone().sub(anchor).dot(u));               // aを線へ投影
-      const B2 = anchor.clone().addScaledVector(u, b.clone().sub(anchor).dot(u));               // bを線へ投影
+      const fp = new V3(style.dimFixPt.x, style.dimFixPt.y, style.dimFixPt.z);
+      const dn = dd ? new V3(dd.x, dd.y, dd.z) : new V3(0, -1, 0);
+      if (dn.lengthSq() < 1e-9) dn.set(0, -1, 0); else dn.normalize();
+      // 各測定点から逃げ方向(dimDir)に沿って、固定レベル((P-dimFixPt)·dimDir=off)まで下ろした足元をA2/B2に。
+      // ＝補助線(足)は常に逃げ方向(例:鉛直)のまま傾かず、寸法線は同じ高さ(レベル)を保つ。測定点を動かすと足が伸縮しながら追従する。
+      const A2 = a.clone().addScaledVector(dn, off - a.clone().sub(fp).dot(dn));
+      const B2 = b.clone().addScaledVector(dn, off - b.clone().sub(fp).dot(dn));
       return { A2, B2 };
     }
     if (!off || !dd) return null;
