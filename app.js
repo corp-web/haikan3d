@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-E';
+const APP_VER = 'v0629-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7130,11 +7130,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           e.stopImmediatePropagation(); return;
         }
       } else {
-        // 単独選択の平行寸法は、測定点(a/b)の付け替えを「ごく近く(SNAP_PX)」に限定。
-        // それ以外を掴んだドラッグは端点付け替えにせず、逃げスライド(mode 'sel')へ回す＝
-        // スライドで足の長さだけ調整し、a/b を動かさず平行をキープする（社長要望）。
+        // 単独選択の平行寸法は、端点(測定点a/b)を掴んでも「付け替え」にしない＝測定点は動かさない。
+        // 補助線の起点を掴んでも、ドラッグは逃げスライド(mode 'sel')へ回し、足の長さだけ変えて
+        // 元の向き（水平/垂直＝平行）をキープする（社長要望：起点ドラッグで寸法が傾かないように）。
         const tightDim = lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir && selAnns.size === 1;
-        const end = endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse', tightDim ? SNAP_PX : undefined);
+        const end = tightDim ? null : endpointAt(lineSel, e.clientX, e.clientY, e.pointerType !== 'mouse');
         if (end !== null) {
           if (lineSel.type === 'dim') {                  // 寸法線：起点をつかんで別の機点へ付け替える
             lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
