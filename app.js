@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-L';
+const APP_VER = 'v0629-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4510,11 +4510,18 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   setTimeout(() => { try { recordHistory(); } catch (e) {} }, 0);   // 初期状態を基準として記録（初期化完了後に実行）
   function load() {
     const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = '.json,application/json';
+    inp.type = 'file';
+    // iPad対策：accept で拡張子を絞ると「ファイル」で .p3d.json がグレーアウトして選べないことがあるので絞らない
+    //（中身は applyData が検証する）。また一部iOSは input をDOMに入れないとピッカーが開かないため body に追加する。
+    inp.style.position = 'fixed'; inp.style.left = '-10000px'; inp.style.top = '0';
+    document.body.appendChild(inp);
+    const cleanup = () => { if (inp.parentNode) inp.parentNode.removeChild(inp); };
     inp.onchange = () => {
-      const f = inp.files && inp.files[0]; if (!f) return;
+      const f = inp.files && inp.files[0];
+      if (!f) { cleanup(); return; }
       const r = new FileReader();
-      r.onload = () => { try { applyData(JSON.parse(r.result)); resetHistory(); } catch (err) { alert('読込に失敗しました：' + err.message); } };
+      r.onload = () => { cleanup(); try { applyData(JSON.parse(r.result)); resetHistory(); } catch (err) { alert('読込に失敗しました：' + err.message); } };
+      r.onerror = () => { cleanup(); alert('ファイルを読み込めませんでした。'); };
       r.readAsText(f);
     };
     inp.click();
