@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-T';
+const APP_VER = 'v0629-U';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6084,7 +6084,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
       if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
       else if (drawState.mode === 'dim') startDimAdjust();                    // 平行寸法は確定せず逃げ調整へ
-      else commitGuide();
+      else {
+        // タッチ＝2点目確定で即完了。確定待ち(locked)に残さず、十字カーソルと同時に長さフォームも閉じる
+        // （2026-07-12 iPad指摘）。長さの数値入力は、確定タップの前（位置決め中）に従来どおり行える。
+        const rec = commitGuide();
+        if (rec && drawState.locked) finishGuide();
+      }
       clearLineGuide();                                  // 残った十字カーソルを消す
     }
     drawParked = null;                                   // 使ったら解除（次の点は新しいドラッグで決める）
