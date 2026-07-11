@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-R';
+const APP_VER = 'v0629-S';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4468,6 +4468,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1500);
   }
+  // 新規図面：追従・移動を解除し、確認のうえ全消去（部品・注釈・図面情報・仕様欄）。
+  // applyData の空データで一括初期化＝「開く」と同じ経路。履歴には残すので直後は「元に戻す」で復元できる。
+  function newDrawing() {
+    if (placedParts.length || annStore.length) {
+      if (!confirm('現在の図面を消して新規作成します。よろしいですか？\n（保存していない内容は失われます。直後なら「元に戻す」で復元できます）')) return;
+    }
+    if (movingPart) cancelMovePart();
+    stopFollow();
+    applyData({ app: '配管3D', version: 1, parts: [], annotations: [], drawing: {} });
+    scheduleHistory();
+  }
   function clearAllParts() {
     for (const p of [...placedParts]) { modelGroup.remove(p); disposeObj(p); }
     placedParts.length = 0;
@@ -7402,6 +7413,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }, true);
 
   // ================= ボタン結線 =================
+  $('cmdNew').onclick = newDrawing;
   $('cmdSave').onclick = save;
   $('cmdOpen').onclick = load;
   $('cmdPrint').onclick = printSheet;

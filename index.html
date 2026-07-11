@@ -313,6 +313,7 @@
     <div class="brand"><span class="dia">♦</span>配管3D</div><!-- 版数は app.js が動的に付与（再読込で毎回最新になる） -->
     <div class="rb-group">
       <div class="rb-btns">
+        <button id="cmdNew"   title="新規図面（現在の内容をすべて消してまっさらにする）"><span class="ic">📄</span>新規</button>
         <button id="cmdSave"  title="図面をファイルに保存（.p3d.json）"><span class="ic">💾</span>保存</button>
         <button id="cmdOpen"  title="保存した図面を開く"><span class="ic">📂</span>開く</button>
         <button id="cmdPrint" title="図面と部品表を印刷"><span class="ic">🖨</span>印刷</button>
@@ -395,6 +396,7 @@
       </ul>
       <h3>リボン：ファイル</h3>
       <ul>
+        <li><b>新規</b>＝図面をまっさらに（部品・寸法・図面情報をすべて消去。確認あり・直後なら「元に戻す」で復元できます）</li>
         <li><b>保存</b>＝図面を <code>.p3d.json</code> で保存（部品・向き・材質・図面情報・注釈をまるごと）</li>
         <li><b>開く</b>＝保存した図面を読み込み（現在の内容は置き換わります）</li>
         <li><b>印刷</b>＝図面（白地・線画）＋3D方位コンパス＋アイテムリスト・設計仕様・図面情報をA3横で印刷（アイテムリスト／設計仕様は折りたたみ中なら省略）／<b>画像</b>＝画面をPNG書き出し</li>
