@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-Q';
+const APP_VER = 'v0629-R';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3646,11 +3646,17 @@ window.addEventListener('keydown', e => {
     return;                                     // それ以外は入力優先で無視
   }
   if (e.key === 'Escape') {
+    // スピナー表示中＝取消して閉じるだけ（選択は保つ）。キーボードレス（タッチ）起動時は入力欄に
+    // フォーカスが無く rotAInput のEscハンドラを通らないので、ここで受ける（取消ボタン経由もここ）
+    if (nudgeActive()) { endRotSpin(false); return; }
     if (pipeEndDrag) cancelPipeEndDrag();
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
-  } else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (nudgeActive()) endRotSpin(false);   // スピナー中の削除＝回転を取り消してから対象を削除
+    deleteSelected();
+  }
 });
 // 右クリック＝向きの送り（追従中／移動中／配置済み選択中）。右ドラッグ(パン)は回転しない。
 // 線を選択して右クリック「長押し」＝角度スピナーで任意角度回転。
@@ -3770,7 +3776,7 @@ function positionRotForm(cx, cy) {
   rotForm.style.left = Math.round(Math.max(rect.left + 4, Math.min(sx + 16, rect.right - fw - 4))) + 'px';
   rotForm.style.top = Math.round(Math.max(rect.top + 4, Math.min(sy - fh - 10, rect.bottom - fh - 4))) + 'px';
 }
-function startRotSpin(shift, cx, cy) {
+function startRotSpin(shift, cx, cy, noKbd) {
   // 構築線を選択中：無Shift＝1mm平行移動スピナー、Shift＝方位角スピナー。それ以外（パイプ等）＝従来の角度スピナー
   const xlineSel = !selectedPart && window.__annSelIsXline && window.__annSelIsXline();
   if (xlineSel) _nudgeMode = shift ? 'heading' : 'move';
@@ -3780,11 +3786,12 @@ function startRotSpin(shift, cx, cy) {
   else if (_nudgeMode === 'heading') ok = !!(window.__annHeadingSpinStart && window.__annHeadingSpinStart());
   else ok = rotSpinStart(shift);
   if (!ok) { _nudgeMode = 'angle'; return; }
+  _spinNoKbd = !!noKbd;   // タッチ起動＝キーボードを出さず▲▼で操作（3D画面タップで確定）
   setNudgeLabel();
   rotAInput.value = _nudgeMode === 'heading' ? (window.__annHeadingSpinStartDeg ? window.__annHeadingSpinStartDeg().toFixed(1) : '0') : '0';
   positionRotForm(cx, cy);
   rotForm.style.display = 'flex';
-  rotAInput.focus(); rotAInput.select();
+  if (!_spinNoKbd) { rotAInput.focus(); rotAInput.select(); }
   if (typeof updateForm === 'function') updateForm();   // スピナー表示中はEL入力を隠す
 }
 function endRotSpin(commit) {
@@ -3903,6 +3910,10 @@ if (rotAInput) {
   document.addEventListener('pointerdown', e => {
     if (!nudgeActive()) return;
     if (rotForm.contains(e.target)) return;
+    // タッチコントローラー上のタップは自動確定しない（取消=Esc・削除=Delはキー合成で各自処理／
+    // 向き・ひねりボタンは自ハンドラで確定／ズーム等はスピナーを保ったまま操作できる）
+    const tc = document.getElementById('touchCtrl');
+    if (tc && tc.contains(e.target)) return;
     endRotSpin(true);
   }, true);
 }
@@ -3946,8 +3957,29 @@ function zoomStep(factor) {
     btn.addEventListener('pointercancel', stop);
     btn.addEventListener('contextmenu', e => e.preventDefault());
   };
-  bindHold('tcOrient',  () => orientStep(false), false);
-  bindHold('tcTwist',   () => orientStep(true),  false);
+  // 向き/ひねり：タップ＝45°送り（従来）／長押し＝角度スピナー（右クリック長押し相当・キーボードレス）。
+  // スピナー対象（配置済みのパイプ・エルボ・フランジ等や線を選択中）の時だけ長押しを待ってからタップ判定し、
+  // 追従中・移動中など対象外の時は従来どおり押した瞬間に送る。
+  const bindOrientHold = (id, shift) => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    let to = null;
+    const clear = () => { if (to) { clearTimeout(to); to = null; } };
+    btn.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (nudgeActive()) { endRotSpin(true); return; }   // スピナー表示中にタップ＝確定して閉じる（画面タップと同じ）
+      if (canRotSpin()) {
+        const r = btn.getBoundingClientRect();
+        to = setTimeout(() => { to = null; startRotSpin(shift, r.right, r.top, true); }, 350);
+      } else orientStep(shift);
+    });
+    btn.addEventListener('pointerup', () => { if (to) { clear(); orientStep(shift); } });   // 長押し前に離した＝タップ＝45°送り
+    btn.addEventListener('pointerleave', clear);
+    btn.addEventListener('pointercancel', clear);
+    btn.addEventListener('contextmenu', e => e.preventDefault());
+  };
+  bindOrientHold('tcOrient', false);
+  bindOrientHold('tcTwist',  true);
   bindHold('tcEsc',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })), false);
   bindHold('tcDel',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })), false);
   // Shift／Ctrl＝タッチ用の仮想モディファイア（PCのShift/Ctrl押下と同じ挙動を再現するトグル）
