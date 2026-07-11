@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-S';
+const APP_VER = 'v0629-T';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6162,7 +6162,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       e.stopImmediatePropagation();
       return;
     }
-    if (drawState.locked) finishGuide();                // 直前の確定待ちを終え、新しい線を始める
+    if (drawState.locked) {
+      finishGuide();                                    // 直前の確定待ちを終える（長さフォーム・ガイドを消す）
+      // タッチ/ペン：確定待ちを終えるタップはここで消費し、次の線の起点は打たない。
+      // 打ってしまうと見えない起点＋十字カーソルが残り、次のタップで極小のゴミ線が作られて
+      // 長さフォームが表示されたままになる（2026-07-11 iPad指摘）。マウスは従来どおりクリック連鎖で次の線へ。
+      if (e.pointerType !== 'mouse') { drawDown = null; e.stopImmediatePropagation(); return; }
+    }
     if (e.pointerType !== 'mouse') {                    // タッチ/ペン：押下では決めず、ドラッグでカーソル移動／離した位置に点を打つ
       drawDown = { x: e.clientX, y: e.clientY, touch: true };
       e.stopImmediatePropagation();
