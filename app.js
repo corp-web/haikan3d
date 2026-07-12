@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-X';
+const APP_VER = 'v0629-Y';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5843,20 +5843,25 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 構築線（無限長）は距離Lが無意味なので脚X/Z/Yのみ出し、距離Lは隠す。中心(a)からの向き入力に使う
     const isXlineNow = drawState.mode === 'xline' || (drawState.editRec && drawState.editRec.type === 'xline');
     const isLineNow = drawState.mode === 'line' || (drawState.editRec && drawState.editRec.type === 'line');
-    // 線分：その方向の「長さ L」を1欄だけ出す（プレビュー＝2点目前 も 確定線の編集 も共通）。
-    // X/Z/Y を並べない＝値を消しても別軸の欄が出ず、方向が変わらない。
+    // 線分：軸方向のみ（X/Y/Zの1軸に沿う）は「長さL」1欄だけ＝値を消しても別軸の欄が出ず、方向が変わらない。
+    // 斜め（45°等・2軸以上に成分がある）は下の汎用処理へ抜けて X/Z/Y の脚欄＋L を並べる（2026-07-12 社長要望。
+    // 以前はL欄のみだったが「XやZの入力フォームも出してほしい」との指摘）。
     // 方向は「現在の向き」、長さ0に潰れたら「保持中の editDir」を使い、欄と方向を保つ。
     if (isLineNow && !isXlineNow) {
-      if (lnXBox) lnXBox.style.display = 'none';
-      if (lnZBox) lnZBox.style.display = 'none';
-      if (lnYBox) lnYBox.style.display = 'none';
       const a0 = drawState.first;
       const dlen = a0.distanceTo(drawState.cur);
       const dir = dlen >= 1e-6 ? drawState.cur.clone().sub(a0).normalize() : (drawState.editDir ? drawState.editDir.clone() : null);
-      if (!dir) { if (lnDBox) lnDBox.style.display = 'none'; return; }   // まだ方向が無い＝出さない
-      const bShown = dlen >= 0.003 ? drawState.cur : a0.clone().addScaledVector(dir, 0.001);
-      placeDistanceBox(a0, bShown);   // 距離 L のみ（方向は固定）
-      return;
+      if (!dir) { hideLineBoxes(); return; }   // まだ方向が無い＝出さない
+      const nAx = (Math.abs(dir.x) > 1e-3 ? 1 : 0) + (Math.abs(dir.y) > 1e-3 ? 1 : 0) + (Math.abs(dir.z) > 1e-3 ? 1 : 0);
+      if (nAx <= 1 || dlen < 0.003) {          // 軸方向のみ・潰れて向き保持中＝L欄のみ（従来どおり）
+        if (lnXBox) lnXBox.style.display = 'none';
+        if (lnZBox) lnZBox.style.display = 'none';
+        if (lnYBox) lnYBox.style.display = 'none';
+        const bShown = dlen >= 0.003 ? drawState.cur : a0.clone().addScaledVector(dir, 0.001);
+        placeDistanceBox(a0, bShown);   // 距離 L のみ（方向は固定）
+        return;
+      }
+      // 斜め＝この下の汎用処理で X/Z(/Y) の脚欄＋斜辺L を表示（脚の値入力は applyLineLegs が処理）
     }
     // 1点目を置いただけ（ほぼ動いていない）うちは脚ボックスを出さない。動き出してから表示
     if (drawState.first.distanceTo(drawState.cur) < 0.003) { hideLineBoxes(); return; }
