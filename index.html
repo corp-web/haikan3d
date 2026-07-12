@@ -287,6 +287,14 @@
     background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #itemList .il-foot input[type=date], body.light #palette .pal-select { color-scheme: light; }
   body.light #itemList .mat-input { background: #fff; color: #2a3550; }
+  /* コマンド補助ボタン（タッチコントローラー）：パレットと同様に明色へ */
+  body.light #touchCtrl button { background: rgba(248,250,253,.95); border-color: #b7c1d4; color: #33405c;
+    box-shadow: 0 3px 10px rgba(0,0,0,.18); }
+  body.light #touchCtrl button .lb { color: #4a5a74; }
+  body.light #touchCtrl button:active { background: rgba(47,123,255,.28); border-color: #2f7bff; }
+  body.light #touchCtrl button.on { background: rgba(47,123,255,.30); border-color: #2f7bff;
+    box-shadow: 0 0 0 2px rgba(47,123,255,.35); }
+  body.light #touchCtrl button.on .lb { color: #143a78; }
   body.light #itemList .c-no { color: #8a93a8; }
   body.light #itemList .il-spechead { color: #1f6fd0; border-top-color: #d0d6e2; }
   body.light #itemList .il-specbody { border-top-color: #e0e4ec; }
