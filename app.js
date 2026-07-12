@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-W';
+const APP_VER = 'v0629-X';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4964,7 +4964,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 色・線種の選択は無し（style は無視）。長尺だが円柱3本だけなので軽い。
   function laserTube(A, B, radius, color, opacity, solid) {
     const len = A.distanceTo(B);
-    // 白モードは加算合成だと色が白く飛ぶので通常合成＋不透明寄りにして本来の色を保つ（寸法線=オレンジのまま）。
+    // 白モードは加算合成だと色が白く飛ぶので通常合成＋不透明寄りにして本来の色を保つ。
+    // ※寸法線・構築線は solid=true で常に通常合成＝両モード同色。
     // solid=true（構築線）はモードに依らず常に通常合成・同一不透明度＝ダーク／ホワイトで同じ色・同じ見え方。
     const light = (typeof lightMode !== 'undefined') && lightMode;
     const useNormal = solid || light;
@@ -5008,9 +5009,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return sp;
   }
   // ---- 寸法線専用：文字と線の色 ----
-  // ダーク(0x141c33)・ホワイト(0xd2dbe8)どちらの背景でも映えるオレンジに統一（2026-07-12 社長要望。
-  // 旧: 明るい黄色0xffee00＝ホワイトモードでほぼ見えなかった）
-  const DIM_YELLOW = 0xff8a00;        // 補助線・寸法線本体・矢印＝オレンジ
+  // ダーク(0x141c33)・ホワイト(0xd2dbe8)どちらの背景でも見え、既存の固定色
+  // （一点鎖線=赤／構築線=オレンジ／点線=青／文字=シアン／値=赤）と混同しない緑に統一
+  // （2026-07-12 社長要望。旧: 黄色→ホワイトで不可視、オレンジ→赤・構築線と紛らわしい）
+  const DIM_COLOR = 0x22aa55;         // 補助線・寸法線本体・矢印＝緑（両モード同色）
   const DIM_TEXT_CSS = '#ff4040';     // 寸法文字＝赤
   // 寸法文字：枠・背景なしの赤文字スプライト。常にカメラ正対なので裏表・潰れが起きない。
   // 向きと位置は毎フレーム __updateDimTextFacing が画面投影に合わせて調整する
@@ -5181,22 +5183,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         dir.normalize();
         const len = 0.008, rad = 0.0026;
         const cone = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 10),
-          new THREE.MeshBasicMaterial({ color: DIM_YELLOW, depthTest: false, transparent: true, opacity: 0.95 }));
+          new THREE.MeshBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
         cone.quaternion.setFromUnitVectors(new V3(0, 1, 0), dir.clone().negate());   // 円錐の頂点を tip 側へ
         cone.position.copy(tip.clone().addScaledVector(dir, len / 2));
-        cone.userData.baseColor = DIM_YELLOW;
+        cone.userData.baseColor = DIM_COLOR;
         cone.renderOrder = 998;
         grp.add(cone);
       };
-      // 補助線・寸法線本体＝発光するオレンジ（レーザー調：光暈＋芯）。
-      // 芯の色はモードで使い分ける（テーマ切替時は __rebuildAllAnns で作り直されるのでここで分岐できる）：
-      //  ・ホワイト（通常合成）＝濃いオレンジ。淡色だと背景(0xd2dbe8)に溶けて見えない。
-      //  ・ダーク（加算合成）＝明るめオレンジで従来どおり発光感を出す。
+      // 補助線・寸法線本体＝緑（にじみ＋芯）。構築線と同じく solid=true（常に通常合成・同一不透明度）で
+      // 描くことで、ダーク／ホワイトどちらのモードでも完全に同じ色・同じ見え方になる。
       const glowSeg = (p0, p1) => {
         const g = new THREE.Group();
-        const light = (typeof lightMode !== 'undefined') && lightMode;
-        g.add(laserTube(p0, p1, 0.0008, DIM_YELLOW, 0.18));                          // 光暈（細め）
-        g.add(laserTube(p0, p1, 0.00026, light ? DIM_YELLOW : 0xffc46a, 0.95));      // 芯（極細）
+        g.add(laserTube(p0, p1, 0.0008, DIM_COLOR, 0.22, true));    // 外側のにじみ（細め）
+        g.add(laserTube(p0, p1, 0.00026, DIM_COLOR, 1.0, true));    // 芯（極細・不透明）
         return g;
       };
       if (isText) {
