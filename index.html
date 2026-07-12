@@ -240,6 +240,18 @@
   #textMenu .tm-sw.on { border-color: #fff; box-shadow: 0 0 0 2px #2f7bff; }
   /* ===== タッチ用オンスクリーン・コントローラー（iPad/iPhone） ===== */
   /* 既定は非表示。JS がタッチ端末を検出すると body.tc-on を付与して表示する */
+  /* 保存メニュー（新規保存／上書き保存） */
+  #saveMenu { position: fixed; z-index: 90; display: none; flex-direction: column; gap: 4px;
+    background: rgba(16,24,48,.97); border: 1px solid #36436b; border-radius: 8px; padding: 6px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45); }
+  #saveMenu button { background: #0f1830; color: #dbe4f3; border: 1px solid #36436b; border-radius: 6px;
+    padding: 8px 14px; font: bold 13px Meiryo, sans-serif; cursor: pointer; text-align: left; white-space: nowrap;
+    -webkit-tap-highlight-color: transparent; }
+  #saveMenu button:hover { border-color: #7fa8e8; background: rgba(127,168,232,.15); }
+  body.light #saveMenu { background: rgba(248,250,253,.97); border-color: #c4ccda; }
+  body.light #saveMenu button { background: #fff; color: #2a3550; border-color: #c4ccda; }
+  body.light #saveMenu button:hover { background: rgba(31,111,208,.10); border-color: #aebcd6; }
+
   #touchCtrl { position: fixed; left: 12px; bottom: 58px; z-index: 28; display: none;
     flex-direction: column; gap: 9px; }
   body.tc-on #touchCtrl { display: flex; }
@@ -396,6 +408,7 @@
         <li><b>ダブルクリック＝自由移動</b>（機点スナップあり）</li>
         <li><b>右クリック＝向きを送る</b>（Z軸45°×8→X軸45°×8）／<b>Shift＋右クリック＝ひねり</b>（45°×8）</li>
         <li>パイプ＝選択して端の点をクリックで起点選択 → 「長さ」入力かドラッグで伸縮（選んだ端が固定）</li>
+        <li><b>仕様の変更</b>＝配置済みの部品を選択すると<b>左のパレットにその部品の仕様が表示</b>され、パレットで<b>呼び径・タイプ・クラス・Sch・長さなどを変えるとその部品が置いたまま作り替え</b>られます（位置・向き・材質・グループは保持。「元に戻す」対応）</li>
         <li><kbd>Esc</kbd>＝取消／<kbd>Del</kbd>＝削除</li>
       </ul>
       <h3>まとめて選ぶ</h3>
@@ -406,8 +419,8 @@
       <h3>リボン：ファイル</h3>
       <ul>
         <li><b>新規</b>＝図面をまっさらに（部品・寸法・図面情報をすべて消去。確認あり・直後なら「元に戻す」で復元できます）</li>
-        <li><b>保存</b>＝図面を <code>.p3d.json</code> で保存（部品・向き・材質・図面情報・注釈をまるごと）</li>
-        <li><b>開く</b>＝保存した図面を読み込み（現在の内容は置き換わります）</li>
+        <li><b>保存</b>＝図面を <code>.p3d.json</code> で保存（部品・向き・材質・図面情報・注釈をまるごと）。<b>2回目からは「上書き保存／新規保存」の選択メニュー</b>が出ます（PCのChrome/Edgeは同じファイルへ直接上書き。iPadは同名でダウンロードし「ファイル」で置き換え）</li>
+        <li><b>開く</b>＝保存した図面を読み込み（現在の内容は置き換わります）。開いたファイルがそのまま上書き保存の対象になります</li>
         <li><b>印刷</b>＝図面（白地・線画）＋3D方位コンパス＋アイテムリスト・設計仕様・図面情報をA3横で印刷（アイテムリスト／設計仕様は折りたたみ中なら省略）／<b>画像</b>＝画面をPNG書き出し</li>
       </ul>
       <h3>リボン：描画</h3>

@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-Y';
+const APP_VER = 'v0629-Z';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1959,6 +1959,7 @@ function onOptChange(srcId) {
   o.sch   = v('optSch');
   updateOptVisibility();
   refreshThumbs();
+  applyPaletteToSelected();   // 配置済みフランジを選択中なら、その部品を新仕様で作り替え
 }
 
 // ---- パイプのオプションUI（呼び径・Sch・長さ mm） ----
@@ -1973,6 +1974,7 @@ function onPipeOptChange() {
   pipeOpts.sch = v('optPipeSch');
   const len = parseFloat(v('optPipeLen')); pipeOpts.length = (len > 0 ? len : 1000);
   refreshThumbs();
+  applyPaletteToSelected();   // 配置済みパイプを選択中なら、その部品を新仕様で作り替え
 }
 ['optPipeSize', 'optPipeSch', 'optPipeLen'].forEach(id => {
   const el = document.getElementById(id);
@@ -2038,6 +2040,7 @@ function onFitOptChange() {
   const cl = v('optFitClass'); if (cl !== undefined && VALVE_RATINGS.includes(cl)) valveOpts.cls = cl;   // クラスは多クラスvalveのみ記憶（Class800は無視）
   rebuildFittingSize();   // タイプ/クラス/sizeA 変更で 呼び径/Sch/sizeB 候補が変わるため作り直し
   refreshThumbs();
+  applyPaletteToSelected();   // 配置済みの継手・バルブを選択中なら、その部品を新仕様で作り替え
 }
 ['optFitType', 'optFitClass', 'optFitSize', 'optFitSch', 'optFitSizeB'].forEach(id => {
   const el = document.getElementById(id);
@@ -2056,6 +2059,113 @@ function setActivePartType(type) {
   if (pi) pi.style.display = isPipe ? '' : 'none';
   if (fi) fi.style.display = (fitting && !isPipe) ? '' : 'none';
   if (fitting && !isPipe) { activeFittingType = type; rebuildFittingSize(); }
+}
+
+// ===================================================================
+//  配置済み部品の仕様編集（2026-07-12 社長要望）
+//  部品を選択するとパレットがその部品の種別・仕様に切り替わり、
+//  パレットのオプション（タイプ/呼び径/クラス/Sch/長さ等）を変えると
+//  選択中の部品がその場で同じ位置・向きのまま作り替えられる。
+// ===================================================================
+// 配置済み部品 → パレット種別（TOOLSのtype）。partTypeRank と同じ対応表。
+function toolTypeOfPart(p) {
+  const u = p && p.userData; if (!u) return null;
+  if (u.partType === 'elbow') {
+    const k = (u.elbow && u.elbow.kind) || '';
+    return k.startsWith('45') ? 'elbow45' : (k.startsWith('180') ? 'return180' : 'elbow90');
+  }
+  if (u.partType === 'sw') {
+    const k = (u.sw && u.sw.kind) || '';
+    return ({ '90E': 'elbow90', '45E': 'elbow45', 'T': 'tee', 'TR': 'tee', 'CROSS': 'cross', 'FC': 'coupling', 'HC': 'coupling', 'FCR': 'coupling', 'BOSS': 'boss', 'CAP': 'cap', 'UNION': 'union' })[k] || null;
+  }
+  if (u.partType === 'valve') {
+    const k = (u.valve && u.valve.kind) || '';
+    return ({ ball: 'vBall', gate: 'vGate', globe: 'vGlobe', check: 'vCheck', strainer: 'vStrainer', butterfly: 'vButterfly', safety: 'vSafety', swgate: 'vSWgate', swglobe: 'vSWglobe' })[k] || null;
+  }
+  return ({ flange: 'flange', pipe: 'pipe', tee: 'tee', reducer: 'reducer', cap: 'cap' })[u.partType] || null;
+}
+// 配置済み部品 → タイプ欄(variantのt)。partColumns と同じ対応。該当なし(フランジ/パイプ等)は null。
+function variantTOfPart(p) {
+  const u = p.userData;
+  if (u.partType === 'elbow') return ((u.elbow && u.elbow.kind) || '').endsWith('S') ? 'BW(S)' : 'BW(L)';
+  if (u.partType === 'tee') return (u.tee && u.tee.sizeB && u.tee.sizeB !== u.tee.sizeA) ? 'BW(RT)' : 'BW(T)';
+  if (u.partType === 'reducer') return (u.reducer && u.reducer.ecc) ? 'BW(E)' : 'BW(C)';
+  if (u.partType === 'cap') return 'BW';
+  if (u.partType === 'sw') return ({ FC: 'FC', HC: 'HC', FCR: 'FCR', T: 'SW(T)', TR: 'SW(RT)', '90E': 'SW', '45E': 'SW', CROSS: 'SW', BOSS: 'SW', CAP: 'SW', UNION: 'SW' })[(u.sw && u.sw.kind) || ''] || 'SW';
+  if (u.partType === 'valve' && u.valve && u.valve.kind === 'butterfly') return u.valve.style === 'wafer' ? 'ウエハー' : 'フランジ';
+  return null;
+}
+let _syncingPalette = false;   // 選択→パレット反映中は「パレット→部品」の適用を抑止（多重・逆流防止）
+// 選択した配置済み部品の仕様をパレットへ映す
+function syncPaletteToPart(p) {
+  if (!p || !p.userData || !p.userData.placed) return;
+  const t = toolTypeOfPart(p); if (!t) return;
+  const u = p.userData;
+  _syncingPalette = true;
+  try {
+    if (u.partType === 'flange') {
+      Object.assign(flangeOpts, u.flange || {});
+      syncOptionsUI();                              // タイプ/クラス相互整合＋各欄へ値を反映
+    } else if (u.partType === 'pipe') {
+      Object.assign(pipeOpts, u.pipe || {});
+      buildPipeOptions();
+    } else {
+      const tool = toolByType(t);
+      const vt = variantTOfPart(p);
+      if (tool && vt && tool.variants && tool.variants.some(v => v.t === vt)) tool.curType = vt;
+      if (u.partType === 'valve') {
+        if (u.valve.sizeA) fittingOpts.sizeA = u.valve.sizeA;
+        if (u.valve.sizeB) fittingOpts.sizeB = u.valve.sizeB;
+        if (u.valve.rating && VALVE_RATINGS.includes(u.valve.rating)) valveOpts.cls = u.valve.rating;
+      } else {
+        const spec = u[u.partType];                 // elbow/tee/reducer/cap/sw
+        if (spec) {
+          if (spec.sizeA) fittingOpts.sizeA = spec.sizeA;
+          if (spec.sizeB) fittingOpts.sizeB = spec.sizeB;
+          if (spec.sch && spec.sch !== 'Sch80') fittingOpts.sch = spec.sch;   // SWのSch80固定値でBW用Schを汚さない
+        }
+      }
+    }
+    setActivePart(t);                               // 種別ドロップダウン・タイル・オプション欄を切替（継手系は値も反映）
+    refreshThumbs();
+  } finally { _syncingPalette = false; }
+}
+// パレットの現オプションで、選択中の配置済み部品を作り替える（位置・向き・材質・グループを保持）
+function applyPaletteToSelected() {
+  if (_syncingPalette) return;
+  const p = selectedPart;
+  if (!p || !p.userData || !p.userData.placed || selectedParts.size !== 1) return;
+  const sel = document.getElementById('partSelect');
+  const t = sel ? sel.value : null;
+  if (!t || t !== toolTypeOfPart(p)) return;        // パレットが選択部品と同じ種別の時だけ適用
+  const tool = toolByType(t); if (!tool) return;
+  const obj = tool.build(); if (!obj) return;
+  computeConns(obj);
+  // フェイス（起点）位置を保って差し替え：サイズが変わっても接続基準の機点がずれない
+  const anchorLocal = p.userData.faceLocal || gripLocalOf(p);
+  const anchor = connModelPos(p, anchorLocal);
+  obj.quaternion.copy(p.quaternion);
+  obj.scale.copy(p.scale);
+  obj.userData.placed = true;
+  obj.userData.orient = p.userData.orient || 0;
+  obj.userData.roll = p.userData.roll || 0;
+  if (p.userData.mat) obj.userData.mat = p.userData.mat;
+  if (p.userData.groupId != null) obj.userData.groupId = p.userData.groupId;
+  obj.position.copy(anchor).sub((obj.userData.faceLocal || new THREE.Vector3()).clone().applyQuaternion(obj.quaternion));
+  modelGroup.add(obj);
+  const i = placedParts.indexOf(p);
+  if (i >= 0) placedParts[i] = obj; else placedParts.push(obj);   // アイテムリストの並びを保つ
+  modelGroup.remove(p);
+  disposePartDeep(p);
+  selectPart(obj);                                  // 再選択（発光・フォーム・リスト更新込み）
+  _idleSig = null;
+  if (window.__scheduleHistory) window.__scheduleHistory();
+}
+function disposePartDeep(o) {
+  o.traverse(n => {
+    if (n.geometry) n.geometry.dispose();
+    if (n.material) { if (n.material.map) n.material.map.dispose(); n.material.dispose(); }
+  });
 }
 
 // ===================================================================
@@ -3213,6 +3323,8 @@ function selectPart(obj, additive = false) {
   }
   updateForm();
   refreshItemList();   // 3D空間での選択/解除を一覧へ反映
+  // 配置済み部品を単独選択＝パレットへその仕様を映す（パレットの変更でこの部品を編集できる）
+  if (obj && obj.userData && obj.userData.placed && selectedParts.size === 1 && !_syncingPalette) syncPaletteToPart(obj);
 }
 // グループ化／解除（リボン編集グループ）。部品＋注釈にまたがる
 let groupSeq = 0;
@@ -4481,17 +4593,97 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       annotations: annStore.map(a => ({ type: a.type, a: a.a.toArray(), b: a.b.toArray(), style: a.style, groupId: a.groupId != null ? a.groupId : null })),
     };
   }
-  function save() {
-    const data = serialize();
+  // ---- 保存：新規保存／上書き保存（2026-07-12 社長要望） ----
+  // PC(Chrome/Edge)は File System Access API のハンドルを保持して真の上書きができる。
+  // iPad Safari は API が無いため従来のダウンロード（同名ファイル）にフォールバックする。
+  let _saveTarget = null;   // { handle: FileSystemFileHandle|null, name: string } ＝上書き保存の対象
+  function defaultSaveName() {
     let nm = ($('dwgNo').value || $('dwgName').value || '配管図').trim() || '配管図';
-    nm = nm.replace(/[\\/:*?"<>|]/g, '_');
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    return nm.replace(/[\\/:*?"<>|]/g, '_') + '.p3d.json';
+  }
+  function downloadBlob(name, text) {
+    const blob = new Blob([text], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = nm + '.p3d.json';
+    a.download = name;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1500);
   }
+  // 画面上部に短く出す通知（上書き保存は画面変化が無いので完了を明示する）
+  let _toastEl = null, _toastTimer = null;
+  function toast(msg) {
+    if (!_toastEl) {
+      _toastEl = document.createElement('div');
+      _toastEl.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:120;' +
+        'padding:7px 16px;font:bold 13px Meiryo,sans-serif;color:#fff;background:rgba(20,30,55,.92);' +
+        'border:1px solid #3c5a9e;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;display:none;white-space:nowrap';
+      document.body.appendChild(_toastEl);
+    }
+    _toastEl.textContent = msg;
+    _toastEl.style.display = 'block';
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { _toastEl.style.display = 'none'; }, 2400);
+  }
+  async function writeHandle(handle, text) {
+    const w = await handle.createWritable();
+    await w.write(text); await w.close();
+  }
+  async function saveAsNew() {
+    const text = JSON.stringify(serialize(), null, 2);
+    const name = defaultSaveName();
+    if (window.showSaveFilePicker) {
+      try {
+        const h = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: '配管3D図面', accept: { 'application/json': ['.json'] } }] });
+        await writeHandle(h, text);
+        _saveTarget = { handle: h, name: h.name };
+        toast('保存しました：' + h.name);
+        return;
+      } catch (err) { if (err && err.name === 'AbortError') return; }   // キャンセル＝中止。他エラーはダウンロードへ
+    }
+    downloadBlob(name, text);
+    _saveTarget = { handle: null, name };
+    toast('保存しました：' + name);
+  }
+  async function saveOverwrite() {
+    if (!_saveTarget) { saveAsNew(); return; }
+    const text = JSON.stringify(serialize(), null, 2);
+    if (_saveTarget.handle) {
+      try {
+        await writeHandle(_saveTarget.handle, text);
+        toast('上書き保存しました：' + _saveTarget.name);
+        return;
+      } catch (err) { if (err && err.name === 'AbortError') return; }   // 権限拒否等はダウンロードで続行
+    }
+    // iPad等：真の上書きはできないので同名でダウンロード（「ファイル」側で置き換えできる）
+    downloadBlob(_saveTarget.name, text);
+    toast('保存しました：' + _saveTarget.name);
+  }
+  // 保存メニュー（新規保存／上書き保存）。一度も保存していなければメニューを出さず新規保存
+  const saveMenu = document.createElement('div');
+  saveMenu.id = 'saveMenu';
+  saveMenu.style.display = 'none';
+  saveMenu.innerHTML = '<button id="svOver" type="button"></button><button id="svNew" type="button">新規保存（別ファイル）</button>';
+  document.body.appendChild(saveMenu);
+  function hideSaveMenu() { saveMenu.style.display = 'none'; }
+  function openSaveMenu() {
+    if (saveMenu.style.display !== 'none') { hideSaveMenu(); return; }   // 再押下＝閉じる
+    if (!_saveTarget) { saveAsNew(); return; }
+    const ov = document.getElementById('svOver');
+    if (ov) ov.textContent = '上書き保存：' + _saveTarget.name;
+    const btn = document.getElementById('cmdSave');
+    const r = btn ? btn.getBoundingClientRect() : { left: 20, top: window.innerHeight - 60 };
+    saveMenu.style.left = Math.max(8, Math.round(r.left)) + 'px';
+    saveMenu.style.bottom = Math.round(window.innerHeight - r.top + 8) + 'px';
+    saveMenu.style.display = 'flex';
+  }
+  document.getElementById('svOver').onclick = () => { hideSaveMenu(); saveOverwrite(); };
+  document.getElementById('svNew').onclick = () => { hideSaveMenu(); saveAsNew(); };
+  document.addEventListener('pointerdown', e => {   // メニュー外タップ＝閉じる
+    if (saveMenu.style.display === 'none') return;
+    if (saveMenu.contains(e.target)) return;                                    // メニュー内＝各ボタンのclickに任せる
+    if (e.target && e.target.closest && e.target.closest('#cmdSave')) return;   // 保存ボタン自身＝onclick側でトグル
+    hideSaveMenu();
+  }, true);
   // 新規図面：追従・移動を解除し、確認のうえ全消去（部品・注釈・図面情報・仕様欄）。
   // applyData の空データで一括初期化＝「開く」と同じ経路。履歴には残すので直後は「元に戻す」で復元できる。
   function newDrawing() {
@@ -4501,6 +4693,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (movingPart) cancelMovePart();
     stopFollow();
     applyData({ app: '配管3D', version: 1, parts: [], annotations: [], drawing: {} });
+    _saveTarget = null;   // 新規図面＝上書き先も忘れる（前の図面ファイルを誤って上書きしない）
     scheduleHistory();
   }
   function clearAllParts() {
@@ -4575,7 +4768,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__recordHistory = recordHistory;
   window.__undo = undo; window.__redo = redo; window.__resetHistory = resetHistory;
   setTimeout(() => { try { recordHistory(); } catch (e) {} }, 0);   // 初期状態を基準として記録（初期化完了後に実行）
-  function load() {
+  async function load() {
+    // PC(Chrome/Edge)：File System Access API で開くとハンドルが取れ、そのまま「上書き保存」で書き戻せる
+    if (window.showOpenFilePicker) {
+      let h = null, f = null, text = null;
+      try {
+        [h] = await window.showOpenFilePicker({ multiple: false });
+        f = await h.getFile();
+        text = await f.text();
+      } catch (err) { if (err && err.name === 'AbortError') return; text = null; }   // キャンセル＝中止。失敗＝従来input へ
+      if (text != null) {
+        try {
+          applyData(JSON.parse(text)); resetHistory();
+          _saveTarget = { handle: h, name: f.name };   // 開いたファイル＝上書き保存の対象
+        } catch (err) { alert('読込に失敗しました：' + err.message); }
+        return;
+      }
+    }
     const inp = document.createElement('input');
     inp.type = 'file';
     // iPad対策：accept で拡張子を絞ると「ファイル」で .p3d.json がグレーアウトして選べないことがあるので絞らない
@@ -4587,7 +4796,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const f = inp.files && inp.files[0];
       if (!f) { cleanup(); return; }
       const r = new FileReader();
-      r.onload = () => { cleanup(); try { applyData(JSON.parse(r.result)); resetHistory(); } catch (err) { alert('読込に失敗しました：' + err.message); } };
+      r.onload = () => {
+        cleanup();
+        try {
+          applyData(JSON.parse(r.result)); resetHistory();
+          _saveTarget = { handle: null, name: f.name };   // 名前だけ記憶（上書きは同名ダウンロード）
+        } catch (err) { alert('読込に失敗しました：' + err.message); }
+      };
       r.onerror = () => { cleanup(); alert('ファイルを読み込めませんでした。'); };
       r.readAsText(f);
     };
@@ -7478,7 +7693,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
   // ================= ボタン結線 =================
   $('cmdNew').onclick = newDrawing;
-  $('cmdSave').onclick = save;
+  $('cmdSave').onclick = openSaveMenu;   // 初回＝新規保存／保存済みなら 新規/上書き の選択メニュー
   $('cmdOpen').onclick = load;
   $('cmdPrint').onclick = printSheet;
   $('cmdPng').onclick = exportPng;
