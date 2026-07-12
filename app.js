@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0629-U';
+const APP_VER = 'v0629-V';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -277,6 +277,12 @@ function resize() {
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
+// iPad：縦横回転の直後は resize イベント時点で古いサイズが返り、画面が伸びたままになることがある。
+// ①ビューポート要素の実サイズ変化を ResizeObserver で監視（回転・Split View・キーボードにも追従）
+// ②回転イベント後に遅延再計算（レイアウト確定待ちの保険）
+if (window.ResizeObserver) new ResizeObserver(() => resize()).observe(vp);
+window.addEventListener('orientationchange', () => { setTimeout(resize, 300); setTimeout(resize, 900); });
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 resize();
 
 // ===================================================================
@@ -3957,23 +3963,41 @@ function zoomStep(factor) {
     btn.addEventListener('pointercancel', stop);
     btn.addEventListener('contextmenu', e => e.preventDefault());
   };
-  // 向き/ひねり：タップ＝45°送り（従来）／長押し＝角度スピナー（右クリック長押し相当・キーボードレス）。
-  // スピナー対象（配置済みのパイプ・エルボ・フランジ等や線を選択中）の時だけ長押しを待ってからタップ判定し、
-  // 追従中・移動中など対象外の時は従来どおり押した瞬間に送る。
+  // 向き/ひねり：タップ＝押した瞬間に45°送り（従来の応答性）／長押し(0.6秒)＝角度スピナー。
+  // 部品選択中の長押しは「押下時に回った45°を元へ戻してから」スピナーを開く＝タップと長押しが両立する。
+  // ※タップの実行を離した時(pointerup)に遅らせる方式は、指でしっかり押す(0.35秒超の)タップが全部
+  //   長押し扱いになり「ひねりが効かない」と誤認される（2026-07-12 iPad指摘）ため廃止。
+  const ORIENT_HOLD_MS = 600;   // リボンのアイコン長押し(500ms)より長め＝タップ意図を長押しに誤判定しない
   const bindOrientHold = (id, shift) => {
     const btn = document.getElementById(id);
     if (!btn) return;
-    let to = null;
-    const clear = () => { if (to) { clearTimeout(to); to = null; } };
+    let to = null, tapOnUp = false;
+    const clear = () => { if (to) { clearTimeout(to); to = null; } tapOnUp = false; };
     btn.addEventListener('pointerdown', e => {
       e.preventDefault(); e.stopPropagation();
       if (nudgeActive()) { endRotSpin(true); return; }   // スピナー表示中にタップ＝確定して閉じる（画面タップと同じ）
-      if (canRotSpin()) {
-        const r = btn.getBoundingClientRect();
-        to = setTimeout(() => { to = null; startRotSpin(shift, r.right, r.top, true); }, 350);
-      } else orientStep(shift);
+      const part = (pipeRotTarget() && selectedPart) ? selectedPart : null;   // 部品のスピナー対象＝即送り＋長押しで巻き戻し
+      const r = btn.getBoundingClientRect();
+      if (part) {
+        const snap = { pos: part.position.clone(), quat: part.quaternion.clone(), orient: part.userData.orient || 0, roll: part.userData.roll || 0 };
+        orientStep(shift);                               // まず即45°送り（タップの体感は従来どおり）
+        tapOnUp = false;
+        to = setTimeout(() => {                          // 押し続けた＝長押し：45°を戻してからスピナーへ
+          to = null;
+          if (selectedPart === part) {
+            part.position.copy(snap.pos); part.quaternion.copy(snap.quat);
+            part.userData.orient = snap.orient; part.userData.roll = snap.roll;
+            _idleSig = null;
+            if (typeof updateForm === 'function') updateForm();
+            startRotSpin(shift, r.right, r.top, true);
+          }
+        }, ORIENT_HOLD_MS);
+      } else if (canRotSpin()) {                         // 線・寸法の選択中：従来どおり離した時にタップ判定
+        tapOnUp = true;
+        to = setTimeout(() => { to = null; tapOnUp = false; startRotSpin(shift, r.right, r.top, true); }, ORIENT_HOLD_MS);
+      } else orientStep(shift);                          // 追従中・移動中など＝即送り
     });
-    btn.addEventListener('pointerup', () => { if (to) { clear(); orientStep(shift); } });   // 長押し前に離した＝タップ＝45°送り
+    btn.addEventListener('pointerup', () => { if (to) { const tap = tapOnUp; clear(); if (tap) orientStep(shift); } });
     btn.addEventListener('pointerleave', clear);
     btn.addEventListener('pointercancel', clear);
     btn.addEventListener('contextmenu', e => e.preventDefault());
@@ -5578,6 +5602,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const p of xlinePts) test(p);   // 構築線どうしの交点（CADの交点スナップ）
     return best;
   }
+  // 作図中（1点目・2点目の位置決め）も、部品配置と同じ機点マーカーを表示する（2026-07-12 社長要望）。
+  // 対象は drawSnapPoint と同じ吸着候補（部品の機点＋線分/円の端点・中点／寸法の両端／構築線の交点）。
+  // snapPoint＝現在吸着中の点（緑・大きく強調）。マーカーの消去は clearDrawTemp（確定・取消・ツール終了）で行う。
+  function showDrawSnapMarkers(snapPoint) {
+    clearMarkers();
+    const mark = (mpos, part) => {
+      const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
+      addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, markerRadiusFor(part, isSnap));
+    };
+    for (const p of placedParts) {
+      if (!p.userData.faceLocal) continue;
+      for (const local of connsOf(p)) mark(connModelPos(p, local), p);
+    }
+    for (const r of annStore) { if (r === drawState.editRec) continue; for (const sp of annSnapPoints(r)) mark(sp, null); }
+    for (const p of xlinePts) mark(p, null);
+  }
   // 起点 P1 から水平面上の点に角度刻み angleStep を適用（0=自由）
   function applyAngleSnap(P1, pt) {
     if (!angleStep) return pt;
@@ -5869,6 +5909,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     clearPreview();
     if (typeof clearLineGuide === 'function') clearLineGuide();
     if (typeof hideLineBoxes === 'function') hideLineBoxes();
+    if (typeof clearMarkers === 'function') clearMarkers();   // 作図中の機点マーカーも消す
   }
   const abortDrawPoint = clearDrawTemp;   // 起点取消（未確定なので線は作られない）
   const finishGuide = clearDrawTemp;      // 確定待ちを終える（線は確定済みなので残る）
@@ -5989,7 +6030,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!drawState.first || !drawState.cur || drawState.cur.distanceTo(drawState.first) <= 1e-6) { abortDrawPoint(); return; }
     drawState.dimAdjust = { a: drawState.first.clone(), b: drawState.cur.clone() };
     drawState.dimOff = 0; drawState.dimDir = null;
-    hideLineBoxes(); clearLineGuide();
+    hideLineBoxes(); clearLineGuide(); clearMarkers();   // 逃げ調整中は機点マーカーを出さない
   }
   // カーソル位置 → 逃げ量(off, m)と方向(dir)。
   //  平面の寸法（ABに水平成分あり）：通常＝ABの水平直交へ／Shift＝縦（上下）へ
@@ -6291,6 +6332,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!drawState.first) {                             // ドラッグ中：十字カーソル（離した所に残る）とスナップ印
       clearLineGuide();
       const r = pickFirstPoint(e.clientX, e.clientY);
+      showDrawSnapMarkers(r.snapped ? r.p : null);       // 部品配置と同じ機点マーカー（吸着中は緑）
       if (r.p && e.pointerType !== 'mouse') guideCross(r.p, r.snapped ? 0x39ff8a : 0x49c5ff);   // タッチ/ペン＝十字カーソル（吸着＝緑）
       else if (r.p && r.snapped) guideDot(r.p, 0x39ff8a, 0.0042);                                // マウスは従来どおり吸着印
       return;
@@ -6298,6 +6340,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし（常に水平）
     const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
     if (!r.p) return;
+    showDrawSnapMarkers(r.snapped ? r.p : null);         // 2点目の位置決め中も機点マーカーを出す
     if (drawState.mode === 'xline') r.p.y = drawState.first.y;
     if (drawState.mode === 'circle') r.p.y = drawState.first.y;   // 半径点も中心の高さに合わせる（水平な円）
     drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped;
