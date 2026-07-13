@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0713-A';
+const APP_VER = 'v0713-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3328,6 +3328,7 @@ function setEmissive(obj, hex) {
 // 単一選択（従来動作）。additive=true で Ctrl+クリックのトグル複数選択になる。
 function selectPart(obj, additive = false) {
   if (additive) { toggleSelect(obj); return; }
+  clearClash();   // 干渉表示中なら赤表示を解除（次の操作で消える仕様）
   if (typeof resetPipeRotState === 'function') resetPipeRotState();   // 選択が変わったらパイプ回転軸をリセット
   if (window.__annClearSel) window.__annClearSel();   // 部品を単独選択/解除したら線選択も解除（部品と排他）
   if (pipeEndDrag && pipeEndDrag.part !== obj) { pipeEndDrag = null; controls.enabled = true; }
@@ -3456,6 +3457,74 @@ function partTypeRank(p) {
   }
   return r(u.partType);
 }
+// ===== 付属品・溶接・パイプ合計の自動集計（参考値・2026-07-14 社長要望） =====
+// 機点の一致（1.5mm以内）から継手を推定する：
+//  ・フランジのフェイス同士／フェイス×フランジ形バルブ ＝ ガスケット＋ボルト・ナット 1組
+//  ・それ以外の機点一致 ＝ 溶接口 1口（SW系＝差込溶接／その他＝突合せ溶接）
+// あくまで拾い出しの下書き（参考値）。実数は検図のうえ確定する。
+function connPointsForStats(p) {
+  const u = p.userData;
+  const spec = u.flange || u.pipe || u.elbow || u.cap || u.tee || u.reducer || u.sw || u.valve || {};
+  const a = spec.sizeA || '', b = spec.sizeB || a;
+  const out = [];
+  if (u.faceLocal) out.push({ local: u.faceLocal, size: a, face: true });
+  if (u.backLocal) out.push({ local: u.backLocal, size: (u.partType === 'reducer') ? b : a, face: false });
+  if (u.extraLocals) for (const e of u.extraLocals) out.push({ local: e, size: b, face: false });   // ティー枝・安全弁出口＝第2サイズ
+  return out;
+}
+function accessoryRows() {
+  const TOL = 0.0015;
+  const pts = [];
+  for (const p of placedParts) {
+    const u = p.userData;
+    if (!u.faceLocal) continue;
+    const isFlange = u.partType === 'flange';
+    const isValve = u.partType === 'valve';
+    const swValve = isValve && ['swgate', 'swglobe'].includes((u.valve && u.valve.kind) || '');
+    const swSide = u.partType === 'sw' || swValve || (isFlange && u.flange && u.flange.type === 'SW');
+    for (const cp of connPointsForStats(p)) {
+      pts.push({
+        p, pos: connModelPos(p, cp.local), size: cp.size,
+        gasketFace: isFlange && cp.face,                              // フランジのフェイス＝ガスケット面
+        valveFlanged: isValve && !swValve,                            // フランジ形バルブの接続端
+        weldable: !(isFlange && cp.face) && (!isValve || swValve),    // 溶接され得る端（フェイスとフランジ形バルブは除外）
+        sw: swSide,
+        cls: isFlange ? ((u.flange && u.flange.cls) || '') : (isValve ? ((u.valve && u.valve.rating) || (swValve ? 'Class800' : '')) : ''),
+      });
+    }
+  }
+  const gasket = new Map(), weldB = new Map(), weldS = new Map();
+  const bump = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const A = pts[i], B = pts[j];
+      if (A.p === B.p) continue;
+      if (Math.abs(A.pos.x - B.pos.x) > TOL || Math.abs(A.pos.y - B.pos.y) > TOL || Math.abs(A.pos.z - B.pos.z) > TOL) continue;
+      if (A.pos.distanceTo(B.pos) > TOL) continue;
+      if ((A.gasketFace && (B.gasketFace || B.valveFlanged)) || (B.gasketFace && A.valveFlanged)) {
+        const f = A.gasketFace ? A : B;
+        bump(gasket, `${f.size}|${f.cls}`);
+      } else if (A.weldable && B.weldable) {
+        bump((A.sw || B.sw) ? weldS : weldB, A.size || B.size);
+      }
+    }
+  }
+  const rows = [];
+  for (const [k, n] of gasket) { const [size, cls] = k.split('|'); rows.push({ kind: 'ガスケット', type: '自動', size, cls, qty: n, mat: '' }); }
+  for (const [k, n] of gasket) { const [size, cls] = k.split('|'); rows.push({ kind: 'ボルト・ナット', type: '自動・1式', size, cls, qty: n, mat: '' }); }
+  for (const [size, n] of weldB) rows.push({ kind: '溶接口(突合せ)', type: '自動', size, cls: '—', qty: n, mat: '' });
+  for (const [size, n] of weldS) rows.push({ kind: '溶接口(差込)', type: '自動', size, cls: '—', qty: n, mat: '' });
+  // パイプ合計長さ（呼び径×Schごと・m）
+  const lenBy = new Map();
+  for (const p of placedParts) {
+    if (p.userData.partType !== 'pipe') continue;
+    const o = p.userData.pipe || {};
+    const k = `${o.sizeA || ''}|${o.sch || ''}`;
+    lenBy.set(k, (lenBy.get(k) || 0) + (o.length || 0));
+  }
+  for (const [k, mm] of lenBy) { const [size, sch] = k.split('|'); rows.push({ kind: 'パイプ合計', type: '自動', size, cls: sch, qty: (Math.round(mm) / 1000) + 'm', mat: '' }); }
+  return rows;
+}
 const _ilBody = document.getElementById('ilBody');
 // 一覧表を作り直す。同仕様(種別・タイプ・サイズ・クラスが全一致)を1行にまとめ、数量列に件数を表示。
 function refreshItemList() {
@@ -3541,6 +3610,54 @@ function refreshItemList() {
     });
     _ilBody.appendChild(tr);
   });
+  // 付属品・溶接・パイプ合計の自動集計行（表示のみ・クリック不可）。CSV・印刷の部品表にも同じ内容が載る
+  const acc = accessoryRows();
+  if (acc.length) {
+    const hd = document.createElement('tr'); hd.className = 'il-acc-head';
+    const htd = document.createElement('td'); htd.colSpan = 8; htd.textContent = '― 付属品・溶接・合計（自動集計・参考） ―';
+    hd.appendChild(htd); _ilBody.appendChild(hd);
+    for (const r of acc) {
+      const tr = document.createElement('tr'); tr.className = 'il-acc';
+      const mk = txt => { const td = document.createElement('td'); td.textContent = txt; return td; };
+      tr.appendChild(mk('')); tr.appendChild(mk(r.kind)); tr.appendChild(mk(r.type)); tr.appendChild(mk(r.size));
+      tr.appendChild(mk(r.cls)); tr.appendChild(mk(r.qty)); tr.appendChild(mk('')); tr.appendChild(mk(''));
+      _ilBody.appendChild(tr);
+    }
+  }
+}
+
+// ===== 干渉チェック（参考・2026-07-14 社長要望） =====
+// 部品ごとのAABB（外接箱・2mm縮小）同士の重なりで「干渉の疑い」を検出して赤表示する。
+// 機点が一致している（＝意図して接続した）ペアは干渉と見なさない。次のクリック（選択変更）で表示解除。
+let _clashSet = null;
+function clearClash() {
+  if (!_clashSet) return;
+  for (const p of _clashSet) if (placedParts.includes(p)) setEmissive(p, selectedParts.has(p) ? SEL_COLOR : 0x000000);
+  _clashSet = null;
+}
+function runClashCheck() {
+  clearClash();
+  if (placedParts.length < 2) { if (window.__toast) window.__toast('干渉チェック：部品が2つ以上必要です'); return; }
+  // 接続済みペア（機点の一致）を除外リストへ
+  const connKey = new Set();
+  const pts = [];
+  placedParts.forEach((p, idx) => { if (p.userData.faceLocal) for (const l of connsOf(p)) pts.push({ idx, pos: connModelPos(p, l) }); });
+  for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+    if (pts[i].idx !== pts[j].idx && pts[i].pos.distanceTo(pts[j].pos) < 0.0015)
+      connKey.add(Math.min(pts[i].idx, pts[j].idx) + '_' + Math.max(pts[i].idx, pts[j].idx));
+  }
+  const boxes = placedParts.map(p => new THREE.Box3().setFromObject(p).expandByScalar(-0.002));
+  const bad = new Set(); let pairs = 0;
+  for (let i = 0; i < placedParts.length; i++) {
+    for (let j = i + 1; j < placedParts.length; j++) {
+      if (connKey.has(i + '_' + j)) continue;
+      if (boxes[i].intersectsBox(boxes[j])) { bad.add(placedParts[i]); bad.add(placedParts[j]); pairs++; }
+    }
+  }
+  if (!pairs) { if (window.__toast) window.__toast('干渉は見つかりませんでした'); return; }
+  _clashSet = bad;
+  for (const p of bad) setEmissive(p, 0xff3030);
+  if (window.__toast) window.__toast('干渉の疑い：' + pairs + '組を赤表示（クリックで解除・参考値）');
 }
 
 // カーソル下の配置済み部品（ルート）を返す。無ければ null。
@@ -4628,8 +4745,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     let nm = ($('dwgNo').value || $('dwgName').value || '配管図').trim() || '配管図';
     return nm.replace(/[\\/:*?"<>|]/g, '_') + '.p3d.json';
   }
-  function downloadBlob(name, text) {
-    const blob = new Blob([text], { type: 'application/json' });
+  function downloadBlob(name, text, mime) {
+    const blob = new Blob([text], { type: mime || 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = name;
@@ -4685,6 +4802,60 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     downloadBlob(_saveTarget.name, text);
     toast('保存しました：' + _saveTarget.name);
   }
+  window.__toast = toast;   // トップレベルの機能（干渉チェック等）からも通知を出せるように
+  // ---- 自動保存（ブラウザ内バックアップ・事故防止・2026-07-14 社長要望） ----
+  // 20秒ごと＋画面が隠れる時に、図面全体を localStorage へ保存。起動時に残っていれば復元を提案する。
+  const AUTOSAVE_KEY = 'haikan3d.autosave';
+  let _autoLast = '';
+  function autosaveTick() {
+    try {
+      const s = JSON.stringify(serialize());
+      if (s === _autoLast) return;                      // 変化なしは書かない
+      _autoLast = s;
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ t: Date.now(), name: ($('dwgNo').value || $('dwgName').value || ''), data: s }));
+    } catch (err) { /* 容量超過等は諦める（次回また試す） */ }
+  }
+  setInterval(autosaveTick, 20000);
+  window.addEventListener('pagehide', autosaveTick);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosaveTick(); });
+  // 起動時：前回の作業内容が残っていれば復元を提案（テンプレート適用の後に実行される）
+  setTimeout(() => {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (!raw) return;
+      const rec = JSON.parse(raw);
+      const data = JSON.parse(rec.data);
+      if (!data || !Array.isArray(data.parts)) return;
+      if (!data.parts.length && !(data.annotations && data.annotations.length)) return;   // 空図面は提案しない
+      const w = new Date(rec.t);
+      const label = `${w.getMonth() + 1}/${w.getDate()} ${String(w.getHours()).padStart(2, '0')}:${String(w.getMinutes()).padStart(2, '0')}`;
+      if (confirm(`前回の作業内容（${rec.name || '無題'}・${label}時点の自動保存）が残っています。復元しますか？\n（キャンセル＝まっさらな状態から始める）`)) {
+        applyData(data); resetHistory();
+      } else {
+        localStorage.removeItem(AUTOSAVE_KEY);          // 断られたら次回は聞かない
+      }
+    } catch (err) {}
+  }, 400);
+  // ---- 図面情報テンプレート（既定値の記憶・2026-07-14 社長要望） ----
+  // 設計仕様・場所・社名を既定として記憶し、起動時と「新規」時に自動で入れる（名称・図番・年月日は図面ごとなので対象外）
+  const TPL_KEY = 'haikan3d.dwgTemplate';
+  function saveDwgTemplate() {
+    try {
+      localStorage.setItem(TPL_KEY, JSON.stringify({ spec: gatherSpec(), place: $('dwgPlace').value, company: $('dwgCompany').value }));
+      toast('図面情報を既定として記憶しました（新規図面に自動で入ります）');
+    } catch (err) { alert('記憶できませんでした：' + err.message); }
+  }
+  function applyDwgTemplate() {
+    try {
+      const raw = localStorage.getItem(TPL_KEY);
+      if (!raw) return;
+      const o = JSON.parse(raw);
+      if (o.spec) applySpec(o.spec);
+      if (o.place != null) $('dwgPlace').value = o.place;
+      if (o.company != null) $('dwgCompany').value = o.company;
+    } catch (err) {}
+  }
+  applyDwgTemplate();   // 起動時に既定値を適用（自動保存の復元があれば、その内容で上書きされる）
   // 保存メニュー（新規保存／上書き保存）。一度も保存していなければメニューを出さず新規保存
   const saveMenu = document.createElement('div');
   saveMenu.id = 'saveMenu';
@@ -4721,6 +4892,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     stopFollow();
     applyData({ app: '配管3D', version: 1, parts: [], annotations: [], drawing: {} });
     _saveTarget = null;   // 新規図面＝上書き先も忘れる（前の図面ファイルを誤って上書きしない）
+    applyDwgTemplate();   // 既定の図面情報（設計仕様・場所・社名）を自動で入れる
     scheduleHistory();
   }
   function clearAllParts() {
@@ -4932,7 +5104,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       g.qty++;
     }
     groups.sort((a, b) => (a.rank - b.rank) || (a.seq - b.seq));
-    return groups.map((g, i) => ({ no: i + 1, kind: g.c.kind, type: g.c.type, size: g.c.size, cls: g.c.cls, mat: g.mat, qty: g.qty }));
+    const rows = groups.map((g, i) => ({ no: i + 1, kind: g.c.kind, type: g.c.type, size: g.c.size, cls: g.c.cls, mat: g.mat, qty: g.qty }));
+    // 付属品・溶接・パイプ合計の自動集計も部品表（印刷・CSV）へ載せる
+    for (const r of accessoryRows()) rows.push({ no: rows.length + 1, kind: r.kind, type: r.type, size: r.size, cls: r.cls, mat: '', qty: r.qty });
+    return rows;
+  }
+  // ---- 部品表CSV（Excel向け・BOM付きUTF-8） ----
+  function exportCsv() {
+    const esc = v => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const lines = [];
+    lines.push(['図番', $('dwgNo').value, '名称', $('dwgName').value, '年月日', $('dwgDate').value, '社名', $('dwgCompany').value].map(esc).join(','));
+    lines.push('');
+    lines.push(['#', '種別', 'タイプ', 'サイズ', 'クラス', '数量', '材質'].join(','));
+    for (const r of partsRows()) lines.push([r.no, r.kind, r.type, r.size, r.cls, r.qty, r.mat || ''].map(esc).join(','));
+    lines.push('');
+    lines.push(esc('※ガスケット・ボルト・溶接口・パイプ合計は機点の接続から自動集計した参考値'));
+    const name = (($('dwgNo').value || $('dwgName').value || '部品表').trim() || '部品表').replace(/[\\/:*?"<>|]/g, '_') + '.csv';
+    downloadBlob(name, '\ufeff' + lines.join('\r\n'), 'text/csv');   // BOM付き＝Excelで文字化けしない
+    toast('部品表CSVを書き出しました：' + name);
   }
   function esc(s) { return String(s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
   const PRINT_COMPANY = '志基テクノ株式会社';
@@ -7722,6 +7911,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdNew').onclick = newDrawing;
   $('cmdSave').onclick = openSaveMenu;   // 初回＝新規保存／保存済みなら 新規/上書き の選択メニュー
   $('cmdOpen').onclick = load;
+  $('cmdCsv').onclick = exportCsv;       // 部品表CSV（自動集計付き）
+  $('cmdClash').onclick = runClashCheck; // 干渉チェック（参考）
+  $('cmdTplSave').onclick = saveDwgTemplate;   // 図面情報を既定として記憶
   $('cmdPrint').onclick = printSheet;
   $('cmdPng').onclick = exportPng;
   $('cmdLine').onclick = () => setDrawMode('line');

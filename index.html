@@ -240,6 +240,17 @@
   #textMenu .tm-sw.on { border-color: #fff; box-shadow: 0 0 0 2px #2f7bff; }
   /* ===== タッチ用オンスクリーン・コントローラー（iPad/iPhone） ===== */
   /* 既定は非表示。JS がタッチ端末を検出すると body.tc-on を付与して表示する */
+  /* アイテムリスト：自動集計行（付属品・溶接・パイプ合計）とテンプレート記憶ボタン */
+  #itemList tr.il-acc td { color: #8fa0c0; font-size: 11px; }
+  #itemList tr.il-acc-head td { color: #9fb2d6; font-size: 10px; text-align: center; padding: 3px 0; border-top: 1px dashed #36436b; }
+  body.light #itemList tr.il-acc td { color: #5a6a88; }
+  body.light #itemList tr.il-acc-head td { color: #1f6fd0; border-top-color: #cdd4e0; }
+  #itemList .il-foot #cmdTplSave { width: 100%; margin-top: 5px; background: #0f1830; color: #9fb2d6;
+    border: 1px solid #36436b; border-radius: 6px; padding: 5px 8px; font: bold 11px Meiryo, sans-serif; cursor: pointer;
+    -webkit-tap-highlight-color: transparent; }
+  #itemList .il-foot #cmdTplSave:hover { border-color: #7fa8e8; color: #cfe0fb; }
+  body.light #itemList .il-foot #cmdTplSave { background: #fff; color: #33405c; border-color: #c4ccda; }
+
   /* 保存メニュー（新規保存／上書き保存） */
   #saveMenu { position: fixed; z-index: 90; display: none; flex-direction: column; gap: 4px;
     background: rgba(16,24,48,.97); border: 1px solid #36436b; border-radius: 8px; padding: 6px;
@@ -339,6 +350,7 @@
         <button id="cmdOpen"  title="保存した図面を開く"><span class="ic">📂</span>開く</button>
         <button id="cmdPrint" title="図面と部品表を印刷"><span class="ic">🖨</span>印刷</button>
         <button id="cmdPng"   title="画面をPNG画像で書き出し"><span class="ic"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2.4" fill="#4a5564" stroke="#2c3543" stroke-width="1"/><path d="M8.5 7 L9.8 5 H14.2 L15.5 7 Z" fill="#4a5564" stroke="#2c3543" stroke-width="1"/><circle cx="12" cy="13.4" r="4" fill="#2c3543"/><circle cx="12" cy="13.4" r="2.6" fill="#8fb6e0"/><circle cx="10.9" cy="12.3" r="0.9" fill="#eaf3ff"/><rect x="17.4" y="8.6" width="2.4" height="1.6" rx="0.5" fill="#cfe0f5"/></svg></span>画像</button>
+        <button id="cmdCsv"   title="部品表をCSVで書き出し（付属品・溶接口・パイプ合計の自動集計付き。Excelで開けます）"><span class="ic">📊</span>CSV</button>
       </div>
       <div class="rb-title">ファイル</div>
     </div>
@@ -358,6 +370,7 @@
         <button id="cmdMirror" title="選択中のアイテムを左右反転（鏡）"><span class="ic">◧</span>鏡</button>
         <button id="cmdGroup"  title="選択中の複数アイテムをグループ化（以後ひとつとして選択・移動）"><span class="ic">▣</span>グループ</button>
         <button id="cmdUngroup" title="選択中のグループを解除"><span class="ic">▢</span>解除</button>
+        <button id="cmdClash" title="部品同士の干渉（ぶつかり）を検査して赤く表示（参考）"><span class="ic">⚠</span>干渉</button>
       </div>
       <div class="rb-title">編集</div>
     </div>
@@ -421,6 +434,10 @@
         <li><b>新規</b>＝図面をまっさらに（部品・寸法・図面情報をすべて消去。確認あり・直後なら「元に戻す」で復元できます）</li>
         <li><b>保存</b>＝図面を <code>.p3d.json</code> で保存（部品・向き・材質・図面情報・注釈をまるごと）。<b>2回目からは「上書き保存／新規保存」の選択メニュー</b>が出ます（PCのChrome/Edgeは同じファイルへ直接上書き。iPadは同名でダウンロードし「ファイル」で置き換え）</li>
         <li><b>開く</b>＝保存した図面を読み込み（現在の内容は置き換わります）。開いたファイルがそのまま上書き保存の対象になります</li>
+        <li><b>CSV</b>＝部品表をCSVで書き出し（Excelでそのまま開けます）。<b>ガスケット・ボルト・溶接口・パイプ合計長さの自動集計</b>付き（機点の接続から推定した参考値。アイテムリスト下部にも表示）</li>
+        <li><b>自動保存</b>＝作業内容を20秒ごとにブラウザ内へ自動バックアップ。誤って閉じても<b>次回起動時に「復元しますか？」</b>と出ます</li>
+        <li><b>干渉</b>（編集グループ）＝部品同士のぶつかりを検査して<b>赤表示</b>（接続済みの部品は除外・参考値。クリックで解除）</li>
+        <li><b>図面情報の既定値</b>＝右下の図面情報の<b>「この内容を既定として記憶」</b>を押すと、設計仕様・場所・社名が記憶され、以後の新規図面に自動で入ります</li>
         <li><b>印刷</b>＝図面（白地・線画）＋3D方位コンパス＋アイテムリスト・設計仕様・図面情報をA3横で印刷（アイテムリスト／設計仕様は折りたたみ中なら省略）／<b>画像</b>＝画面をPNG書き出し</li>
       </ul>
       <h3>リボン：描画</h3>
@@ -506,6 +523,7 @@
       <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
       <div class="dwg-row"><span>図番</span><input id="dwgNo" type="text"></div>
       <div class="dwg-row"><span>社名</span><input id="dwgCompany" type="text"></div>
+      <button id="cmdTplSave" type="button" title="設計仕様・場所・社名を既定値として記憶し、新規図面に自動で入れる">この内容を既定として記憶（新規図面に自動反映）</button>
     </div>
   </div>
   <!-- 選択部品の脇に出る高さ入力フォーム（高さ/COP を入れて Enter で確定） -->
