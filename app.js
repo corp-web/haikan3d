@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0713-B';
+const APP_VER = 'v0713-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1894,9 +1894,42 @@ function setActivePart(type) {
   setActivePartType(type);                        // オプション欄(フランジ/パイプ)の出し分け
 }
 
+// ---- 面間寸法の表示（パレット下部・2026-07-14 社長要望） ----
+// 現在の仕様で部品を仮生成し、機点間の距離を実測して表示する（ジオメトリはJIS寸法表由来なので実寸と一致）。
+// エルボ・ティー＝中心-面（枝があれば中心-枝も）／フランジ＝面-背面／バルブ・継手＝面間／パイプ＝長さと同値。
+function updateF2F() {
+  const el = document.getElementById('palF2F');
+  if (!el) return;
+  const sel = document.getElementById('partSelect');
+  const tool = sel && sel.value ? toolByType(sel.value) : null;
+  let text = '面間 —';
+  if (tool) {
+    let obj = null;
+    try { obj = tool.build(); } catch (err) { obj = null; }
+    if (obj) {
+      computeConns(obj);
+      const u = obj.userData;
+      const mm = v => Math.round(v * 1000);
+      if (u.cornerLocal && u.faceLocal) {
+        text = `中心-面 ${mm(u.cornerLocal.distanceTo(u.faceLocal))}mm`;
+        if (u.extraLocals && u.extraLocals[0]) {
+          const bd = mm(u.cornerLocal.distanceTo(u.extraLocals[0]));
+          if (bd > 1) text += `・枝 ${bd}mm`;   // 中心と同位置のダミー機点（エルボ等）は出さない
+        }
+      } else if (u.faceLocal && u.backLocal) {
+        text = `${u.partType === 'flange' ? '面-背面' : '面間'} ${mm(u.faceLocal.distanceTo(u.backLocal))}mm`;
+      } else if (u.faceLocal && u.extraLocals && u.extraLocals[0]) {
+        text = `面-出口 ${mm(u.faceLocal.distanceTo(u.extraLocals[0]))}mm`;
+      }
+      obj.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
+    }
+  }
+  el.textContent = text;
+}
 // 仕様変更時にサムネイルを作り直す（全部品）
 function refreshThumbs() {
   palThumbs.forEach(t => t.rebuild());
+  updateF2F();   // 仕様が変われば面間表示も更新
 }
 
 // ---- フランジ仕様のドロップダウン ----
@@ -2059,6 +2092,7 @@ function setActivePartType(type) {
   if (pi) pi.style.display = isPipe ? '' : 'none';
   if (fi) fi.style.display = (fitting && !isPipe) ? '' : 'none';
   if (fitting && !isPipe) { activeFittingType = type; rebuildFittingSize(); }
+  updateF2F();   // 種別切替でも面間表示を更新
 }
 
 // ===================================================================
