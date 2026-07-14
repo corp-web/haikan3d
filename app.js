@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0715-A';
+const APP_VER = 'v0715-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2328,20 +2328,29 @@ let followPreview = null;     // 追従中の半透明3Dプレビュー（実物
 let followParked = null;      // タッチ：直近にドラッグして離した位置(client座標)。設置タップはこの位置に置く（タップ座標に引っ張られない）
 
 // ---- 再移動（配置済み部品を掴んで動かす） ----
-// ---- 移動モード（2026-07-15 社長提案）----
-// 部品の移動はリボンの「移動」コマンドをONにした時だけ。OFFの間は部品を掴んでも動かず、
-// ドラッグは視点操作に渡る（誤ドラッグで部品が動く事故を防ぐ）。選択・起点選択・パイプ端の伸縮・EL入力は常時可能。
-let moveMode = false;
+// ---- 「移動」コマンド（2026-07-15 社長提案・同日改訂）----
+// 常駐のON/OFFモードではなく、CAD式の「1回きりのコマンド」：
+//   ①移動→オブジェクトを選択→ドラッグで移動（実行）  ②オブジェクトを選択→移動→ドラッグ（実行）
+// 1回の移動を終えるとコマンドは自動で終了する。作図ツール・部品配置を始めた時も自動解除（コマンドは排他）。
+// コマンド外では部品をドラッグしても動かない（視点操作になる。選択・起点選択・パイプ端伸縮・EL入力は常時可）。
+let moveMode = false;   // true=「移動」コマンド実行待ち
 function setMoveMode(on) {
   moveMode = !!on;
   const b = document.getElementById('cmdMove');
   if (b) b.classList.toggle('active', moveMode);
-  if (!moveMode) {   // OFFにしたら進行中の移動は現在位置で確定・後片付け
-    if (movingPart) dropMovingPart();
-    if (dirDrag) { dirDrag = null; controls.enabled = true; clearMarkers(); updateForm(); }
+  if (moveMode) {
+    stopFollow();                                       // 部品配置の追従を解除（排他）
+    if (window.__exitDrawMode) window.__exitDrawMode(); // 作図ツールも解除（排他）
+    if (window.__toast) window.__toast(selectedParts.size
+      ? '移動：そのままドラッグで動かせます（1回動かすと終了）'
+      : '移動：動かすアイテムをタップで選び、ドラッグで動かしてください（1回で終了）');
+  } else {
+    if (movingPart) dropMovingPart();                   // 進行中の自由移動は現在位置で確定
+    if (dirDrag && !dirDrag.locked) { dirDrag = null; controls.enabled = true; clearMarkers(); updateForm(); }   // 距離入力(locked)中は生かす
   }
-  if (window.__toast) window.__toast(moveMode ? '移動モード ON：選択したアイテムをドラッグで移動できます' : '移動モード OFF');
 }
+// 1回の移動が完了した時に呼ぶ＝コマンドを自動終了（distance入力のlocked状態はそのまま使える）
+function finishMoveCommand() { if (moveMode) setMoveMode(false); }
 let movingPart = null;        // 移動中の配置済み部品（null=移動していない）
 let moveStartPt = null;       // 自由移動：掴んだ画面座標（タップ判定用）
 let moveStarted = false;      // 自由移動：しきい値を超えて実際に動き始めたか
@@ -2786,6 +2795,7 @@ function orientRotation(obj, dirIdx, rollIdx) {
 // 追従開始：本物の3Dフランジを半透明でマウスに追従させる
 function startFollow(tool, tile, x, y) {
   if (window.__exitDrawMode) window.__exitDrawMode();   // 部品配置を始めたら描画モードは解除
+  if (moveMode) setMoveMode(false);                     // 「移動」コマンドも解除（排他）
   stopFollow();
   followTool = { tool, tile };
   followOrient = valveDefaultOrient(tool); followRoll = 0; followQuat = null; resetPipeRotState();   // 初期は面を立てた状態（バルブはハンドル上/安全弁は立て）
@@ -2924,6 +2934,7 @@ function dropMovingPart() {           // ドラッグを離して（またはク
   movingPart.userData.roll = movingRoll;
   movingPart = null; moveOrig = null; moveGroup = []; movingByDrag = false;
   moveStartPt = null; moveStarted = false; moveGrabOff = { x: 0, y: 0 };
+  finishMoveCommand();   // 自由移動1回で「移動」コマンド終了
   if (annFollowMove) { window.__annMoveEnd(); annFollowMove = false; }
   controls.enabled = true;
   clearMarkers();
@@ -3951,8 +3962,8 @@ window.addEventListener('pointerup', e => {
   if (!dirDrag) return;
   controls.enabled = true;
   if (dirDrag.annFollow) window.__annMoveEnd();                    // 追従した線を現在位置で確定（スナップ解放）
-  if (dirDrag.started) { dirDrag.locked = true; updateForm(); }   // 方向ロック→距離入力可
-  else { dirDrag = null; clearMarkers(); _idleSig = null; }       // ドラッグせず＝選択のみ（補助線消去・端表示は再判定）
+  if (dirDrag.started) { dirDrag.locked = true; updateForm(); finishMoveCommand(); }   // 方向ロック→距離入力可。移動1回で「移動」コマンド終了（距離入力は続けて使える）
+  else { dirDrag = null; clearMarkers(); _idleSig = null; }       // ドラッグせず＝選択のみ（補助線消去・端表示は再判定・コマンドは継続）
 });
 
 // iPad：3Dビューに触れたら、開いている入力欄を確定してフォーカスを外す（＝キーボードを閉じる）。
@@ -4075,6 +4086,7 @@ window.addEventListener('keydown', e => {
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
+    if (moveMode) setMoveMode(false);   // Esc＝「移動」コマンドも取消（進行中の移動は上で取消済み）
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
     if (nudgeActive()) endRotSpin(false);   // スピナー中の削除＝回転を取り消してから対象を削除
     deleteSelected();
@@ -5987,6 +5999,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof clearDrawTemp === 'function') clearDrawTemp();
     if (!turningOff) {
       stopFollow();
+      if (typeof moveMode !== 'undefined' && moveMode) setMoveMode(false);   // 作図を始めたら「移動」コマンドは解除（排他）
       selectPart(null);
       drawState.mode = mode;
       renderer.domElement.style.cursor = DRAW_CURSOR;
