@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0713-D';
+const APP_VER = 'v0713-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1278,6 +1278,36 @@ function makeCap(opts) {
 const TEE_C = {'15A':25,'20A':29,'25A':38,'32A':48,'40A':57,'50A':64,'65A':76,'80A':86,
   '90A':95,'100A':105,'125A':124,'150A':143,'200A':178,'250A':216,'300A':254,'350A':279,
   '400A':305,'450A':343,'500A':381};
+// 径違いティー（BW・ASME B16.9/JIS B2312）の枝 中心-端 M(mm)。run径→{枝径:M}。
+// ランのCは等径と同じ（TEE_C）。この表に無い組合せは規格外＝選択できない（2026-07-14 社長指摘で全面見直し。
+// 従来は枝MにランのCを流用しており径違いの枝寸法が規格と不一致だった）。
+const TEE_RT_M = {
+  '20A': { '15A': 29 },
+  '25A': { '20A': 38, '15A': 38 },
+  '32A': { '25A': 48, '20A': 48, '15A': 48 },
+  '40A': { '32A': 57, '25A': 57, '20A': 57, '15A': 57 },
+  '50A': { '40A': 60, '32A': 57, '25A': 51, '20A': 44 },
+  '65A': { '50A': 70, '40A': 67, '32A': 64, '25A': 57 },
+  '80A': { '65A': 83, '50A': 76, '40A': 73, '32A': 70 },
+  '90A': { '80A': 92, '65A': 89, '50A': 83, '40A': 79 },
+  '100A': { '90A': 102, '80A': 98, '65A': 95, '50A': 89, '40A': 86 },
+  '125A': { '100A': 117, '90A': 114, '80A': 111, '65A': 108, '50A': 105 },
+  '150A': { '125A': 137, '100A': 130, '90A': 127, '80A': 124, '65A': 121 },
+  '200A': { '150A': 168, '125A': 162, '100A': 156, '90A': 152 },
+  '250A': { '200A': 203, '150A': 194, '125A': 191, '100A': 184 },
+  '300A': { '250A': 241, '200A': 229, '150A': 219, '125A': 216 },
+  '350A': { '300A': 270, '250A': 257, '200A': 248, '150A': 238 },
+  '400A': { '350A': 305, '300A': 295, '250A': 283, '200A': 273, '150A': 264 },
+  '450A': { '400A': 330, '350A': 330, '300A': 321, '250A': 308, '200A': 298 },
+  '500A': { '450A': 368, '400A': 356, '350A': 356, '300A': 346, '250A': 333, '200A': 324 },
+};
+// RTで選べる枝径（規格の組合せのみ・小→大）／枝径の妥当化（表に無ければ最大の枝へ）
+function teeBranchSizes(a) { return SIZE_ORDER.filter(s => TEE_RT_M[a] && TEE_RT_M[a][s] != null); }
+function clampTeeSizeB(a) {
+  const list = teeBranchSizes(a);
+  if (!list.length) return a;
+  return list.includes(fittingOpts.sizeB) ? fittingOpts.sizeB : list[list.length - 1];
+}
 const REDUCER_H = {'15A':38,'20A':38,'25A':51,'32A':51,'40A':64,'50A':76,'65A':89,'80A':89,
   '90A':89,'100A':102,'125A':127,'150A':140,'200A':152,'250A':178,'300A':203,'350A':330,
   '400A':356,'450A':381,'500A':508};
@@ -1300,8 +1330,11 @@ function makeTee(opts) {
   const riR = Math.max(roR - pipeWall(o.sizeA, o.sch) / 1000, roR * 0.3);
   const roB = (FLG_BORE[o.sizeB] || 60) / 2 / 1000;
   const riB = Math.max(roB - pipeWall(o.sizeB, o.sch) / 1000, roB * 0.3);
-  const C = (TEE_C[o.sizeA] || 38) / 1000;         // run 中心-端
-  const M = (TEE_C[o.sizeA] || 38) / 1000;         // outlet 中心-端（run径で決まる）
+  const C = (TEE_C[o.sizeA] || 38) / 1000;         // run 中心-端（等径・径違いとも同じ）
+  // outlet 中心-端 M：等径＝C と同値／径違い＝規格表 TEE_RT_M（run×枝の組合せで決まる）。
+  // 表に無い組合せ（旧図面の規格外データ等）は等径のCで代用して描画だけは成立させる。
+  const M = ((o.sizeB && o.sizeB !== o.sizeA && TEE_RT_M[o.sizeA] && TEE_RT_M[o.sizeA][o.sizeB] != null)
+    ? TEE_RT_M[o.sizeA][o.sizeB] : (TEE_C[o.sizeA] || 38)) / 1000;
   const g = new THREE.Group();
   g.add(new THREE.Mesh(new THREE.LatheGeometry(weldHollowProfile(roR, riR, -C, C, true, true), 48), mat));   // run（Y軸・両端に開先）
   const br = new THREE.Mesh(new THREE.LatheGeometry(weldHollowProfile(roB, riB, -M / 2, M / 2, true, false), 40), mat);   // branch（外端のみ開先・内端は本管接合）
@@ -1759,7 +1792,8 @@ const TOOLS = [
     { t: 'BW(S)', sizes: RETURN_180S, make: () => makeElbow({ sch: fittingOpts.sch, sizeA: clampFitSize(RETURN_180S), kind: '180S' }) } ] },
   { type: 'tee', name: 'ティー', curType: 'BW(T)', build() { return famVariant(this).make(); }, variants: [
     { t: 'BW(T)', sizes: TEE_C, make: () => { const a = clampFitSize(TEE_C); return makeTee({ sch: fittingOpts.sch, sizeA: a, sizeB: a }); } },
-    { t: 'BW(RT)', sizes: TEE_C, hasB: true, make: () => { const a = clampFitSize(TEE_C); return makeTee({ sch: fittingOpts.sch, sizeA: a, sizeB: clampSizeB(a) }); } },
+    { t: 'BW(RT)', sizes: TEE_RT_M, hasB: true, bSizesOf: teeBranchSizes,   // 呼び径・小径とも規格(B16.9/B2312)の組合せのみ
+      make: () => { const a = clampFitSize(TEE_RT_M); return makeTee({ sch: fittingOpts.sch, sizeA: a, sizeB: clampTeeSizeB(a) }); } },
     { t: 'SW(T)', sizes: SW_SIZE_TBL, sw: true, make: _swBuild('T') },
     { t: 'SW(RT)', sizes: SW_SIZE_TBL, sw: true, hasB: true, make: _swBuild('TR', true) } ] },
   { type: 'cross', name: 'クロス', curType: 'SW', build() { return famVariant(this).make(); }, variants: [
@@ -2065,7 +2099,8 @@ function rebuildFittingSize() {
   if (bLab) bLab.textContent = (variant && variant.bLabel) || '小径';
   if (hasB) {
     let bSizes;
-    if (variant.bLarger) bSizes = valveSizesFrom(fittingOpts.sizeA);                                      // sizeA 以上（出口）
+    if (variant.bSizesOf) bSizes = variant.bSizesOf(fittingOpts.sizeA);                                   // 規格の組合せ表から（径違いティー等）
+    else if (variant.bLarger) bSizes = valveSizesFrom(fittingOpts.sizeA);                                 // sizeA 以上（出口）
     else bSizes = (isSW ? swSizesUpTo(fittingOpts.sizeA) : sizesUpTo(fittingOpts.sizeA)).slice(0, -1);     // sizeA 未満（小径）
     if (!bSizes.length) { fillSelect('optFitSizeB', [fittingOpts.sizeA], fittingOpts.sizeA); fittingOpts.sizeB = fittingOpts.sizeA; }
     else { if (!bSizes.includes(fittingOpts.sizeB)) fittingOpts.sizeB = variant.bLarger ? (bSizes[Math.min(1, bSizes.length - 1)] || bSizes[0]) : bSizes[bSizes.length - 1]; fillSelect('optFitSizeB', bSizes, fittingOpts.sizeB); }
