@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0713-F';
+const APP_VER = 'v0713-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1203,11 +1203,14 @@ function makeBendCore(R, angleDeg, ro, ri, mat) {
   g.userData.backNormal = curve.getTangent(0).clone();   // 背端の面法線(管軸)＝ロール軸
   g.userData.faceNormal = curve.getTangent(1).clone();   // 面端の面法線(管軸)＝ロール軸
   // 工作点(PI)：両端の管中心線を延長して垂直に交わる角の点。L棒の寸法基準点。180°(平行)は交点なしで省く。
-  {
+  // ※平行判定を外積の大きさ(1e-9)だけに頼ると、接線が有限差分で僅かに非平行になる180°でも交点が「ある」と
+  //   判定され、数百m彼方のゴミ交点が corner/grip/機点に入っていた（2026-07-14 社長指摘：180°エルボの
+  //   面間が242552mm等になる不具合の原因）。角度そのもので明示的に除外する。
+  if (angleDeg < 179.5) {
     const p1 = g.userData.backLocal, d1 = g.userData.backNormal;
     const p2 = g.userData.faceLocal, d2 = g.userData.faceNormal;
     const cx = d1.clone().cross(d2);
-    if (cx.lengthSq() > 1e-9) {                          // 平行(180°)でなければ交点が定まる
+    if (cx.lengthSq() > 1e-9) {                          // 平行でなければ交点が定まる
       const s = p2.clone().sub(p1).cross(d2).dot(cx) / cx.lengthSq();
       g.userData.cornerLocal = p1.clone().addScaledVector(d1, s);
       g.userData.extraLocals = [g.userData.cornerLocal];   // 機点・スナップ・起点候補に加える
@@ -4995,7 +4998,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (rec.pos) obj.position.fromArray(rec.pos);
       if (rec.quat) obj.quaternion.fromArray(rec.quat);
       if (rec.scale) obj.scale.fromArray(rec.scale);
-      if (rec.grip) obj.userData.gripLocal = new V3().fromArray(rec.grip);
+      // 起点(grip)の復元。過去の不具合（180°エルボの工作点が数百m彼方に計算されていた）で保存された
+      // ゴミ起点は取り込まない（部品ローカルで10m超の機点は実在しない）
+      if (rec.grip) { const gv = new V3().fromArray(rec.grip); if (gv.length() < 10) obj.userData.gripLocal = gv; }
       obj.userData.orient = rec.orient || 0;
       obj.userData.roll = rec.roll || 0;
       if (rec.mat) obj.userData.mat = rec.mat;
