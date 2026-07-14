@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0713-H';
+const APP_VER = 'v0715-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2328,6 +2328,20 @@ let followPreview = null;     // 追従中の半透明3Dプレビュー（実物
 let followParked = null;      // タッチ：直近にドラッグして離した位置(client座標)。設置タップはこの位置に置く（タップ座標に引っ張られない）
 
 // ---- 再移動（配置済み部品を掴んで動かす） ----
+// ---- 移動モード（2026-07-15 社長提案）----
+// 部品の移動はリボンの「移動」コマンドをONにした時だけ。OFFの間は部品を掴んでも動かず、
+// ドラッグは視点操作に渡る（誤ドラッグで部品が動く事故を防ぐ）。選択・起点選択・パイプ端の伸縮・EL入力は常時可能。
+let moveMode = false;
+function setMoveMode(on) {
+  moveMode = !!on;
+  const b = document.getElementById('cmdMove');
+  if (b) b.classList.toggle('active', moveMode);
+  if (!moveMode) {   // OFFにしたら進行中の移動は現在位置で確定・後片付け
+    if (movingPart) dropMovingPart();
+    if (dirDrag) { dirDrag = null; controls.enabled = true; clearMarkers(); updateForm(); }
+  }
+  if (window.__toast) window.__toast(moveMode ? '移動モード ON：選択したアイテムをドラッグで移動できます' : '移動モード OFF');
+}
 let movingPart = null;        // 移動中の配置済み部品（null=移動していない）
 let moveStartPt = null;       // 自由移動：掴んだ画面座標（タップ判定用）
 let moveStarted = false;      // 自由移動：しきい値を超えて実際に動き始めたか
@@ -3885,7 +3899,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
     const gl = nearestConnLocal(part, e.clientX, e.clientY);
     if (gl) { part.userData.gripLocal = gl; resetPipeRotState(); }   // 起点が変わったら回転軸を再計算
   }
-  if (isDbl) {
+  if (isDbl && moveMode) {                             // 自由移動も「移動」コマンドON時のみ
     _lastDownT = 0; _lastDownPart = null;              // 3連クリックの誤検出を防ぐためリセット
     if (dirDrag) { dirDrag = null; clearMarkers(); }   // 1回目クリックで張った方向移動を破棄
     startMovePart(part, e.clientX, e.clientY);   // 自由移動開始（複数選択ならグループ維持＝集団自由移動）
@@ -3914,6 +3928,9 @@ renderer.domElement.addEventListener('pointerdown', e => {
     }
     // 本体つかみでは起点(pipeEndSel)を保持＝選択した端を起点に移動できる（COP解除は端の再クリックで）
   }
+  // 「移動」コマンドOFF＝ここまで（選択・起点選択のみ）。ドラッグは視点操作に譲る
+  //（2026-07-15 社長提案：移動はコマンドを選んだ時だけ＝誤ドラッグで部品が動かない）
+  if (!moveMode) return;
   const o = originModelPos(part);
   const sh = planeHitAt(e.clientX, e.clientY, o.y);   // 指を置いた地点の平面ヒット（移動量の基準。タップでズレないように）
   dirDrag = { part, sx: e.clientX, sy: e.clientY, startOrigin: o.clone(), startHit: sh ? sh.clone() : o.clone(), planeY: o.y, dir: null, dist: 0, started: false, locked: false,
@@ -8060,6 +8077,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdOpen').onclick = load;
   $('cmdCsv').onclick = exportCsv;       // 部品表CSV（自動集計付き）
   $('cmdClash').onclick = runClashCheck; // 干渉チェック（参考）
+  $('cmdMove').onclick = () => setMoveMode(!moveMode);   // 移動モードのトグル
   $('cmdTplSave').onclick = saveDwgTemplate;   // 図面情報を既定として記憶
   $('cmdPrint').onclick = printSheet;
   $('cmdPng').onclick = exportPng;
