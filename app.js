@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0713-G';
+const APP_VER = 'v0713-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1357,6 +1357,31 @@ function makeTee(opts) {
   return g;
 }
 
+// ===== ガスケット（2026-07-14 社長要望） =====
+// 呼び径×クラスで決まるRF座面径（RF_FACE_DIA＝フランジと同じ実寸表）を外径、管外径を内径とする円環板。
+// 厚みは任意入力（既定3mm）。軸=Y、back=y0／face=y=t（フランジ面間に挟んで使う）。
+const gasketOpts = { sizeA: '25A', cls: 'JIS 10K', t: 3 };
+function makeGasket(opts) {
+  const o = Object.assign({ sizeA: '25A', cls: 'JIS 10K', t: 3 }, opts || {});
+  o.t = (parseFloat(o.t) > 0) ? parseFloat(o.t) : 3;
+  const gDia = rfFaceDia(o.cls, o.sizeA) || (FLG_BORE[o.sizeA] || 34) * 1.8;   // 外径＝RF座面径（表に無ければ推定）
+  const ro = gDia / 2 / 1000;
+  const ri = Math.min((FLG_BORE[o.sizeA] || 34) / 2 / 1000, ro * 0.85);        // 内径＝管外径（外径より必ず小さく）
+  const t = o.t / 1000;
+  const mat = FLANGE_MAT.clone();
+  mat.color = new THREE.Color(0x2f7d5a);   // ジョイントシート風の緑（フランジ等と見分けやすく）
+  mat.needsUpdate = true;
+  const g = new THREE.Group();
+  const mesh = new THREE.Mesh(ringGeo(ro, ri, t), mat);
+  mesh.position.y = t / 2;
+  g.add(mesh);
+  g.userData.partType = 'gasket';
+  g.userData.gasket = { ...o };
+  g.userData.faceLocal = new THREE.Vector3(0, t, 0);
+  g.userData.backLocal = new THREE.Vector3(0, 0, 0);
+  return g;
+}
+
 // 偏心レジューサの中空ジオメトリ。大端(y=-H/2,中心x=0)→小端(y=+H/2,中心x=roBig-roSm)で片側面一。
 function eccentricReducerGeo(roBig, roSm, riBig, riSm, H, seg) {
   const dx = roBig - roSm;            // 小端中心の片寄せ量（下面が一直線）
@@ -1785,6 +1810,7 @@ function clampFitSize(tbl) {
 const _swBuild = (kind, hasB) => () => { const a = clampFitSize(SW_SIZE_TBL); return makeSW({ kind, sizeA: a, sizeB: hasB ? swClampSizeB(a) : undefined }); };
 const TOOLS = [
   { type: 'flange', name: 'フランジ', build: () => makeFlange(flangeOpts) },
+  { type: 'gasket', name: 'ガスケット', build: () => makeGasket(gasketOpts) },
   { type: 'pipe', name: 'パイプ', build: () => makePipe(pipeOpts) },
   { type: 'elbow90', name: '90°エルボ', curType: 'BW(L)', build() { return famVariant(this).make(); }, variants: [
     { t: 'BW(L)', sizes: ELBOW_90L, make: () => makeElbow({ sch: fittingOpts.sch, sizeA: clampFitSize(ELBOW_90L), kind: '90L' }) },
@@ -1951,7 +1977,9 @@ function updateF2F() {
       computeConns(obj);
       const u = obj.userData;
       const mm1 = v => (v * 1000).toFixed(1);   // 小数第一位まで表示（2026-07-14 社長要望）
-      if (u.partType === 'pipe') {
+      if (u.partType === 'gasket') {
+        lines.push(`厚み ${mm1(u.faceLocal.distanceTo(u.backLocal))}mm`);
+      } else if (u.partType === 'pipe') {
         // パイプは直径（外径）を表示。ジオメトリの管軸に直交する断面幅＝JIS外径そのもの
         const size = new THREE.Box3().setFromObject(obj).getSize(new THREE.Vector3());
         const ax = u.faceLocal.clone().sub(u.backLocal);
@@ -2063,6 +2091,29 @@ function onPipeOptChange() {
   if (el) el.addEventListener('change', onPipeOptChange);
 });
 
+// ---- ガスケットのオプションUI（呼び径・クラス・厚み[mm・既定3]） ----
+function buildGasketOptions() {
+  fillSelect('optGskClass', Object.keys(RF_FACE_DIA), gasketOpts.cls);
+  const sizes = SIZE_ORDER.filter(s => rfFaceDia(gasketOpts.cls, s) != null);   // クラスの座面径表にあるサイズのみ
+  if (!sizes.includes(gasketOpts.sizeA)) gasketOpts.sizeA = sizes.includes('25A') ? '25A' : sizes[0];
+  fillSelect('optGskSize', sizes, gasketOpts.sizeA);
+  const t = document.getElementById('optGskT'); if (t) t.value = gasketOpts.t;
+}
+function onGasketOptChange() {
+  const v = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  gasketOpts.sizeA = v('optGskSize') || gasketOpts.sizeA;
+  gasketOpts.cls = v('optGskClass') || gasketOpts.cls;
+  const tt = parseFloat(v('optGskT'));
+  gasketOpts.t = (tt > 0) ? tt : 3;                 // 不正値は既定3mmへ
+  buildGasketOptions();                              // クラス変更でサイズ一覧を組み直し
+  refreshThumbs();
+  applyPaletteToSelected();                          // 配置済みガスケットを選択中なら作り替え
+}
+['optGskSize', 'optGskClass', 'optGskT'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', onGasketOptChange);
+});
+
 // ---- 継手（エルボ・ティー・レジューサ・キャップ・カップリング等）のオプションUI ----
 // 「タイプ」ドロップダウン(optFitType)＝その形状の variant（BW(L)/BW(S)/SW/同心偏心 等）。
 let activeFittingType = 'elbow90';
@@ -2130,15 +2181,18 @@ function onFitOptChange() {
   if (el) el.addEventListener('change', onFitOptChange);
 });
 
-// 部品種別に応じてオプションパネルを出し分け（フランジ／パイプ／継手）
+// 部品種別に応じてオプションパネルを出し分け（フランジ／ガスケット／パイプ／継手）
 function setActivePartType(type) {
   const fl = document.getElementById('flangeOptsUI');
+  const gk = document.getElementById('gasketOptsUI');
   const pi = document.getElementById('pipeOptsUI');
   const fi = document.getElementById('fittingOptsUI');
-  const fitting = isFittingType(type) && type !== 'flange';   // flange は別UI
   const isPipe = (type === 'pipe');
   const isFlange = (type === 'flange');
+  const isGasket = (type === 'gasket');
+  const fitting = isFittingType(type) && !isFlange && !isGasket;   // flange/gasket は専用UI
   if (fl) fl.style.display = isFlange ? '' : 'none';
+  if (gk) gk.style.display = isGasket ? '' : 'none';
   if (pi) pi.style.display = isPipe ? '' : 'none';
   if (fi) fi.style.display = (fitting && !isPipe) ? '' : 'none';
   if (fitting && !isPipe) { activeFittingType = type; rebuildFittingSize(); }
@@ -2166,7 +2220,7 @@ function toolTypeOfPart(p) {
     const k = (u.valve && u.valve.kind) || '';
     return ({ ball: 'vBall', gate: 'vGate', globe: 'vGlobe', check: 'vCheck', strainer: 'vStrainer', butterfly: 'vButterfly', safety: 'vSafety', swgate: 'vSWgate', swglobe: 'vSWglobe' })[k] || null;
   }
-  return ({ flange: 'flange', pipe: 'pipe', tee: 'tee', reducer: 'reducer', cap: 'cap' })[u.partType] || null;
+  return ({ flange: 'flange', gasket: 'gasket', pipe: 'pipe', tee: 'tee', reducer: 'reducer', cap: 'cap' })[u.partType] || null;
 }
 // 配置済み部品 → タイプ欄(variantのt)。partColumns と同じ対応。該当なし(フランジ/パイプ等)は null。
 function variantTOfPart(p) {
@@ -2190,6 +2244,9 @@ function syncPaletteToPart(p) {
     if (u.partType === 'flange') {
       Object.assign(flangeOpts, u.flange || {});
       syncOptionsUI();                              // タイプ/クラス相互整合＋各欄へ値を反映
+    } else if (u.partType === 'gasket') {
+      Object.assign(gasketOpts, u.gasket || {});
+      buildGasketOptions();
     } else if (u.partType === 'pipe') {
       Object.assign(pipeOpts, u.pipe || {});
       buildPipeOptions();
@@ -2552,7 +2609,7 @@ function addMarker(modelPos, color, r) {
 // 部品の外半径(m)。機点マーカーのサイズ基準に使う。線分端点や不明部品はフォールバック値。
 function partBoreRadius(part) {
   const u = part && part.userData;
-  const spec = u && (u.pipe || u.elbow || u.cap || u.tee || u.reducer || u.flange);
+  const spec = u && (u.pipe || u.elbow || u.cap || u.tee || u.reducer || u.flange || u.gasket);
   const sizeA = spec && spec.sizeA;
   if (sizeA && FLG_BORE[sizeA]) return FLG_BORE[sizeA] / 2 / 1000;
   return 0.03;
@@ -2913,7 +2970,7 @@ function valveDefaultOrient(tool) {
 // 回転・向き挙動上の実効partType（SW・バルブは対応BW形状へ読み替え／BW・パイプ等はそのまま）
 function behType(part) { return part ? (swShapeOf(part) || valveShapeOf(part) || part.userData.partType) : null; }
 function isFreeRotPart(part) { return !!(part && ['pipe', 'elbow', 'cap', 'tee', 'reducer'].includes(behType(part))); }   // 短押し右クリック45°の対象（レデューサーはキャップと同じ）
-function isSpinRotPart(part) { return !!(part && ['pipe', 'elbow', 'cap', 'tee', 'reducer', 'flange'].includes(behType(part))); }      // 長押し角度スピナーの対象（レデューサー追加）
+function isSpinRotPart(part) { return !!(part && ['pipe', 'elbow', 'cap', 'tee', 'reducer', 'flange', 'gasket'].includes(behType(part))); }      // 長押し角度スピナーの対象（レデューサー・ガスケット追加）
 function is180Elbow(part) { return !!(part && part.userData.partType === 'elbow' && part.userData.elbow && String(part.userData.elbow.kind || '').startsWith('180')); }
 // 180°エルボは右クリックとShiftの回転を入れ替える
 function rotShift(part, shift) { return is180Elbow(part) ? !shift : shift; }
@@ -2995,7 +3052,7 @@ function pipeRotateSpinStart(shift) {
   const part = selectedPart; if (!isSpinRotPart(part)) return false;
   const { pivot, dirRef } = partRotPivotDir(part);
   let axis;
-  if (part.userData.partType === 'flange') {   // フランジは従来の向き/ひねりと同じ軸で連続回転
+  if (part.userData.partType === 'flange' || part.userData.partType === 'gasket') {   // フランジ・ガスケットは従来の向き/ひねりと同じ軸で連続回転
     if (shift) axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // ひねり送り＝フェイス法線(ローカル+Y)
     else { const di = part.userData.orient || 0; axis = (di < DIR_COUNT / 2) ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0); }   // 向き送り＝方向リング軸(世界Z or X)
   } else {
@@ -3506,6 +3563,7 @@ function partColumns(p) {
   const u = p.userData;
   switch (u.partType) {
     case 'flange': { const o = u.flange || {}; return { kind: 'フランジ', type: o.type || '', size: o.sizeA || '', cls: o.cls || '' }; }
+    case 'gasket': { const o = u.gasket || {}; return { kind: 'ガスケット', type: `t${o.t != null ? o.t : 3}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'pipe':   { const o = u.pipe || {};   return { kind: 'パイプ', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'elbow':  { const o = u.elbow || {};  const nm = {'90L':'90°エルボ','90S':'90°エルボ','45L':'45°エルボ','45S':'45°エルボ','180L':'180°エルボ','180S':'180°エルボ'}; const tp = (o.kind && o.kind.endsWith('S')) ? 'BW(S)' : 'BW(L)'; return { kind: nm[o.kind] || 'エルボ', type: tp, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'cap':    { const o = u.cap || {};    return { kind: 'キャップ', type: 'BW', size: o.sizeA || '', cls: o.sch || '' }; }
@@ -3548,7 +3606,7 @@ function partTypeRank(p) {
 // あくまで拾い出しの下書き（参考値）。実数は検図のうえ確定する。
 function connPointsForStats(p) {
   const u = p.userData;
-  const spec = u.flange || u.pipe || u.elbow || u.cap || u.tee || u.reducer || u.sw || u.valve || {};
+  const spec = u.flange || u.gasket || u.pipe || u.elbow || u.cap || u.tee || u.reducer || u.sw || u.valve || {};
   const a = spec.sizeA || '', b = spec.sizeB || a;
   const out = [];
   if (u.faceLocal) out.push({ local: u.faceLocal, size: a, face: true });
@@ -3571,7 +3629,8 @@ function accessoryRows() {
         p, pos: connModelPos(p, cp.local), size: cp.size,
         gasketFace: isFlange && cp.face,                              // フランジのフェイス＝ガスケット面
         valveFlanged: isValve && !swValve,                            // フランジ形バルブの接続端
-        weldable: !(isFlange && cp.face) && (!isValve || swValve),    // 溶接され得る端（フェイスとフランジ形バルブは除外）
+        // 溶接され得る端（フランジのフェイス・フランジ形バルブ・ガスケット部品は除外）
+        weldable: !(isFlange && cp.face) && (!isValve || swValve) && u.partType !== 'gasket',
         sw: swSide,
         cls: isFlange ? ((u.flange && u.flange.cls) || '') : (isValve ? ((u.valve && u.valve.rating) || (swValve ? 'Class800' : '')) : ''),
       });
@@ -4461,6 +4520,7 @@ function rebuildClassOptions() {
 });
 syncOptionsUI();   // 起動時：アクティブ部品(フランジ)で初期化
 buildPipeOptions();   // パイプのオプション欄も用意（初期は非表示）
+buildGasketOptions(); // ガスケットのオプション欄も用意（初期は非表示）
 buildPartSelect();    // 部品種別ドロップダウンを用意
 setActivePart('flange');   // 初期表示はフランジ1つのみ
 refreshItemList();    // 設置アイテム一覧を初期化（空表示）
@@ -4475,10 +4535,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const V3 = THREE.Vector3;
 
   // ---- 部品仕様(userData)からメッシュを再生成（複製・読込・鏡で共用） ----
-  const SPEC_FIELD = { flange: 'flange', pipe: 'pipe', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve' };
+  const SPEC_FIELD = { flange: 'flange', gasket: 'gasket', pipe: 'pipe', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve' };
   function buildFromSpec(u) {
     switch (u.partType) {
       case 'flange':  return makeFlange(u.flange);
+      case 'gasket':  return makeGasket(u.gasket);
       case 'pipe':    return makePipe(u.pipe);
       case 'elbow':   return makeElbow(u.elbow);
       case 'cap':     return makeCap(u.cap);

@@ -420,6 +420,7 @@
         <li>仮置き後、脇に出る<b>高さ／COP</b>欄に数値を入れ<kbd>Enter</kbd>で確定</li>
         <li>最初の1個は原点(0,0,0)が基準点になります</li>
         <li>フランジ＝タイプ→呼び径→クラス→フェイス（＋Sch）／継手＝タイプBW・呼び径・Sch／パイプ＝呼び径・Sch・長さ</li>
+        <li><b>ガスケット</b>＝呼び径・クラス・<b>厚み（既定3mm・任意入力）</b>。外径はそのクラスのRF座面径、内径は管外径。フランジのフェイス間に挟んで使います</li>
       </ul>
       <h3>部品を動かす・向きを変える</h3>
       <ul>
@@ -486,6 +487,11 @@
       <label>クラス<select id="optClass"></select></label>
       <label>フェイス<select id="optFace"></select></label>
       <label id="optSchWrap">Sch<select id="optSch"></select></label>
+    </div>
+    <div class="pal-opts" id="gasketOptsUI" style="display:none">
+      <label>呼び径<select id="optGskSize"></select></label>
+      <label>クラス<select id="optGskClass"></select></label>
+      <label>厚み(mm)<input id="optGskT" type="number" step="0.5" min="0.5" value="3"></label>
     </div>
     <div class="pal-opts" id="pipeOptsUI" style="display:none">
       <label>呼び径<select id="optPipeSize"></select></label>
