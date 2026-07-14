@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0713-C';
+const APP_VER = 'v0713-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1902,29 +1902,37 @@ function updateF2F() {
   if (!el) return;
   const sel = document.getElementById('partSelect');
   const tool = sel && sel.value ? toolByType(sel.value) : null;
-  let text = '面間 —';
+  const lines = [];
   if (tool) {
     let obj = null;
     try { obj = tool.build(); } catch (err) { obj = null; }
     if (obj) {
       computeConns(obj);
       const u = obj.userData;
-      const mm = v => Math.round(v * 1000);
-      if (u.cornerLocal && u.faceLocal) {
-        text = `中心-面 ${mm(u.cornerLocal.distanceTo(u.faceLocal))}mm`;
+      const mm1 = v => (v * 1000).toFixed(1);   // 小数第一位まで表示（2026-07-14 社長要望）
+      if (u.partType === 'pipe') {
+        // パイプは直径（外径）を表示。ジオメトリの管軸に直交する断面幅＝JIS外径そのもの
+        const size = new THREE.Box3().setFromObject(obj).getSize(new THREE.Vector3());
+        const ax = u.faceLocal.clone().sub(u.backLocal);
+        const dom = (Math.abs(ax.x) >= Math.abs(ax.y) && Math.abs(ax.x) >= Math.abs(ax.z)) ? 'x'
+                  : (Math.abs(ax.y) >= Math.abs(ax.z)) ? 'y' : 'z';
+        const lat = ['x', 'y', 'z'].filter(k => k !== dom).map(k => size[k]);
+        lines.push(`外径 ${mm1(Math.max(lat[0], lat[1]))}mm`);
+      } else if (u.cornerLocal && u.faceLocal) {
+        lines.push(`中心-面 ${mm1(u.cornerLocal.distanceTo(u.faceLocal))}mm`);
         if (u.extraLocals && u.extraLocals[0]) {
-          const bd = mm(u.cornerLocal.distanceTo(u.extraLocals[0]));
-          if (bd > 1) text += `・枝 ${bd}mm`;   // 中心と同位置のダミー機点（エルボ等）は出さない
+          const bd = u.cornerLocal.distanceTo(u.extraLocals[0]);
+          if (bd * 1000 > 1) lines.push(`中心-枝 ${mm1(bd)}mm`);   // 中心と同位置のダミー機点（エルボ等）は出さない
         }
       } else if (u.faceLocal && u.backLocal) {
-        text = `${u.partType === 'flange' ? '面-背面' : '面間'} ${mm(u.faceLocal.distanceTo(u.backLocal))}mm`;
+        lines.push(`${u.partType === 'flange' ? '面-背面' : '面間'} ${mm1(u.faceLocal.distanceTo(u.backLocal))}mm`);
       } else if (u.faceLocal && u.extraLocals && u.extraLocals[0]) {
-        text = `面-出口 ${mm(u.faceLocal.distanceTo(u.extraLocals[0]))}mm`;
+        lines.push(`面-出口 ${mm1(u.faceLocal.distanceTo(u.extraLocals[0]))}mm`);
       }
       obj.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
     }
   }
-  el.textContent = text;
+  el.textContent = lines.length ? lines.join('\n') : '面間 —';   // 2値（ティー等）は2段表示（CSS: pre-line）
 }
 // 仕様変更時にサムネイルを作り直す（全部品）
 function refreshThumbs() {
