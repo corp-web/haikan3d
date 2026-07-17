@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0716-A';
+const APP_VER = 'v0717-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2342,6 +2342,7 @@ function setMoveMode(on) {
   if (moveMode) {
     stopFollow();                                       // 部品配置の追従を解除（排他）
     if (window.__exitDrawMode) window.__exitDrawMode(); // 作図ツールも解除（排他）
+    if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
     const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);   // 部品＋線・寸法の選択数
     if (window.__toast) window.__toast(nSel
       ? '移動：そのままドラッグで動かせます（1回動かすと終了）'
@@ -2539,7 +2540,7 @@ function nearestAxisSnap(part, anchorW, axis, clientX, clientY) {
     if (d < bestD) { bestD = d; best = along; }
   };
   for (const p of placedParts) {
-    if (p === part || !p.userData.faceLocal) continue;
+    if (p === part || !p.userData.faceLocal || p.userData.hidden) continue;
     for (const local of connsOf(p)) testPos(connModelPos(p, local));
   }
   // 線分・寸法線の端点、構築線どうしの交点にも吸着（2026-06-13 社長指示：線分にマッチ）
@@ -2704,7 +2705,7 @@ function resolveSnap(clientX, clientY, exclude) {
   const cam = activeCam();
   let best = null, bestD = SNAP_PX;
   for (const p of placedParts) {
-    if (p === exclude || !p.userData.faceLocal) continue;
+    if (p === exclude || !p.userData.faceLocal || p.userData.hidden) continue;
     for (const local of connsOf(p)) {
       const mpos = connModelPos(p, local);
       const ndc = modelGroup.localToWorld(mpos.clone()).project(cam);
@@ -2748,7 +2749,7 @@ function showInteractionMarkers(movingObj, snapPoint) {
   clearMarkers();
   addMarker(originModelPos(movingObj), 0xff8a3c, markerRadiusFor(movingObj, false));    // 起点（橙）
   for (const p of placedParts) {
-    if (p === movingObj || !p.userData.faceLocal) continue;
+    if (p === movingObj || !p.userData.faceLocal || p.userData.hidden) continue;
     const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true);
     for (const local of connsOf(p)) {
       const mpos = connModelPos(p, local);
@@ -2798,6 +2799,7 @@ function orientRotation(obj, dirIdx, rollIdx) {
 function startFollow(tool, tile, x, y) {
   if (window.__exitDrawMode) window.__exitDrawMode();   // 部品配置を始めたら描画モードは解除
   if (moveMode) setMoveMode(false);                     // 「移動」コマンドも解除（排他）
+  if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
   stopFollow();
   followTool = { tool, tile };
   followOrient = valveDefaultOrient(tool); followRoll = 0; followQuat = null; resetPipeRotState();   // 初期は面を立てた状態（バルブはハンドル上/安全弁は立て）
@@ -3189,7 +3191,7 @@ function nearestDirSnap(startOrigin, dir, clientX, clientY, exParts) {
     if (d < bestD) { bestD = d; best = along; }
   };
   for (const p of placedParts) {
-    if ((exParts && exParts.has(p)) || !p.userData.faceLocal) continue;
+    if ((exParts && exParts.has(p)) || !p.userData.faceLocal || p.userData.hidden) continue;
     for (const local of connsOf(p)) consider(connModelPos(p, local));
   }
   if (window.__annSnapPoints) for (const mpos of window.__annSnapPoints()) consider(mpos);   // 線分・寸法線の端点（追従中の線は除外済）
@@ -3495,6 +3497,7 @@ function setEmissive(obj, hex) {
 }
 // 単一選択（従来動作）。additive=true で Ctrl+クリックのトグル複数選択になる。
 function selectPart(obj, additive = false) {
+  if (hideArmed && obj) { setHideArmed(false); hidePickedPart(obj); return; }   // 「非表示」実行待ち＝選択せず隠す（1回で終了）
   if (additive) { toggleSelect(obj); return; }
   clearClash();   // 干渉表示中なら赤表示を解除（次の操作で消える仕様）
   if (typeof resetPipeRotState === 'function') resetPipeRotState();   // 選択が変わったらパイプ回転軸をリセット
@@ -3579,6 +3582,61 @@ function deleteSelected() {
   pipeEndSel = null;
   updateForm();
   refreshItemList();
+}
+
+// ===== 表示／非表示（2026-07-17 社長要望） =====
+// 「非表示」＝CAD式の1回きりコマンド：①選択→非表示（即実行）②非表示→タップしたアイテムを隠す（1回で終了・Esc/再押下で取消）。
+// 「再表示」＝隠した全アイテムを一括で戻す。非表示中もアイテムリスト・自動集計には載る（表示だけの補助機能）。
+// 隠したアイテムは選択・スナップ・窓選択・干渉チェックの対象から外れる。保存ファイル・元に戻すにも引き継がれる。
+let hideArmed = false;   // true=「非表示」コマンド実行待ち（次に選んだアイテムを隠す）
+function setHideArmed(on) {
+  hideArmed = !!on;
+  const b = document.getElementById('cmdHide');
+  if (b) b.classList.toggle('active', hideArmed);
+}
+function hidePartOnly(p) {   // 1部品を隠す（選択からも外す）。画面更新は呼び元で行う
+  p.userData.hidden = true; p.visible = false;
+  setEmissive(p, 0x000000);
+  selectedParts.delete(p);
+  if (selectedPart === p) { selectedPart = null; pipeEndSel = null; pipeLenSticky = false; }
+}
+function hideSelectedObjects() {   // 選択中の部品＋注釈を隠す。返り値＝隠した件数
+  const parts = [...selectedParts];
+  for (const p of parts) hidePartOnly(p);
+  const nAnn = window.__annHideSel ? window.__annHideSel() : 0;
+  clearMarkers(); updateForm(); refreshItemList();
+  return parts.length + nAnn;
+}
+// コマンド実行待ち中にタップされた部品を隠す（グループの一員なら同グループの部品・注釈も一緒に隠す）
+function hidePickedPart(obj) {
+  const gid = obj.userData ? obj.userData.groupId : null;
+  const targets = gid != null ? placedParts.filter(p => p.userData.groupId === gid) : [obj];
+  for (const p of targets) hidePartOnly(p);
+  let n = targets.length;
+  if (gid != null && window.__annHideGroup) n += window.__annHideGroup(gid);
+  clearMarkers(); updateForm(); refreshItemList();
+  if (window.__toast) window.__toast('非表示：' + n + '件を隠しました（「再表示」で戻せます）');
+}
+function hideCommand() {   // リボン「非表示」ボタン
+  if (hideArmed) { setHideArmed(false); if (window.__toast) window.__toast('非表示：取り消しました'); return; }
+  const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);
+  if (nSel) {
+    const n = hideSelectedObjects();
+    if (window.__toast) window.__toast('非表示：' + n + '件を隠しました（「再表示」で戻せます）');
+  } else {
+    stopFollow();                                        // 部品配置の追従を解除（コマンドは排他）
+    if (window.__exitDrawMode) window.__exitDrawMode();  // 作図ツールも解除
+    if (moveMode) setMoveMode(false);                    // 「移動」コマンドも解除
+    setHideArmed(true);
+    if (window.__toast) window.__toast('非表示：隠すアイテムをタップしてください（1回で終了・Esc/再押下で取消）');
+  }
+}
+function showAllHidden() {   // リボン「再表示」ボタン＝隠した全アイテムを戻す
+  let n = 0;
+  for (const p of placedParts) if (p.userData.hidden) { p.userData.hidden = false; p.visible = true; n++; }
+  n += window.__annShowAll ? window.__annShowAll() : 0;
+  refreshItemList();
+  if (window.__toast) window.__toast(n ? '再表示：' + n + '件を表示しました' : '非表示のアイテムはありません');
 }
 
 // ===================================================================
@@ -3722,6 +3780,7 @@ function refreshItemList() {
     const c = g.col;
     const tr = document.createElement('tr');
     if (g.parts.some(p => selectedParts.has(p))) tr.className = 'selected';   // 1個でも選択中ならハイライト
+    if (g.parts.every(p => p.userData.hidden)) { tr.style.opacity = '.45'; tr.title = '非表示のアイテム（「再表示」で戻せます）'; }   // 全部隠れている行は淡く
     const mk = (cls, txt) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = txt; td.title = txt; return td; };
     tr.appendChild(mk('c-no', i + 1));
     tr.appendChild(mk('', c.kind));
@@ -3761,10 +3820,12 @@ function refreshItemList() {
     // 行クリック＝その仕様の全アイテムを選択（Ctrlで選択に追加）
     tr.addEventListener('click', e => {
       if (e.target === del || e.target === matInp) return;
+      const vis = g.parts.filter(p => !p.userData.hidden);   // 非表示は選択しない（見えない物を動かさせない）
+      if (!vis.length) { if (window.__toast) window.__toast('この行のアイテムは非表示です（「再表示」で戻せます）'); return; }
       const add = e.ctrlKey || e.metaKey || touchCtrl;
       if (!add) { for (const p of selectedParts) setEmissive(p, 0x000000); selectedParts.clear(); }
-      for (const p of g.parts) { selectedParts.add(p); setEmissive(p, SEL_COLOR); }
-      selectedPart = g.parts[g.parts.length - 1];
+      for (const p of vis) { selectedParts.add(p); setEmissive(p, SEL_COLOR); }
+      selectedPart = vis[vis.length - 1];
       pipeEndSel = null; updateForm(); refreshItemList();
     });
     // ×クリック＝その仕様のアイテムをすべて削除
@@ -3807,21 +3868,22 @@ function clearClash() {
 }
 function runClashCheck() {
   clearClash();
-  if (placedParts.length < 2) { if (window.__toast) window.__toast('干渉チェック：部品が2つ以上必要です'); return; }
+  const visParts = placedParts.filter(p => !p.userData.hidden);   // 非表示は検査対象外（赤表示しても見えない）
+  if (visParts.length < 2) { if (window.__toast) window.__toast('干渉チェック：部品が2つ以上必要です'); return; }
   // 接続済みペア（機点の一致）を除外リストへ
   const connKey = new Set();
   const pts = [];
-  placedParts.forEach((p, idx) => { if (p.userData.faceLocal) for (const l of connsOf(p)) pts.push({ idx, pos: connModelPos(p, l) }); });
+  visParts.forEach((p, idx) => { if (p.userData.faceLocal) for (const l of connsOf(p)) pts.push({ idx, pos: connModelPos(p, l) }); });
   for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
     if (pts[i].idx !== pts[j].idx && pts[i].pos.distanceTo(pts[j].pos) < 0.0015)
       connKey.add(Math.min(pts[i].idx, pts[j].idx) + '_' + Math.max(pts[i].idx, pts[j].idx));
   }
-  const boxes = placedParts.map(p => new THREE.Box3().setFromObject(p).expandByScalar(-0.002));
+  const boxes = visParts.map(p => new THREE.Box3().setFromObject(p).expandByScalar(-0.002));
   const bad = new Set(); let pairs = 0;
-  for (let i = 0; i < placedParts.length; i++) {
-    for (let j = i + 1; j < placedParts.length; j++) {
+  for (let i = 0; i < visParts.length; i++) {
+    for (let j = i + 1; j < visParts.length; j++) {
       if (connKey.has(i + '_' + j)) continue;
-      if (boxes[i].intersectsBox(boxes[j])) { bad.add(placedParts[i]); bad.add(placedParts[j]); pairs++; }
+      if (boxes[i].intersectsBox(boxes[j])) { bad.add(visParts[i]); bad.add(visParts[j]); pairs++; }
     }
   }
   if (!pairs) { if (window.__toast) window.__toast('干渉は見つかりませんでした'); return; }
@@ -3836,7 +3898,7 @@ function pickPlacedAt(clientX, clientY) {
   pickNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pickNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   pickRay.setFromCamera(pickNdc, activeCam());
-  const hits = pickRay.intersectObjects(placedParts, true);
+  const hits = pickRay.intersectObjects(placedParts.filter(p => !p.userData.hidden), true);   // 非表示はクリックで拾わない
   if (!hits.length) return null;
   let o = hits[0].object;
   while (o && !o.userData.placed) o = o.parent;
@@ -4032,7 +4094,7 @@ function selectPartsInRect(x0, y0, x1, y1) {
   const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
   let last = null;
   for (const p of placedParts) {
-    if (!p.userData.faceLocal) continue;
+    if (!p.userData.faceLocal || p.userData.hidden) continue;
     const ndc = modelGroup.localToWorld(originModelPos(p)).project(cam);
     if (ndc.z >= 1) continue;                       // カメラ背後は除外
     const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
@@ -4084,6 +4146,7 @@ window.addEventListener('keydown', e => {
     // スピナー表示中＝取消して閉じるだけ（選択は保つ）。キーボードレス（タッチ）起動時は入力欄に
     // フォーカスが無く rotAInput のEscハンドラを通らないので、ここで受ける（取消ボタン経由もここ）
     if (nudgeActive()) { endRotSpin(false); return; }
+    if (hideArmed) { setHideArmed(false); if (window.__toast) window.__toast('非表示：取り消しました'); return; }   // Esc＝「非表示」コマンド取消
     if (pipeEndDrag) cancelPipeEndDrag();
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
@@ -4858,7 +4921,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
   // ================= 表示：範囲ズーム =================
   function zoomExtents() {
-    const targets = selectedParts.size ? [...selectedParts] : placedParts;
+    const targets = selectedParts.size ? [...selectedParts] : placedParts.filter(p => !p.userData.hidden);   // 範囲ズームは見えている物だけ
     if (!targets.length) { resetView(); return; }
     const box = new THREE.Box3();
     for (const p of targets) box.expandByObject(p);
@@ -4909,8 +4972,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         scale: p.scale.toArray(),
         grip: p.userData.gripLocal ? p.userData.gripLocal.toArray() : null,
         groupId: p.userData.groupId != null ? p.userData.groupId : null,
+        hidden: p.userData.hidden ? 1 : undefined,   // 非表示状態（undefined はJSONに載らない）
       })),
-      annotations: annStore.map(a => ({ type: a.type, a: a.a.toArray(), b: a.b.toArray(), style: a.style, groupId: a.groupId != null ? a.groupId : null })),
+      annotations: annStore.map(a => ({ type: a.type, a: a.a.toArray(), b: a.b.toArray(), style: a.style, groupId: a.groupId != null ? a.groupId : null, hidden: a.hidden ? 1 : undefined })),
     };
   }
   // ---- 保存：新規保存／上書き保存（2026-07-12 社長要望） ----
@@ -5097,6 +5161,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       obj.userData.roll = rec.roll || 0;
       if (rec.mat) obj.userData.mat = rec.mat;
       if (rec.groupId != null) obj.userData.groupId = rec.groupId;
+      if (rec.hidden) { obj.userData.hidden = true; obj.visible = false; }
       obj.userData.placed = true;
       modelGroup.add(obj);
       placedParts.push(obj);
@@ -5106,7 +5171,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     $('dwgName').value = d.name || ''; $('dwgNo').value = d.no || '';
     applySpec(d.spec);
     if (Array.isArray(data.annotations)) {
-      for (const a of data.annotations) { addAnnotation(a.type, new V3().fromArray(a.a), new V3().fromArray(a.b), a.style); if (a.groupId != null) annStore[annStore.length - 1].groupId = a.groupId; }
+      for (const a of data.annotations) {
+        addAnnotation(a.type, new V3().fromArray(a.a), new V3().fromArray(a.b), a.style);
+        const r = annStore[annStore.length - 1];
+        if (a.groupId != null) r.groupId = a.groupId;
+        if (a.hidden) { r.hidden = true; r.obj.visible = false; }
+      }
+      if (data.annotations.some(a => a.hidden && a.type === 'xline') && window.__annXptsRefresh) window.__annXptsRefresh();   // 隠した構築線の交点を消す
     }
     let maxG = 0;
     for (const p of placedParts) if (p.userData.groupId > maxG) maxG = p.userData.groupId;
@@ -5951,7 +6022,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   modelGroup.add(xptGroup);
   let xlinePts = [];                          // 交点（modelローカル）の一覧
   function xlineIntersections() {
-    const xs = annStore.filter(r => r.type === 'xline');
+    const xs = annStore.filter(r => r.type === 'xline' && !r.hidden);   // 非表示の構築線は交点を作らない
     const out = [];
     const L = 12, tolY = 0.0005;              // 描画範囲±12m／EL一致とみなす許容0.5mm
     for (let i = 0; i < xs.length; i++) for (let j = i + 1; j < xs.length; j++) {
@@ -6002,6 +6073,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!turningOff) {
       stopFollow();
       if (typeof moveMode !== 'undefined' && moveMode) setMoveMode(false);   // 作図を始めたら「移動」コマンドは解除（排他）
+      if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
       selectPart(null);
       drawState.mode = mode;
       renderer.domElement.style.cursor = DRAW_CURSOR;
@@ -7001,7 +7073,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ===================================================================
   //  描画後の線分：再選択 / 移動 / 端点ドラッグで長さ変更（描画モード外で動作）
   // ===================================================================
-  window.__annSnapPoints = () => { const a = []; for (const r of annStore) { if (r === drawState.editRec) continue; if (annMoveSnap && selAnns.has(r)) continue; for (const sp of annSnapPoints(r)) a.push(sp); } for (const p of xlinePts) a.push(p); return a; };   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
+  window.__annSnapPoints = () => { const a = []; for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; if (annMoveSnap && selAnns.has(r)) continue; for (const sp of annSnapPoints(r)) a.push(sp); } for (const p of xlinePts) a.push(p); return a; };   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
   const lineSelGroup = new THREE.Group();   // 選択中の線の端点ハンドル（青球）
   modelGroup.add(lineSelGroup);
   let lineSel = null, lineDrag = null;
@@ -7063,6 +7135,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let dimValOpen = false;                      // 値フォームを開くのは「値クリック」時のみ（オブジェクト選択では出さない）
   let dimValEditing = false;                   // true＝既存値の編集（引出ラベル「編集」）／false＝新規入力（引出ラベル「入力」）
   function selectLine(rec, additive) {
+    if (typeof hideArmed !== 'undefined' && hideArmed) { setHideArmed(false); hideAnnRec(rec); return; }   // 「非表示」実行待ち＝選択せず隠す
     selectPart(null);                          // 部品選択を解除（部品クリックと同じ排他。__annClearSelも走る）
     if (!additive) selAnns.clear();
     selAnns.add(rec); lineSel = rec;
@@ -7117,6 +7190,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const inv = new THREE.Matrix4().copy(cam.matrixWorld).invert();
     let added = 0;
     for (const rec of annStore) {
+      if (rec.hidden) continue;                        // 非表示は窓選択に掛からない
       const seg = annScreenSeg(rec, rect, cam, inv);   // ニアプレーンクリップ済（構築線も正しく判定）
       if (!seg) continue;
       const { pa, pb } = seg;
@@ -7164,10 +7238,55 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (typeof updateForm === 'function') updateForm();
     }
   };
+  // ---- 表示／非表示（注釈側） ----
+  // 「非表示」実行待ちでタップされた注釈を隠す（グループの一員なら同グループの注釈・部品も一緒に）
+  function hideAnnRec(rec) {
+    const gid = rec.groupId;
+    const list = gid != null ? annStore.filter(r => r.groupId === gid && !r.hidden) : [rec];
+    for (const r of list) { r.hidden = true; r.obj.visible = false; selAnns.delete(r); if (lineSel === r) { lineSel = null; clearLineHandles(); } }
+    let n = list.length;
+    if (gid != null && typeof hidePartOnly === 'function')
+      for (const p of placedParts) if (p.userData.groupId === gid && !p.userData.hidden) { hidePartOnly(p); n++; }
+    if (list.some(r => r.type === 'xline')) updateXlinePts();
+    clearAnnHi(); refreshHandles();
+    if (typeof updateForm === 'function') updateForm();
+    if (typeof refreshItemList === 'function') refreshItemList();
+    if (window.__toast) window.__toast('非表示：' + n + '件を隠しました（「再表示」で戻せます）');
+  }
+  // 選択中の注釈を隠して選択解除。返り値＝隠した件数（部品側 hideSelectedObjects から呼ばれる）
+  window.__annHideSel = () => {
+    if (!selAnns.size) return 0;
+    const list = [...selAnns];
+    for (const r of list) { r.hidden = true; r.obj.visible = false; }
+    deselectLine();                                        // ハイライト・ハンドル・値フォームも消す
+    if (list.some(r => r.type === 'xline')) updateXlinePts();
+    return list.length;
+  };
+  // 指定グループの注釈を隠す（部品タップからのグループ非表示用）。返り値＝隠した件数
+  window.__annHideGroup = (gid) => {
+    let n = 0, hadX = false;
+    for (const r of annStore) if (r.groupId === gid && !r.hidden) {
+      r.hidden = true; r.obj.visible = false; selAnns.delete(r);
+      if (lineSel === r) { lineSel = null; clearLineHandles(); }
+      if (r.type === 'xline') hadX = true;
+      n++;
+    }
+    if (n) { if (hadX) updateXlinePts(); clearAnnHi(); refreshHandles(); }
+    return n;
+  };
+  // 非表示の注釈をすべて再表示。返り値＝戻した件数
+  window.__annShowAll = () => {
+    let n = 0, hadX = false;
+    for (const r of annStore) if (r.hidden) { r.hidden = false; r.obj.visible = true; if (r.type === 'xline') hadX = true; n++; }
+    if (hadX) updateXlinePts();
+    return n;
+  };
+  window.__annXptsRefresh = updateXlinePts;   // ファイル読込で構築線を隠した時の交点更新用
   // Ctrl+クリック：カーソル下の線を選択へ出し入れ（部品の個別トグルと同じ感覚）。線が無ければ false
   window.__annToggleAt = (cx, cy) => {
     const rec = pickAnnAt(cx, cy);
     if (!rec) return false;
+    if (typeof hideArmed !== 'undefined' && hideArmed) { setHideArmed(false); hideAnnRec(rec); return true; }   // 「非表示」実行待ち＝隠す
     if (selAnns.has(rec)) { selAnns.delete(rec); if (lineSel === rec) { lineSel = null; clearLineHandles(); } }
     else { selAnns.add(rec); lineSel = rec; showLineHandles(rec); }
     refreshAnnHi();
@@ -7719,6 +7838,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (d <= bestD) { bestD = d; best = rec; bestExt = !!isExt; }
     };
     for (const rec of annStore) {
+      if (rec.hidden) continue;                          // 非表示はクリックで拾わない
       if (rec.type === 'circle') {                       // 円/楕円：外周をクリックで選べるよう、周を多角形に分けて当てる
         const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
         const N = 64; let prev = null;
@@ -8099,6 +8219,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdCsv').onclick = exportCsv;       // 部品表CSV（自動集計付き）
   $('cmdClash').onclick = runClashCheck; // 干渉チェック（参考）
   $('cmdMove').onclick = () => setMoveMode(!moveMode);   // 移動モードのトグル
+  // 非表示／再表示。旧index.html（10分キャッシュ）と新app.jsが混在してもボタン無しで壊れないよう null 許容
+  const _bHide = $('cmdHide'); if (_bHide) _bHide.onclick = hideCommand;
+  const _bShow = $('cmdShow'); if (_bShow) _bShow.onclick = showAllHidden;
   $('cmdTplSave').onclick = saveDwgTemplate;   // 図面情報を既定として記憶
   $('cmdPrint').onclick = printSheet;
   $('cmdPng').onclick = exportPng;
