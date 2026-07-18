@@ -89,6 +89,15 @@
   body.light #ppBody .pp-row label, body.light #ppBody .pp-note, body.light #ppBody .pp-row .pp-unit { color: #5a6a88; }
   body.light #ppBody .pp-row input, body.light #ppBody .pp-row select { background: #fff; color: #1c2740; border-color: #c4ccda; }
   body.light #ppBody .pp-row .pp-ro { color: #1c2740; }
+  /* 設定メニュー（リボン上に浮くポップアップ） */
+  #setMenu { position: fixed; bottom: 52px; left: 300px; z-index: 40; display: none; width: 300px;
+    background: rgba(20,28,51,.97); border: 1px solid #36436b; border-radius: 8px; padding: 8px 10px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.45); font-size: 11px; color: #c3cee2; }
+  #setMenu .sm-title { color: #8fb4ee; font-weight: 700; margin-bottom: 6px; border-bottom: 1px solid #2a3450; padding-bottom: 3px; }
+  #setMenu label { display: flex; align-items: center; gap: 7px; padding: 4px 0; cursor: pointer; }
+  #setMenu input[type="checkbox"] { width: 15px; height: 15px; }
+  body.light #setMenu { background: rgba(248,250,253,.97); border-color: #c4ccda; color: #33405c; }
+  body.light #setMenu .sm-title { color: #1f6fd0; border-bottom-color: #cdd4e0; }
   #itemList { position: fixed; right: 10px; bottom: 56px; width: 424px; max-height: 54vh;
     background: rgba(20,28,51,.94); border: 1px solid #36436b; border-radius: 10px;
     box-shadow: 0 4px 14px rgba(0,0,0,.4); display: flex; flex-direction: column; overflow: hidden; }
@@ -396,7 +405,7 @@
         <button id="cmdCircle" title="円を描く（中心をクリック→半径まで広げて確定）"><span class="ic">◯</span>円</button>
         <button id="cmdDim"   title="寸法（右クリックで 平行/角度/半径/直径/引出 を選択）"><span class="ic">↔</span>寸法</button>
         <button id="cmdText"  title="文字を配置（点をクリック→そのまま入力）"><span class="ic">Ｔ</span>文字</button>
-        <button id="cmdNear"  title="近接スナップ：ONの間、線分・構築線の線上（端点・中点・交点以外の場所）にも吸着する。誤吸着を避けたい時はOFF（状態は記憶）"><span class="ic">╱</span>近接</button>
+        <button id="cmdSet"  title="設定：スナップ（点吸着）・近接点（線上吸着）のON/OFF"><span class="ic">⚙</span>設定</button>
       </div>
       <div class="rb-title">描画</div>
     </div>
@@ -501,7 +510,7 @@
         <li><b>半径・直径</b>は<b>円／楕円をクリックすると寸法が出ます</b>（近づけただけでは出ません）。その後<b>カーソルを動かすと値の位置を内側／外側に調整でき、補助線（リーダー）が伸び縮みします</b>（向きもカーソル方向に追従）。<b>中心・四半円点・機点にスナップ</b>し、向きは<b>四半円方向（上下左右）にも吸着</b>します（緑印）。<b>もう一度クリックで確定</b>。Esc／右クリックでやり直し</li>
         <li><b>確定後の再調整</b>：半径・直径・角度の寸法を<b>選択（線/円弧をクリック）すると、再びカーソルで逃げ（リーダー長・内外／円弧の半径・向き）を調整</b>できます（スナップ有・もう一度クリックで確定・Escで中断）</li>
         <li>起点・終点は<b>部品の機点や他の線・寸法線の端点へスナップ</b>（吸着すると<b>緑の印</b>が出て、そこへ引き寄せられます）</li>
-        <li><b>近接</b>（描画グループのトグル）＝ONの間、<b>線分・構築線の線上（端点・中点・交点以外の場所）にも吸着</b>します（部品の配置・移動・作図すべてで有効。点のスナップが優先され、線上は少し狭い距離で効きます）。誤吸着を避けたい時はOFF（状態は記憶）</li>
+        <li><b>設定</b>（描画グループ）＝スナップ関連のON/OFF。<b>スナップ</b>＝機点・端点・中点・交点への点吸着（OFFで完全フリー配置）。<b>近接点</b>＝ONの間、<b>線分・構築線の線上にも吸着</b>し、作図の2点目では<b>相手の線への垂線の足（直角点）を優先</b>して直角がぴったり出ます。いずれも状態は記憶</li>
         <li>斜めに引くと<b>補助三角形</b>が出て、<b>X方向・Z方向</b>の脚に長さ(mm)欄が表示。数値を入れて<kbd>Enter</kbd>で正確な寸法に確定（部品の方向移動と同じ操作）</li>
         <li><kbd>Shift</kbd>を押しながら＝<b>Y方向（鉛直）に引く</b>（入力欄は「Y」）。水平角は<b>45°刻み固定</b>で拘束されます</li>
         <li>描画中：<b>右クリック／<kbd>Esc</kbd>＝取消・解除</b>、<kbd>Del</kbd>＝直近の注釈を取消／<b>右ドラッグ＝移動</b>・<b>ホイール＝拡大</b></li>
@@ -592,6 +601,12 @@
   <!-- 選択部品の脇に出る高さ入力フォーム（高さ/COP を入れて Enter で確定） -->
   <div id="hForm"><span id="hLabel">高さ</span><input id="hY" type="number" step="1" placeholder="—">mm</div>
   <!-- 右クリック長押しで出る角度スピナー（線を任意角度で回転）。自前の▲▼で0.5°刻み＋360°折り返し。見た目は他フォームと統一 -->
+  <!-- 設定メニュー（リボン「設定」で開閉。スナップ関連のON/OFF） -->
+  <div id="setMenu">
+    <div class="sm-title">スナップ設定</div>
+    <label><input type="checkbox" id="setSnap"><span>スナップ（機点・端点・中点・交点への点吸着）</span></label>
+    <label><input type="checkbox" id="setNear"><span>近接点（線分・構築線の線上への吸着・直角点含む）</span></label>
+  </div>
   <div id="rotForm"><span id="rotLabel">角度</span><span id="rotWrap"><input id="rotA" type="number" step="0.5" value="0"><span id="rotBtns"><button id="rotUp" type="button" title="+0.5°">▲</button><button id="rotDn" type="button" title="−0.5°">▼</button></span></span><span id="rotUnit">°</span></div>
   <!-- 方向移動中、補助三角形のX脚・Y脚の値の位置に出る入力欄（距離フォームと同形式） -->
   <div id="legXBox" class="legBox">X<input id="legX" type="number" step="1">mm</div>

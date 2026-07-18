@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-E';
+const APP_VER = 'v0719-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2425,6 +2425,9 @@ const SNAP_PX = 18;           // 機点スナップが効く画面距離(px)
 const NEAR_SNAP_PX = 14;
 let nearSnapOn = false;
 try { nearSnapOn = localStorage.getItem('p3d_near_snap') === '1'; } catch (e) {}
+// スナップ全体（機点・端点・中点・交点などの点吸着）のON/OFF（リボン「設定」から。既定ON）
+let snapOn = true;
+try { snapOn = localStorage.getItem('p3d_snap') !== '0'; } catch (e) {}
 
 // 複数選択中に primary を掴んだとき、一緒に動かす他メンバーの開始位置を記録する。
 // primary が選択集合に入っていて2件以上なら集団移動、そうでなければ空（=単体移動）。
@@ -2757,6 +2760,7 @@ function setPartByOrigin(obj, targetModelLocal) {
 }
 // カーソル近傍の他部品の機点を探す（画面距離）。見つかれば modelGroupローカル点を返す。
 function resolveSnap(clientX, clientY, exclude) {
+  if (!snapOn) return null;                             // 設定でスナップOFF＝吸着しない
   const rect = renderer.domElement.getBoundingClientRect();
   const cam = activeCam();
   let best = null, bestD = SNAP_PX;
@@ -3260,6 +3264,7 @@ function drawDirGuide() {
 // ・ラインからの垂直ズレ(高さ差含む3D)が極小のものだけ対象＝直行を崩さない（ライン外れは拾わない）。
 // ・吸着判定は他スナップと同じ画面距離 SNAP_PX(=18px)。返り値＝起点からその機点までの along 距離(m)。無ければ null。
 function nearestDirSnap(startOrigin, dir, clientX, clientY, exParts) {
+  if (!snapOn) return null;                             // 設定でスナップOFF＝吸着しない
   const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
   const perpTol = 0.0015;                          // 45°ラインからの許容ズレ（ほぼ同一線上のみ＝1.5mm）
   let best = null, bestD = SNAP_PX;
@@ -6221,6 +6226,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 候補点Pに寸法線が乗る逃げ量＝(P−基準)·逃げ方向。今の量との差を画面pxに換算し SNAP_PX 以内、かつ
   // その逃げ量で寸法線（無限直線）が実際にPをほぼ通る（残差1.5mm以内＝同一平面・同一レベル）ものだけ吸着する。
   function dimOffArrowSnap(rec, off) {
+    if (!snapOn) return null;                           // 設定でスナップOFF＝吸着しない
     const st = rec.style || {};
     if (!st.dimDir) return null;
     const dn = new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z);
@@ -6520,6 +6526,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // 部品の機点＋既存の線/寸法線の両端点（画面距離 SNAP_PX 以内の最近傍）
   function drawSnapPoint(clientX, clientY) {
+    if (!snapOn) return null;                           // 設定でスナップOFF＝吸着しない
     const rect = renderer.domElement.getBoundingClientRect();
     const cam = activeCam();
     let best = null, bestD = SNAP_PX;
@@ -6537,7 +6544,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）
     for (const p of xlinePts) test(p);   // 構築線どうしの交点（CADの交点スナップ）
-    if (!best && nearSnapOn) best = nearestOnLine(clientX, clientY, NEAR_SNAP_PX, r => r === drawState.editRec);   // 近接＝線上へ
+    if (!best && nearSnapOn) {
+      // 2点目の位置決め中＝起点からの「垂線の足（直角点）」を最優先（直角がぴったり出る）。無ければ一般の線上へ
+      if (drawState.first) best = nearestPerpFoot(drawState.first, clientX, clientY, SNAP_PX, r => r === drawState.editRec);
+      if (!best) best = nearestOnLine(clientX, clientY, NEAR_SNAP_PX, r => r === drawState.editRec);
+    }
     return best;
   }
   // 作図中（1点目・2点目の位置決め）も、部品配置と同じ機点マーカーを表示する（2026-07-12 社長要望）。
@@ -8278,6 +8289,28 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return best;
   }
   window.__annNearestOnLine = (cx, cy, maxPx) => nearestOnLine(cx, cy, maxPx, r => r === drawState.editRec || (annMoveSnap && selAnns.has(r)));
+  // 直角スナップ：作図中の起点 from から各線への「垂線の足」。カーソルがその近く(maxPx)なら
+  // 一般の線上吸着より優先して吸着＝線分が相手の線とぴったり直角で繋がる（2026-07-19 社長指摘）
+  function nearestPerpFoot(from, cx, cy, maxPx, excludeFn) {
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    let best = null, bestD = maxPx;
+    for (const r of annStore) {
+      if ((r.type !== 'line' && r.type !== 'xline') || r.hidden) continue;
+      if (excludeFn && excludeFn(r)) continue;
+      const u = r.b.clone().sub(r.a); const L = u.length();
+      if (L < 1e-9) continue;
+      u.multiplyScalar(1 / L);
+      let t = from.clone().sub(r.a).dot(u);              // from からの垂線の足（線上パラメータ）
+      t = r.type === 'xline' ? Math.max(-12, Math.min(12, t)) : Math.max(0, Math.min(L, t));
+      const P = r.a.clone().addScaledVector(u, t);
+      const n = modelGroup.localToWorld(P.clone()).project(cam);
+      if (n.z >= 1) continue;
+      const sx = rect.left + (n.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-n.y * 0.5 + 0.5) * rect.height;
+      const d = Math.hypot(sx - cx, sy - cy);
+      if (d < bestD) { bestD = d; best = P; }
+    }
+    return best;
+  }
   // 掴んだ画面位置と起点の画面オフセット（差分移動用）。部品の moveGrabOff と同じ考え方＝
   // 起点から離れた所を掴んでも飛ばず、スナップは「起点が来るべき位置」で判定される（起点基準スナップ）
   function grabOffsetFor(origin, cx, cy) {
@@ -8287,6 +8320,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return { x: cx - (rect.left + (n.x * 0.5 + 0.5) * rect.width), y: cy - (rect.top + (-n.y * 0.5 + 0.5) * rect.height) };
   }
   function moveSnapForGrip(cx, cy, exParts, exAnns) {
+    if (!snapOn) return null;                           // 設定でスナップOFF＝吸着しない
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
     let best = null, bestD = SNAP_PX;
     const test = mpos => {
@@ -8914,17 +8948,26 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 非表示／再表示。旧index.html（10分キャッシュ）と新app.jsが混在してもボタン無しで壊れないよう null 許容
   const _bHide = $('cmdHide'); if (_bHide) _bHide.onclick = hideCommand;
   const _bShow = $('cmdShow'); if (_bShow) _bShow.onclick = showAllHidden;
-  // 近接スナップのトグル（線上吸着。状態は記憶）
-  const _bNear = $('cmdNear');
-  if (_bNear) {
-    const applyNear = () => _bNear.classList.toggle('active', nearSnapOn);
-    _bNear.onclick = () => {
-      nearSnapOn = !nearSnapOn;
-      applyNear();
-      try { localStorage.setItem('p3d_near_snap', nearSnapOn ? '1' : '0'); } catch (e) {}
-      if (window.__toast) window.__toast(nearSnapOn ? '近接スナップ ON：線分・構築線の線上にも吸着します' : '近接スナップ OFF');
+  // 設定メニュー（スナップ／近接点のON/OFF。状態は記憶。旧「近接」トグルはここへ統合）
+  const _bSet = $('cmdSet'), _setMenu = document.getElementById('setMenu');
+  if (_bSet && _setMenu) {
+    const cbS = document.getElementById('setSnap'), cbN = document.getElementById('setNear');
+    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; };
+    const closeSet = () => { _setMenu.style.display = 'none'; _bSet.classList.remove('active'); };
+    _bSet.onclick = () => {
+      const open = _setMenu.style.display !== 'block';
+      if (!open) { closeSet(); return; }
+      syncSet();
+      _setMenu.style.display = 'block';
+      _bSet.classList.add('active');
+      const r = _bSet.getBoundingClientRect();
+      _setMenu.style.left = Math.round(Math.max(6, Math.min(r.left, window.innerWidth - _setMenu.offsetWidth - 6))) + 'px';
     };
-    applyNear();
+    if (cbS) cbS.addEventListener('change', () => { snapOn = cbS.checked; try { localStorage.setItem('p3d_snap', snapOn ? '1' : '0'); } catch (e) {} });
+    if (cbN) cbN.addEventListener('change', () => { nearSnapOn = cbN.checked; try { localStorage.setItem('p3d_near_snap', nearSnapOn ? '1' : '0'); } catch (e) {} });
+    document.addEventListener('pointerdown', e => {
+      if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
+    }, true);
   }
   $('cmdTplSave').onclick = saveDwgTemplate;   // 図面情報を既定として記憶
   $('cmdPrint').onclick = printSheet;
