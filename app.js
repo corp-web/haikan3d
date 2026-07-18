@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-J';
+const APP_VER = 'v0719-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1330,6 +1330,55 @@ function hollowTube(ro, ri, L, seg) {
 }
 
 // ティー生成。opts={sizeA(run=大), sizeB(branch=枝), sch}。同径は sizeB=sizeA。
+// ティの本管（ラン）：中空管（両端開先）の外壁・内壁に、枝管ボア（+Z側・半径holeR）の
+// サドル曲線どおりの穴を開け、穴縁は壁厚ぶんのカラー（ザグリ面）でつなぐ（2026-07-19 社長指摘：
+// 枝管の内部から本管の壁が見えて貫通していなかった）。開先・ルートフェイスは従来の形状を踏襲。
+function teeRunBoredGeo(ro, ri, C, holeR) {
+  const t = ro - ri;
+  const f = Math.min(WELD_ROOT_FACE, t * 0.5);
+  const h = Math.max(t - f, 0) * Math.tan(WELD_BEVEL_DEG * Math.PI / 180);
+  const hiOut = C - h, loOut = -C + h;
+  const seg = 64, pos = [];
+  const quad = (a, b, c2, d) => { pos.push(...a, ...b, ...c2, ...a, ...c2, ...d); };
+  // 円筒壁（半径r・y0〜y1）。+Z側は枝穴の範囲 |y| < √(holeR²−r²cos²φ) を抜いて上下2帯にする
+  const wall = (r, y0, y1) => {
+    const col = pAng => {
+      const c = Math.cos(pAng), s = Math.sin(pAng);
+      const yh = s > 0 ? Math.sqrt(Math.max(0, holeR * holeR - r * r * c * c)) : 0;
+      return { x: r * c, z: r * s, yh };
+    };
+    for (let i = 0; i < seg; i++) {
+      const A = col(i / seg * Math.PI * 2), B = col((i + 1) / seg * Math.PI * 2);
+      quad([A.x, y0, A.z], [B.x, y0, B.z], [B.x, -B.yh, B.z], [A.x, -A.yh, A.z]);   // 下帯
+      quad([A.x, A.yh, A.z], [B.x, B.yh, B.z], [B.x, y1, B.z], [A.x, y1, A.z]);     // 上帯
+    }
+  };
+  // 回転リング/コーン（(r1,y1)→(r2,y2)を一周）＝端部の開先・ルートフェイス
+  const rev = (r1, y1, r2, y2) => {
+    for (let i = 0; i < seg; i++) {
+      const p0 = i / seg * Math.PI * 2, p1 = (i + 1) / seg * Math.PI * 2;
+      const c0 = Math.cos(p0), s0 = Math.sin(p0), c1 = Math.cos(p1), s1 = Math.sin(p1);
+      quad([r1 * c0, y1, r1 * s0], [r1 * c1, y1, r1 * s1], [r2 * c1, y2, r2 * s1], [r2 * c0, y2, r2 * s0]);
+    }
+  };
+  wall(ro, loOut, hiOut);                                   // 外壁（枝穴あき）
+  wall(ri, -C, C);                                          // 内壁（枝穴あき）
+  rev(ro, hiOut, ri + f, C); rev(ri + f, C, ri, C);         // 上端：開先＋ルートフェイス
+  rev(ro, loOut, ri + f, -C); rev(ri + f, -C, ri, -C);      // 下端
+  const cseg = 48;                                          // 穴縁カラー＝外壁縁→内壁縁（壁厚のザグリ面）
+  for (let i = 0; i < cseg; i++) {
+    const rim = q => {
+      const px = holeR * Math.cos(q), py = holeR * Math.sin(q);
+      return { x: px, y: py, zo: Math.sqrt(Math.max(ro * ro - px * px, 0)), zi: Math.sqrt(Math.max(ri * ri - px * px, 0)) };
+    };
+    const A = rim(i / cseg * Math.PI * 2), B = rim((i + 1) / cseg * Math.PI * 2);
+    quad([A.x, A.y, A.zo], [B.x, B.y, B.zo], [B.x, B.y, B.zi], [A.x, A.y, A.zi]);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
 function makeTee(opts) {
   const o = Object.assign({ sizeA: '25A', sizeB: '25A', sch: 'Sch10S' }, opts || {});
   const mat = FLANGE_MAT.clone(); mat.side = THREE.DoubleSide; mat.needsUpdate = true;
@@ -1343,8 +1392,10 @@ function makeTee(opts) {
   const M = ((o.sizeB && o.sizeB !== o.sizeA && TEE_RT_M[o.sizeA] && TEE_RT_M[o.sizeA][o.sizeB] != null)
     ? TEE_RT_M[o.sizeA][o.sizeB] : (TEE_C[o.sizeA] || 38)) / 1000;
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(new THREE.LatheGeometry(weldHollowProfile(roR, riR, -C, C, true, true), 48), mat));   // run（Y軸・両端に開先）
-  const br = new THREE.Mesh(new THREE.LatheGeometry(weldHollowProfile(roB, riB, -M / 2, M / 2, true, false), 40), mat);   // branch（外端のみ開先・内端は本管接合）
+  g.add(new THREE.Mesh(teeRunBoredGeo(roR, riR, C, Math.min(riB, riR * 0.999)), mat));   // run（Y軸・両端開先・枝ボアのザグリ穴あき）
+  // branch（外端のみ開先）。内端は本管ボアへ突き出さないよう本管内壁の高さまで後退（ザグリ穴とカラーが接合部を受け持つ）
+  const ziB = Math.sqrt(Math.max(riR * riR - roB * roB, 0));
+  const br = new THREE.Mesh(new THREE.LatheGeometry(weldHollowProfile(roB, riB, ziB - M / 2, M / 2, true, false), 40), mat);
   br.rotation.x = Math.PI / 2; br.position.z = M / 2; g.add(br);
   g.userData.partType = 'tee';
   g.userData.tee = { ...o };
@@ -3198,6 +3249,29 @@ function nearestDirSnap(startOrigin, dir, clientX, clientY, exParts) {
   return best;
 }
 function updateDirMove(clientX, clientY) {
+  if (dirDrag.vert) {   // Shift＋ドラッグ＝Y方向（鉛直）移動（2026-07-19 社長要望）。鉛直線上の機点へ吸着
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    const w0 = modelGroup.localToWorld(dirDrag.startOrigin.clone()).project(cam);
+    const w1 = modelGroup.localToWorld(dirDrag.startOrigin.clone().add(new THREE.Vector3(0, 0.1, 0))).project(cam);
+    const pxPerM = Math.hypot((w1.x - w0.x) * rect.width, (w1.y - w0.y) * rect.height) / 2 / 0.1;
+    if (!(pxPerM > 1e-6)) return;
+    const dy = (dirDrag.sy - clientY) / pxPerM;                     // 画面で上へドラッグ＝+Y
+    const dir = new THREE.Vector3(0, dy >= 0 ? 1 : -1, 0);
+    let dist = Math.abs(dy);
+    const exPartsV = new Set([dirDrag.part]);
+    if (dirDrag.group) for (const g of dirDrag.group) exPartsV.add(g.part);
+    let sxV = clientX, syV = clientY;                                // 吸着判定＝起点の現在位置の画面座標
+    const onV = modelGroup.localToWorld(dirDrag.startOrigin.clone().addScaledVector(dir, dist)).project(cam);
+    if (onV.z < 1) { sxV = rect.left + (onV.x * 0.5 + 0.5) * rect.width; syV = rect.top + (-onV.y * 0.5 + 0.5) * rect.height; }
+    const snapV = nearestDirSnap(dirDrag.startOrigin, dir, sxV, syV, exPartsV);
+    if (snapV != null) dist = snapV;
+    setPartByOrigin(dirDrag.part, dirDrag.startOrigin.clone().addScaledVector(dir, dist));
+    applyGroupDelta(dirDrag.group, dirDrag.part, dirDrag.primaryStartPos);
+    if (dirDrag.annFollow) { const d = dirDrag.part.position.clone().sub(dirDrag.primaryStartPos); window.__annMoveApply(d.x, d.y, d.z); }
+    drawDirGuide();
+    if (snapV != null) addMarker(dirDrag.startOrigin.clone().addScaledVector(dir, dist), 0x39ff8a, markerRadiusFor(dirDrag.part, true));
+    return;
+  }
   const hit = planeHitAt(clientX, clientY, dirDrag.planeY);
   if (!hit) return;
   // 移動量は「指を置いた地点(startHit)からの差分」で測る。原点基準だと、原点から離れた所を
@@ -3275,9 +3349,10 @@ function updateForm() {
   if (window.__propsRefresh) window.__propsRefresh();   // プロパティパネルへ選択・値の変化を通知（早期returnより前）
   if (!hYInput) return;
   if (dirActive()) {
-    if (hLabel) hLabel.textContent = '距離';
+    if (hLabel) hLabel.textContent = dirDrag.vert ? '距離(上下)' : '距離';
     const cur = originModelPos(dirDrag.part);
-    hYInput.value = Math.round(Math.hypot(cur.x - dirDrag.startOrigin.x, cur.z - dirDrag.startOrigin.z) * 1000);
+    hYInput.value = Math.round((dirDrag.vert ? Math.abs(cur.y - dirDrag.startOrigin.y)
+                                             : Math.hypot(cur.x - dirDrag.startOrigin.x, cur.z - dirDrag.startOrigin.z)) * 1000);
     return;
   }
   const lref = lineElRef();                     // 線分選択中＝起点側のEL（パイプと同じEL表示）
@@ -3954,6 +4029,7 @@ window.addEventListener('pointermove', e => {
   else if (dirDrag && !dirDrag.locked) {
     const moveTh = (e.pointerType !== 'mouse') ? 10 : 4;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらないように）
     if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > moveTh) dirDrag.started = true;
+    dirDrag.vert = !!(e.shiftKey || touchShift);           // Shift＝Y方向（鉛直）移動（途中切替も可）
     if (dirDrag.started) updateDirMove(e.clientX, e.clientY);
   }
 });
@@ -8589,30 +8665,55 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       body.appendChild(row);
       fields.push({ inp, get: opts.get });
     }
-    // フェイス面（部品ローカル+Y）の世界向き。方位角0°=右(X+)・90°=前(Z+)、立面角+90°=上向き（ジズモの呼び方と同じ）
+    // フェイス面（部品ローカル+Y）の世界向き。方位角＝コンパス式：北0°・東90°・南180°・西270°
+    // （北=Z−=ジズモ「後」、東=X+=「右」、南=Z+=「前」、西=X−=「左」）。立面角+90°=上向き
     const faceN = p => new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion);
-    const faceBearing = p => { const n = faceN(p); if (Math.hypot(n.x, n.z) < 1e-3) return 0; let d = Math.atan2(n.z, n.x) * 180 / Math.PI; if (d < 0) d += 360; return Math.round(d * 10) / 10; };
+    const azimuthOf = (x, z) => { let d = Math.atan2(x, -z) * 180 / Math.PI; if (d < 0) d += 360; return Math.round(d * 10) / 10; };
+    const faceBearing = p => { const n = faceN(p); if (Math.hypot(n.x, n.z) < 1e-3) return 0; return azimuthOf(n.x, n.z); };
     const faceElev = p => { const n = faceN(p); return Math.round(Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI * 10) / 10; };
     const faceDirText = p => {
       const el = faceElev(p);
       if (el > 60) return '上向き';
       if (el < -60) return '下向き';
-      const names = ['右', '右前', '前', '左前', '左', '左後', '後', '右後'];   // 方角＝ジズモの面（右=X+・前=Z+）
+      const names = ['北', '北東', '東', '南東', '南', '南西', '西', '北西'];   // 東西南北（2026-07-19 社長要望）
       const t = names[Math.round(faceBearing(p) / 45) % 8];
       return Math.abs(el) > 5 ? t + (el > 0 ? '・上り' : '・下り') : t;
     };
     const rotPartWorld = (p, q) => {
       const keep = originModelPos(p).clone();
       p.quaternion.premultiply(q);
-      setPartByOrigin(p, keep);
+      setPartByOrigin(p, keep);                 // 起点（grip）はその場に残す
+      _idleSig = null;                           // 機点マーカーを強制再描画（起点だけのシグネチャでは回転が検知されない）
       if (selectedParts.has(p)) setEmissive(p, SEL_COLOR);
       updateForm();
     };
     const setFaceBearing = (p, v) => {
       const n = faceN(p);
       if (Math.hypot(n.x, n.z) < 1e-3) { if (window.__toast) window.__toast('上/下向きのフェイスは、先に立面角を横向き（0°など）にしてください'); return; }
-      const a = Math.atan2(n.z, n.x) - v * Math.PI / 180;   // +Y回転はatan2(z,x)を減らす向き
+      const a = (azimuthOf(n.x, n.z) - v) * Math.PI / 180;   // +Y回転は方位角を減らす向き
       rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), a));
+    };
+    // 回転（フェイス軸まわり・旧「ひねり」）：基準＝水平フェイスなら(Y×n)、垂直フェイスなら世界X。
+    // 値そのものは基準からの角度（0〜360°）。編集は差分だけフェイス軸まわりに回す＝起点は保持
+    const rollRefOf = p => {
+      const n = faceN(p);
+      let r = new THREE.Vector3(0, 1, 0).cross(n);
+      if (r.lengthSq() < 1e-9) r = new THREE.Vector3(1, 0, 0);
+      return r.normalize();
+    };
+    const faceRoll = p => {
+      const n = faceN(p), r0 = rollRefOf(p);
+      const lx = new THREE.Vector3(1, 0, 0).applyQuaternion(p.quaternion);
+      const lxp = lx.sub(n.clone().multiplyScalar(lx.dot(n)));
+      if (lxp.lengthSq() < 1e-9) return 0;
+      lxp.normalize();
+      let a = Math.atan2(n.dot(new THREE.Vector3().crossVectors(r0, lxp)), r0.dot(lxp)) * 180 / Math.PI;
+      if (a < 0) a += 360;
+      return Math.round(a * 10) / 10;
+    };
+    const setFaceRoll = (p, v) => {
+      const d = ((v - faceRoll(p)) % 360) * Math.PI / 180;
+      rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(faceN(p), d));
     };
     const setFaceElev = (p, v) => {
       const n = faceN(p);
@@ -8623,13 +8724,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       axis.normalize();
       rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(axis, phi0 - t));   // Y×n まわりの＋回転はフェイスを下げる向き
     };
+    // 起点ラベル：起点になっている機点の「軸」が鉛直（＝面が水平）ならEL、水平ならCOP（2026-07-19 社長要望。
+    // エルボ・ティ等は起点の機点ごとに変わる：例＝立ちエルボの上端面が起点ならEL、横端ならCOP）
+    function partHeightLabel(p) {
+      const gl = gripLocalOf(p);
+      let axisLocal = (gl && gl.lengthSq() > 1e-8) ? gl : null;
+      if (!axisLocal) { const f = p.userData.faceLocal; axisLocal = (f && f.lengthSq() > 1e-8) ? f : null; }   // 中心起点（ティ工作点等）＝主管軸で判定
+      if (!axisLocal) return 'EL';
+      const a = axisLocal.clone().normalize().applyQuaternion(p.quaternion);
+      return Math.abs(a.y) > 0.5 ? 'EL' : 'COP';
+    }
     function buildPart(p) {
       const u = p.userData, c = partColumns(p);
       sec('部品');
       roRow('種別', () => `${c.kind} ${c.type}`.trim());
       roRow('サイズ', () => `${c.size}${c.cls && c.cls !== '—' ? ' / ' + c.cls : ''}`);
       sec('位置（起点）');
-      edRow(heightLabelFor(p), { get: () => mmv(heightRefModelPos(p).y), set: v => { setPartByHeight(p, v / 1000); updateForm(); }, unit: 'mm', step: 1 });
+      edRow(partHeightLabel(p), { get: () => mmv(heightRefModelPos(p).y), set: v => { setPartByHeight(p, v / 1000); updateForm(); }, unit: 'mm', step: 1 });
       if (u.partType === 'pipe' && u.pipe) {
         sec('パイプ');
         edRow('長さ', { get: () => Math.round(u.pipe.length), set: v => { if (v >= 1) rebuildPipe(p, v, 'face'); updateForm(); }, unit: 'mm', step: 1 });
@@ -8639,10 +8750,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         roRow('方角', () => faceDirText(p));
         edRow('方位角', { get: () => faceBearing(p), set: v => setFaceBearing(p, v), unit: '°', step: 1 });
         edRow('立面角', { get: () => faceElev(p), set: v => setFaceElev(p, v), unit: '°', step: 1 });
+        edRow('回転', { get: () => faceRoll(p), set: v => setFaceRoll(p, v), unit: '°', step: 1 });
       }
       sec('その他');
       edRow('材質', { type: 'text', get: () => u.mat || '', set: v => { u.mat = String(v).trim(); refreshItemList(); } });
-      note('方位角0°=右(X+)・90°=前(Z+)、立面角+90°=上向き。45°送り・ひねりは従来どおり右クリック／タッチ操作でも回せます。仕様は左のパレットで変更。');
+      note('方角＝北(後Z−)・東(右X+)・南(前Z+)・西(左X−)、方位角＝北0°から時計回り。立面角+90°=上向き。回転＝フェイス軸まわり（旧ひねり・ボルト穴合わせ等）。仕様は左のパレットで変更。');
     }
     function buildAnnProps(a) {
       const label = a.type === 'line' ? '線分' : a.type === 'xline' ? '構築線' : a.type === 'circle' ? '円'
@@ -8666,16 +8778,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         edRow('ΔY 高低差', { get: () => delta(1), set: v => setDelta(1, v), unit: 'mm', step: 1 });
         edRow('ΔZ', { get: () => delta(2), set: v => setDelta(2, v), unit: 'mm', step: 1 });
         if (a.type === 'line') edRow('長さ', { get: () => { const gg = g(); return gg ? Math.round(gg.len * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ len: v / 1000 }); }, unit: 'mm', step: 1 });
-        edRow('水平角', { get: () => { const d = dvec(); let deg = Math.atan2(d[2], d[0]) * 180 / Math.PI; if (deg < 0) deg += 360; return Math.round(deg * 10) / 10; },
+        edRow('方位角', { get: () => { const d = dvec(); if (Math.hypot(d[0], d[2]) < 1e-9) return 0; let deg = Math.atan2(d[0], -d[2]) * 180 / Math.PI; if (deg < 0) deg += 360; return Math.round(deg * 10) / 10; },
           set: v => { const gg = g(); if (!gg) return; const d = dvec(); const hl = Math.hypot(d[0], d[2]); if (hl < 1e-9) return; const r = v * Math.PI / 180;
-            window.__annPropsSet({ b: [gg.a[0] + Math.cos(r) * hl, gg.a[1] + d[1], gg.a[2] + Math.sin(r) * hl] }); }, unit: '°', step: 0.5 });
+            window.__annPropsSet({ b: [gg.a[0] + Math.sin(r) * hl, gg.a[1] + d[1], gg.a[2] - Math.cos(r) * hl] }); }, unit: '°', step: 0.5 });
         edRow('立面角', { get: () => { const d = dvec(); return Math.round(Math.atan2(d[1], Math.hypot(d[0], d[2])) * 180 / Math.PI * 10) / 10; },
           set: v => { const gg = g(); if (!gg) return; const d = dvec(); const L = Math.hypot(d[0], d[1], d[2]); if (L < 1e-9) return;
             const r = Math.max(-89.9, Math.min(89.9, v)) * Math.PI / 180;
             const hl0 = Math.hypot(d[0], d[2]); const ux = hl0 > 1e-9 ? d[0] / hl0 : 1, uz = hl0 > 1e-9 ? d[2] / hl0 : 0;
             const hl2 = L * Math.cos(r), dy2 = L * Math.sin(r);
             window.__annPropsSet({ b: [gg.a[0] + ux * hl2, gg.a[1] + dy2, gg.a[2] + uz * hl2] }); }, unit: '°', step: 0.5 });
-        note('起点ELを変更すると線全体が上下に平行移動します（終点は起点に対する相対を維持）。水平角0°=右(X+)・90°=前(Z+)、立面角＋＝上り（全長を保って傾き変更）。');
+        note('起点ELを変更すると線全体が上下に平行移動します（終点は起点に対する相対を維持）。方位角＝北(後Z−)0°から時計回りで東(右X+)90°、立面角＋＝上り（全長を保って傾き変更）。');
       } else if (a.type === 'circle') {
         sec('中心');
         for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
@@ -8699,7 +8811,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     function render() {
       if (!open) return;
       const info = selInfo();
-      const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid + heightLabelFor(info.p) : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0));
+      const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid + partHeightLabel(info.p) : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0));
       if (s === sig) {   // 選択が同じ＝値だけ追従（編集中の欄は上書きしない）
         for (const f of fields) {
           if (f.ro) { const v = String(f.get()); if (f.ro.textContent !== v) f.ro.textContent = v; }

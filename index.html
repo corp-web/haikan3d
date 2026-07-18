@@ -401,7 +401,7 @@
     </div>
     <div class="rb-group">
       <div class="rb-btns">
-        <button id="cmdMove"   title="移動コマンド：押してから対象を選んでドラッグ／対象を選んでから押してドラッグ。1回動かすと自動で終了（Esc・再押下で取消）"><span class="ic">✥</span>移動</button>
+        <button id="cmdMove"   title="移動コマンド：押してから対象を選んでドラッグ／対象を選んでから押してドラッグ。Shift（タッチはシフト）＋ドラッグ＝上下(Y)移動。1回動かすと自動で終了（Esc・再押下で取消）"><span class="ic">✥</span>移動</button>
         <button id="cmdDup"    title="選択中のアイテムを複製"><span class="ic">⧉</span>複製</button>
         <button id="cmdMirror" title="選択中のアイテムを左右反転（鏡）"><span class="ic">◧</span>鏡</button>
         <button id="cmdGroup"  title="選択中の複数アイテムをグループ化（以後ひとつとして選択・移動）"><span class="ic">▣</span>グループ</button>
@@ -443,8 +443,8 @@
       <h3>タッチ操作（iPad / iPhone）</h3>
       <ul>
         <li><b>1本指ドラッグ＝回転</b>／<b>2本指ドラッグ＝画面移動</b>／<b>ピンチ＝拡大縮小</b>／<b>タップ＝選択</b></li>
-        <li>左下の<b>コントローラー</b>でマウス専用の操作を代替：<b>＋／−＝拡大縮小</b>、<b>向き＝向きを送る</b>（右クリック相当）、<b>ひねり</b>（Shift＋右クリック相当）、<b>取消</b>（Esc相当）</li>
-        <li>配置済みの部品や線を選択中は<b>向き／ひねりボタンを長押し（0.35秒）＝角度スピナー</b>（右クリック長押し相当）。<b>▲▼で0.5°刻み</b>（長押しで連続）、<b>3D画面タップで確定</b>、<b>取消ボタンで取消</b></li>
+        <li>左下の<b>コントローラー</b>でマウス専用の操作を代替：<b>＋／−＝拡大縮小</b>、<b>向き＝向きを送る</b>（右クリック相当）、<b>回転</b>（Shift＋右クリック相当・旧ひねり）、<b>取消</b>（Esc相当）</li>
+        <li>配置済みの部品や線を選択中は<b>向き／回転ボタンを長押し（0.35秒）＝角度スピナー</b>（右クリック長押し相当）。<b>▲▼で0.5°刻み</b>（長押しで連続）、<b>3D画面タップで確定</b>、<b>取消ボタンで取消</b></li>
         <li>細かい採寸作業は<b>Bluetoothマウスを接続</b>するとPCと同じく右クリック・カーソル吸着が使えます</li>
       </ul>
       <h3>部品を置く（パレット）</h3>
@@ -462,7 +462,7 @@
       <ul>
         <li>部品を<b>ドラッグ＝45°方向へ測って移動</b>（距離が脇に表示・数値入力可）</li>
         <li><b>ダブルクリック＝自由移動</b>（機点スナップあり）</li>
-        <li><b>右クリック＝向きを送る</b>（Z軸45°×8→X軸45°×8）／<b>Shift＋右クリック＝ひねり</b>（45°×8）</li>
+        <li><b>右クリック＝向きを送る</b>（Z軸45°×8→X軸45°×8）／<b>Shift＋右クリック＝回転</b>（旧ひねり・45°×8）</li>
         <li>パイプ＝選択して端の点をクリックで起点選択 → 「長さ」入力かドラッグで伸縮（選んだ端が固定）</li>
         <li><b>仕様の変更</b>＝配置済みの部品を選択すると<b>左のパレットにその部品の仕様が表示</b>され、パレットで<b>呼び径・タイプ・クラス・Sch・長さなどを変えるとその部品が置いたまま作り替え</b>られます（位置・向き・材質・グループは保持。「元に戻す」対応）</li>
         <li><kbd>Esc</kbd>＝取消／<kbd>Del</kbd>＝削除</li>
@@ -602,7 +602,7 @@
   <!-- タッチ用オンスクリーン・コントローラー（右クリック/ホイール/Escの代替・左側） -->
   <div id="touchCtrl">
     <button id="tcOrient"  title="向きを送る（右クリック相当）"><span class="ic">➤</span><span class="lb">向き</span></button>
-    <button id="tcTwist"   title="ひねり（Shift＋右クリック相当）"><span class="ic">↻</span><span class="lb">ひねり</span></button>
+    <button id="tcTwist"   title="回転（Shift＋右クリック相当・フェイス軸まわり45°）"><span class="ic">↻</span><span class="lb">回転</span></button>
     <button id="tcShift"   title="Shift（ON中＝PCのShift押下と同じ。線をY方向に引く・楕円化など）"><span class="ic">S</span><span class="lb">Shift</span></button>
     <button id="tcCtrl"    title="Ctrl（ON中＝PCのCtrl押下と同じ。クリックで複数選択・ドラッグで窓選択）"><span class="ic">Ｃ</span><span class="lb">Ctrl</span></button>
     <button id="tcDel"     title="選択中のアイテムを削除（Deleteキー相当）"><span class="ic">🗑</span><span class="lb">削除</span></button>
