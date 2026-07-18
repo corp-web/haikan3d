@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-J';
+const APP_VER = 'v0719-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1365,15 +1365,45 @@ function teeRunBoredGeo(ro, ri, C, holeR) {
   wall(ri, -C, C);                                          // 内壁（枝穴あき）
   rev(ro, hiOut, ri + f, C); rev(ri + f, C, ri, C);         // 上端：開先＋ルートフェイス
   rev(ro, loOut, ri + f, -C); rev(ri + f, -C, ri, -C);      // 下端
-  const cseg = 48;                                          // 穴縁カラー＝外壁縁→内壁縁（壁厚のザグリ面）
-  for (let i = 0; i < cseg; i++) {
-    const rim = q => {
-      const px = holeR * Math.cos(q), py = holeR * Math.sin(q);
-      return { x: px, y: py, zo: Math.sqrt(Math.max(ro * ro - px * px, 0)), zi: Math.sqrt(Math.max(ri * ri - px * px, 0)) };
+  // ※穴縁のザグリ面は枝管側のボア壁（teeBranchGeo の内壁が本管内面まで届く）が兼ねる
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+// ティの枝管：外壁は本管の外面サドルまで・ボア壁（内壁）は本管の内面サドルまで＝
+// 本管の中へ一切飛び出さず、壁厚部はボア壁が貫通してザグリ面になる（2026-07-19 社長指摘：
+// 枝管が母管内に飛び出していた＝旧・平面カット(√(riR²−roB²))では中央付近が出っ張る）。
+// 枝軸＝ローカル+Z、外端 z=M に開先＋ルートフェイス（従来の見た目を踏襲）。
+function teeBranchGeo(roB, riB, M, roR, riR) {
+  const t = roB - riB;
+  const f = Math.min(WELD_ROOT_FACE, t * 0.5);
+  const h = Math.max(t - f, 0) * Math.tan(WELD_BEVEL_DEG * Math.PI / 180);
+  const seg = 40, pos = [];
+  const quad = (a, b, c2, d) => { pos.push(...a, ...b, ...c2, ...a, ...c2, ...d); };
+  // 円筒壁（半径r・上端zTop）。下端は本管半径 cutR の面のサドル z=√(cutR²−r²cos²ψ)
+  const wall = (r, zTop, cutR) => {
+    const col = p => {
+      const c = Math.cos(p), s = Math.sin(p);
+      const z0 = Math.min(Math.sqrt(Math.max(cutR * cutR - r * r * c * c, 0)), zTop - 1e-4);
+      return { x: r * c, y: r * s, z0 };
     };
-    const A = rim(i / cseg * Math.PI * 2), B = rim((i + 1) / cseg * Math.PI * 2);
-    quad([A.x, A.y, A.zo], [B.x, B.y, B.zo], [B.x, B.y, B.zi], [A.x, A.y, A.zi]);
-  }
+    for (let i = 0; i < seg; i++) {
+      const A = col(i / seg * Math.PI * 2), B = col((i + 1) / seg * Math.PI * 2);
+      quad([A.x, A.y, A.z0], [B.x, B.y, B.z0], [B.x, B.y, zTop], [A.x, A.y, zTop]);
+    }
+  };
+  const rev = (r1, z1, r2, z2) => {
+    for (let i = 0; i < seg; i++) {
+      const p0 = i / seg * Math.PI * 2, p1 = (i + 1) / seg * Math.PI * 2;
+      const c0 = Math.cos(p0), s0 = Math.sin(p0), c1 = Math.cos(p1), s1 = Math.sin(p1);
+      quad([r1 * c0, r1 * s0, z1], [r1 * c1, r1 * s1, z1], [r2 * c1, r2 * s1, z2], [r2 * c0, r2 * s0, z2]);
+    }
+  };
+  wall(roB, M - h, roR);                                    // 外壁＝本管外面まで
+  wall(riB, M, riR);                                        // ボア壁＝本管内面まで（壁厚部がザグリ面）
+  rev(roB, M - h, riB + f, M);                              // 外端：開先
+  rev(riB + f, M, riB, M);                                  // 外端：ルートフェイス
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.computeVertexNormals();
@@ -1393,10 +1423,8 @@ function makeTee(opts) {
     ? TEE_RT_M[o.sizeA][o.sizeB] : (TEE_C[o.sizeA] || 38)) / 1000;
   const g = new THREE.Group();
   g.add(new THREE.Mesh(teeRunBoredGeo(roR, riR, C, Math.min(riB, riR * 0.999)), mat));   // run（Y軸・両端開先・枝ボアのザグリ穴あき）
-  // branch（外端のみ開先）。内端は本管ボアへ突き出さないよう本管内壁の高さまで後退（ザグリ穴とカラーが接合部を受け持つ）
-  const ziB = Math.sqrt(Math.max(riR * riR - roB * roB, 0));
-  const br = new THREE.Mesh(new THREE.LatheGeometry(weldHollowProfile(roB, riB, ziB - M / 2, M / 2, true, false), 40), mat);
-  br.rotation.x = Math.PI / 2; br.position.z = M / 2; g.add(br);
+  // branch（外端のみ開先）。内端は本管の外面/内面サドルでカット＝ボア内へ飛び出さない
+  g.add(new THREE.Mesh(teeBranchGeo(roB, riB, M, roR, riR), mat));
   g.userData.partType = 'tee';
   g.userData.tee = { ...o };
   g.userData.faceLocal = new THREE.Vector3(0, C, 0);    // run +Y端
