@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-D';
+const APP_VER = 'v0718-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5798,6 +5798,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__updateDimTextFacing = () => {
     const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
     const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: (n.x * 0.5 + 0.5) * rect.width, y: (-n.y * 0.5 + 0.5) * rect.height }; };
+    const _minv = new THREE.Matrix4().copy(modelGroup.matrixWorld).invert();   // カメラ右/上（モデルローカル方向）
+    const camRightL = new V3().setFromMatrixColumn(cam.matrixWorld, 0).transformDirection(_minv);
+    const camUpL = new V3().setFromMatrixColumn(cam.matrixWorld, 1).transformDirection(_minv);
     // 文字の画面サイズ制御：透視＝最小px保証（ズームアウトしても読める）／平行投影(尺度)＝紙上mm固定（印刷で狙いの大きさ）
     const scaleK = (o, dt, at) => {
       if (dt.sw == null) { dt.sw = o.scale.x; dt.sh = o.scale.y; }
@@ -5826,23 +5829,39 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         o.material.rotation = ang;
         const mid = dt.a.clone().add(dt.b).multiplyScalar(0.5);
         const k = scaleK(o, dt, mid);
-        if (dt.textOff) {                                    // 値を動かしてある＝オフセット（文字サイズ基準＝×k）の位置へ
-          const u = dt.b.clone().sub(dt.a); if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
-          o.position.copy(mid).addScaledVector(u, dt.textOff.t * k).addScaledVector(dt.vUp, dt.textOff.n * k);
+        // 値の配置は「画面基底」で行う（2026-07-18 社長指摘「矢印の線が見切れる」対応）。
+        // 従来の vUp×半高（世界オフセット）だと vUp が視線方向に近い構図で画面上の離れが0になり、
+        // 不透明マスクが寸法線と矢印を覆い隠していた。基底＝線の画面方向(ex,ey)と直交(px2,py2・逃げ側が正)。
+        const pm = scr(mid), pu = scr(mid.clone().addScaledVector(dt.vUp, 0.01));
+        const ph = scr(mid.clone().addScaledVector(camUpL, dt.sh || dt.h));
+        const pxPerM = Math.hypot(ph.x - pm.x, ph.y - pm.y) / (dt.sh || dt.h);   // この奥行きでの画面px/モデルm
+        if (!(pxPerM > 1e-6)) {                              // 退避：従来の世界オフセット
+          const sgn = (pu.y <= pm.y) ? 1 : -1;
+          o.position.copy(mid).addScaledVector(dt.vUp, sgn * ((dt.h * k) / 2 + 0.004));
+          return;
+        }
+        const ex = Math.cos(ang), eyv = Math.sin(ang);       // 線の画面方向（数学系y=上）
+        let px2 = -eyv, py2 = ex;                            // 直交。正の向き＝逃げ(vUp)側（ビューを変えても同じ側）
+        const ux2 = pu.x - pm.x, uy2 = -(pu.y - pm.y);
+        if (ux2 * px2 + uy2 * py2 < 0) { px2 = -px2; py2 = -py2; }
+        if (dt.textOff) {                                    // 動かした値：画面基底で t(線方向)・n(直交) を適用（×k）
+          const ox = (ex * dt.textOff.t + px2 * dt.textOff.n) * k;
+          const oy = (eyv * dt.textOff.t + py2 * dt.textOff.n) * k;
+          o.position.copy(mid).addScaledVector(camRightL, ox).addScaledVector(camUpL, oy);
           const lm = o.userData.dimLeader;                   // 引出線も文字に追従（両端を毎フレーム更新）
           if (lm) {
-            const L2 = dt.b.distanceTo(dt.a) / 2;
-            const tC = Math.max(-L2, Math.min(L2, dt.textOff.t * k));
-            const p0 = mid.clone().addScaledVector(u, tC);
+            const ul = dt.b.clone().sub(dt.a); const L = ul.length(); if (L > 1e-9) ul.multiplyScalar(1 / L); else ul.set(1, 0, 0);
+            const tC = Math.max(-L / 2, Math.min(L / 2, dt.textOff.t * k));
+            const p0 = mid.clone().addScaledVector(ul, tC);
             const pa2 = lm.geometry.attributes.position;
             pa2.setXYZ(0, p0.x, p0.y, p0.z); pa2.setXYZ(1, o.position.x, o.position.y, o.position.z);
             pa2.needsUpdate = true;
           }
           return;
         }
-        const pm = scr(mid), pu = scr(mid.clone().addScaledVector(dt.vUp, 0.01));
-        const sgn = (pu.y <= pm.y) ? 1 : -1;                 // 画面で見て上側へ
-        o.position.copy(mid).addScaledVector(dt.vUp, sgn * ((dt.h * k) / 2 + 0.004));
+        // 既定位置：画面上で寸法線から半文字高＋余白3pxだけ直交（逃げ側）に離す＝線と矢印を覆わない
+        const offM = ((dt.sh || dt.h) * k) / 2 + 3 / pxPerM;
+        o.position.copy(mid).addScaledVector(camRightL, px2 * offM).addScaledVector(camUpL, py2 * offM);
       });
     }
   };
@@ -6878,14 +6897,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const ux = Math.cos(ang), uz = Math.sin(ang);
     return { off: Math.max(0, vx * ux + vz * uz), dir: { x: ux, y: 0, z: uz } };
   }
-  // 新規寸法の値が既存の値と重なる時だけ、逃げ方向へ1段ずつ積んで自動回避（新規作成時のみ。既存は動かさない）
-  // 位置・大きさは表示倍率k込みの「見た目」で判定する（textOff は k=1 基準で保存＝表示は×k）
+  // 新規寸法の値が既存の値と重なる時だけ、逃げ側へ1段ずつ積んで自動回避（新規作成時のみ。既存は動かさない）
+  // 判定は「画面上の見た目」で行う：facing更新後の実表示位置・実表示サイズ（×k）を画面へ投影して比較する
   function autoShiftDimText(rec) {
+    if (window.__updateDimTextFacing) window.__updateDimTextFacing();   // 全値を表示位置に整えてから測る
     let sp = null; rec.obj.traverse(o => { if (!sp && o.userData.dimText) sp = o; });
     if (!sp) return;
     const dt = sp.userData.dimText;
-    const u = dt.b.clone().sub(dt.a); if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
     const mid = dt.a.clone().add(dt.b).multiplyScalar(0.5);
+    const cam2 = activeCam(), rect2 = renderer.domElement.getBoundingClientRect();
+    const scr2 = p => { const n2 = modelGroup.localToWorld(p.clone()).project(cam2); return { x: rect2.left + (n2.x * 0.5 + 0.5) * rect2.width, y: rect2.top + (-n2.y * 0.5 + 0.5) * rect2.height }; };
+    const minv2 = new THREE.Matrix4().copy(modelGroup.matrixWorld).invert();
+    const camUp2 = new V3().setFromMatrixColumn(cam2.matrixWorld, 1).transformDirection(minv2);
+    const pm1 = scr2(mid), ph1 = scr2(mid.clone().addScaledVector(camUp2, dt.sh || dt.h));
+    const pxPerM = Math.hypot(ph1.x - pm1.x, ph1.y - pm1.y) / (dt.sh || dt.h);
+    if (!(pxPerM > 1e-6)) return;
     const k = dimTextScaleK(dt, mid) || 1;
     const others = [];
     for (const r of annStore) {
@@ -6893,26 +6919,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       r.obj.traverse(o => { if (o.userData.dimText) others.push(o); });
     }
     if (!others.length) return;
-    const posOf = () => {   // 現在の textOff での表示位置（既定＝線の上側）
-      const toff = rec.style.textOff;
-      return toff ? mid.clone().addScaledVector(u, toff.t * k).addScaledVector(dt.vUp, toff.n * k)
-                  : mid.clone().addScaledVector(dt.vUp, (dt.h * k) / 2 + 0.004);
-    };
-    let shifted = false;
     for (let tries = 0; tries < 4; tries++) {
-      const c = posOf();
-      const halfW = (dt.sw * k) / 2, halfH = (dt.sh * k) / 2;
+      const c = scr2(sp.position);
+      const halfW = (dt.sw * k * pxPerM) / 2, halfH = (dt.sh * k * pxPerM) / 2;
       let clash = false;
       for (const o of others) {
-        const d = o.position.clone().sub(c);
-        if (Math.abs(d.dot(u)) < halfW + o.scale.x / 2 && Math.abs(d.dot(dt.vUp)) < halfH + o.scale.y / 2) { clash = true; break; }
+        const oc = scr2(o.position);   // 相手も facing 済＝実表示位置・実表示スケール
+        if (Math.abs(oc.x - c.x) < (halfW + (o.scale.x * pxPerM) / 2) * 0.9 &&
+            Math.abs(oc.y - c.y) < (halfH + (o.scale.y * pxPerM) / 2) * 0.9) { clash = true; break; }
       }
       if (!clash) break;
-      const cur = rec.style.textOff || { t: 0, n: dt.h / 2 + 0.004 };   // 1.25文字高ずつ上へ（k=1基準で保存）
+      const cur = rec.style.textOff || { t: 0, n: dt.h / 2 };   // 既定位置相当から1.25文字高ずつ逃げ側へ（k=1基準で保存）
       rec.style.textOff = { t: cur.t, n: cur.n + dt.h * 1.25 };
-      shifted = true;
+      rebuildAnn(rec);
+      sp = null; rec.obj.traverse(o => { if (!sp && o.userData.dimText) sp = o; });
+      if (!sp) return;
+      if (window.__updateDimTextFacing) window.__updateDimTextFacing();
     }
-    if (shifted) rebuildAnn(rec);
   }
   function commitDimWithOffset() {                      // 3回目クリック＝逃げを確定して寸法線を作る
     const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
@@ -8232,30 +8255,33 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         return;
       }
     }
-    if (lineDrag.mode === 'dimtext') {                   // 寸法の値ドラッグ＝値だけを（線方向・逃げ方向の平面上で）動かす
+    if (lineDrag.mode === 'dimtext') {                   // 寸法の値ドラッグ＝値だけを動かす（画面基底＝どの構図でも安定）
       if (!lineDrag.moved || !lineDrag.spr) { e.stopImmediatePropagation(); return; }
       const rec = lineDrag.rec, dt = lineDrag.spr.userData.dimText;
-      const u = dt.b.clone().sub(dt.a); if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
+      const rect2 = renderer.domElement.getBoundingClientRect(), cam2 = activeCam();
+      const scr2 = p => { const n2 = modelGroup.localToWorld(p.clone()).project(cam2); return { x: rect2.left + (n2.x * 0.5 + 0.5) * rect2.width, y: rect2.top + (-n2.y * 0.5 + 0.5) * rect2.height }; };
       const mid = dt.a.clone().add(dt.b).multiplyScalar(0.5);
-      const rect2 = renderer.domElement.getBoundingClientRect();
-      pickNdc.x = ((e.clientX - rect2.left) / rect2.width) * 2 - 1;
-      pickNdc.y = -((e.clientY - rect2.top) / rect2.height) * 2 + 1;
-      pickRay.setFromCamera(pickNdc, activeCam());
-      const O = modelGroup.worldToLocal(pickRay.ray.origin.clone());
-      const D = modelGroup.worldToLocal(pickRay.ray.origin.clone().add(pickRay.ray.direction)).sub(O);
-      let nrm = u.clone().cross(dt.vUp);
-      if (nrm.lengthSq() < 1e-9) nrm = D.clone().negate();   // 退避：カメラ正対の平面で受ける
-      nrm.normalize();
-      const dn = D.dot(nrm);
-      if (Math.abs(dn) < 1e-9) { e.stopImmediatePropagation(); return; }
-      const P = O.clone().addScaledVector(D, mid.clone().sub(O).dot(nrm) / dn);
-      const t = P.clone().sub(mid).dot(u), n = P.clone().sub(mid).dot(dt.vUp);
-      const k = dimTextScaleK(dt, mid) || 1;   // 保存は表示倍率kで正規化＝ズーム・尺度を変えても見た目の位置関係を維持
+      const pa1 = scr2(dt.a), pb1 = scr2(dt.b), pm1 = scr2(mid);
+      let ang2 = Math.atan2(-(pb1.y - pa1.y), pb1.x - pa1.x);
+      if (ang2 > Math.PI / 2) ang2 -= Math.PI; else if (ang2 < -Math.PI / 2) ang2 += Math.PI;
+      const ex = Math.cos(ang2), eyv = Math.sin(ang2);
+      let px2 = -eyv, py2 = ex;                          // 直交（正＝逃げ側。表示側 __updateDimTextFacing と同じ基底）
+      const pu1 = scr2(mid.clone().addScaledVector(dt.vUp, 0.01));
+      if ((pu1.x - pm1.x) * px2 + (-(pu1.y - pm1.y)) * py2 < 0) { px2 = -px2; py2 = -py2; }
+      const minv2 = new THREE.Matrix4().copy(modelGroup.matrixWorld).invert();
+      const camUp2 = new V3().setFromMatrixColumn(cam2.matrixWorld, 1).transformDirection(minv2);
+      const ph1 = scr2(mid.clone().addScaledVector(camUp2, dt.sh || dt.h));
+      const pxPerM = Math.hypot(ph1.x - pm1.x, ph1.y - pm1.y) / (dt.sh || dt.h);
+      if (!(pxPerM > 1e-6)) { e.stopImmediatePropagation(); return; }
+      const k = dimTextScaleK(dt, mid) || 1;             // 保存はk=1基準＝ズーム・尺度を変えても見た目の位置関係を維持
+      const dxs = e.clientX - pm1.x, dys = -(e.clientY - pm1.y);
+      const tpx = dxs * ex + dys * eyv, npx = dxs * px2 + dys * py2;
+      const hpx = dt.h * k * pxPerM;                     // 文字1個ぶんの画面高
       rec.style = rec.style || {};
-      if (Math.abs(t) < dt.h * k && Math.abs(n) < dt.h * k * 1.5) delete rec.style.textOff;   // 元の位置の近く＝既定位置へ戻す
-      else rec.style.textOff = { t: Math.round((t / k) * 10000) / 10000, n: Math.round((n / k) * 10000) / 10000 };
+      if (Math.abs(tpx) < hpx && Math.abs(npx) < hpx * 1.5) delete rec.style.textOff;   // 元の位置の近く＝既定位置へ戻す
+      else rec.style.textOff = { t: Math.round((tpx / (k * pxPerM)) * 10000) / 10000, n: Math.round((npx / (k * pxPerM)) * 10000) / 10000 };
       rebuildAnn(rec); refreshAnnHi(); refreshHandles();
-      if (window.__updateDimTextFacing) window.__updateDimTextFacing();   // 向き・サイズも即時追従（次フレームを待たない）
+      if (window.__updateDimTextFacing) window.__updateDimTextFacing();   // 位置・向き・サイズを即時追従（次フレームを待たない）
       e.stopImmediatePropagation();
       return;
     }
