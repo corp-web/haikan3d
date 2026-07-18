@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-F';
+const APP_VER = 'v0718-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3305,6 +3305,10 @@ function updateForm() {
 // フォームを部品の画面範囲の「脇」に置く（毎フレーム）。どの視点でも部品と重ならない。
 function positionHeightForm() {
   if (!hForm) return;
+  // 配置済みオブジェクトを選択しただけでは空間上の入力フォーム（EL/COP/長さ）は出さない
+  // （2026-07-18 社長要望：値の表示・編集はプロパティパネルへ集約＝画面を広く使う）。
+  // 例外＝方向ドラッグの距離入力（移動コマンドの操作中だけ従来どおり表示）
+  if (!dirActive()) { hForm.style.display = 'none'; return; }
   if (window.__mirrorActive && window.__mirrorActive()) { hForm.style.display = 'none'; return; }   // 鏡モード中は入力フォームを出さない
   if (rotForm && rotForm.style.display === 'flex') { hForm.style.display = 'none'; return; }   // 角度スピナー中はEL非表示
   // 寸法線（単独選択）の「値」フォームは専用のテキスト入力（__positionDimValueForm）が担う
@@ -8937,5 +8941,35 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (specCaret) specCaret.textContent = specCollapsed ? '▸' : '▾';
       specHead.title = specCollapsed ? 'クリックで展開' : 'クリックで折りたたみ';
     });
+  }
+  // 図面情報（年月日・場所・名称・図番・社名）の開閉（2026-07-18 社長要望：作図中は畳んで広く使う。状態を記憶）
+  const dwgHead = document.getElementById('dwgHead');
+  const dwgFoot = document.getElementById('dwgFoot');
+  const dwgCaret = document.getElementById('dwgCaret');
+  if (dwgHead && dwgFoot) {
+    let dwgCollapsed = false;
+    const applyDwg = () => {
+      dwgFoot.style.display = dwgCollapsed ? 'none' : '';
+      if (dwgCaret) dwgCaret.textContent = dwgCollapsed ? '▸' : '▾';
+      dwgHead.title = dwgCollapsed ? 'クリックで展開' : 'クリックで折りたたみ';
+      try { localStorage.setItem('p3d_dwg_open', dwgCollapsed ? '0' : '1'); } catch (e) {}
+    };
+    dwgHead.addEventListener('click', () => { dwgCollapsed = !dwgCollapsed; applyDwg(); });
+    if (localStorage.getItem('p3d_dwg_open') === '0') { dwgCollapsed = true; applyDwg(); }
+  }
+  // アイテムパレット（左上）の開閉（同・状態を記憶）
+  const palTitle = document.getElementById('palTitle');
+  const palEl = document.getElementById('palette');
+  const palCaret = document.getElementById('palCaret');
+  if (palTitle && palEl) {
+    let palCollapsed = false;
+    const applyPal = () => {
+      palEl.classList.toggle('collapsed', palCollapsed);
+      if (palCaret) palCaret.textContent = palCollapsed ? '▸' : '▾';
+      palTitle.title = palCollapsed ? 'クリックで展開' : 'クリックで折りたたみ';
+      try { localStorage.setItem('p3d_pal_open', palCollapsed ? '0' : '1'); } catch (e) {}
+    };
+    palTitle.addEventListener('click', () => { palCollapsed = !palCollapsed; applyPal(); });
+    if (localStorage.getItem('p3d_pal_open') === '0') { palCollapsed = true; applyPal(); }
   }
 })();

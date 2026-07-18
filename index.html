@@ -144,6 +144,10 @@
   #itemList .il-specbody input { flex: 1; min-width: 0; background: #1b2540; border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 3px 6px; font-size: 11px; }
   #itemList .il-specbody input:focus { outline: none; border-color: #2f7bff; }
   /* ツールパレット（左側・部品の3Dアイコンを並べる） */
+  #palette .pal-title { cursor: pointer; user-select: none; position: relative; }
+  #palette .pal-title:hover { color: #cfe0fb; }
+  #palette .il-caret { position: absolute; right: 2px; top: 0; font-size: 10px; color: #7fa8e8; }
+  #palette.collapsed > :not(.pal-title) { display: none !important; }   /* 折りたたみ＝タイトル以外を隠す */
   #palette { position: fixed; left: 12px; top: 12px; width: 124px;
     background: rgba(20,28,51,.92); border: 1px solid #36436b; border-radius: 10px;
     padding: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
@@ -474,6 +478,7 @@
         <li><b>CSV</b>＝部品表をCSVで書き出し（Excelでそのまま開けます）。<b>ガスケット・ボルト・溶接口・パイプ合計長さの自動集計</b>付き（機点の接続から推定した参考値。アイテムリスト下部にも表示）</li>
         <li><b>自動保存</b>＝作業内容を20秒ごとにブラウザ内へ自動バックアップ。誤って閉じても<b>次回起動時に「復元しますか？」</b>と出ます</li>
         <li><b>干渉</b>（編集グループ）＝部品同士のぶつかりを検査して<b>赤表示</b>（接続済みの部品は除外・参考値。クリックで解除）</li>
+        <li><b>画面を広く使う</b>＝<b>左上のアイテムパレット・右下のアイテムリスト・設計仕様・図面情報は、それぞれの見出しをクリック（タップ）で折りたたみ</b>できます（状態は記憶）。配置済みオブジェクトを選択しても<b>空間上のEL/COP入力フォームは出なくなりました</b>（値の確認・編集はプロパティパネルで。移動コマンドの距離入力だけ従来どおり表示）</li>
         <li><b>プロパティ</b>（編集グループ）＝選択したオブジェクトの値を<b>左下のパネルに一覧表示・編集</b>できます。部品＝位置X/Y/Z（EL・COP）・パイプ長さ・向き/ひねり・材質。線分/構築線＝始点終点・長さ。円＝中心・半径。寸法＝実測値・値の上書き・逃げ・スライド角。文字＝内容・回転・配置点。<b>ドラッグ中も値が追従表示</b>されるので、空間での直接編集と併用できます（数値はEnterで確定・変更は「元に戻す」対応）</li>
         <li><b>非表示／再表示</b>（編集グループ）＝<b>選択したアイテムを一時的に隠せます</b>。①アイテムを選択→「非表示」②「非表示」→隠すアイテムをタップ、のどちらでも可（1回で終了・Esc・再押下で取消）。隠したアイテムは選択・スナップ・干渉チェックの対象外になりますが、<b>アイテムリスト・自動集計・保存ファイルには残ります</b>（リストでは淡色表示）。<b>「再表示」ですべて元に戻ります</b>（「元に戻す」でも戻せます）</li>
         <li><b>図面情報の既定値</b>＝右下の図面情報の<b>「この内容を既定として記憶」</b>を押すと、設計仕様・場所・社名が記憶され、以後の新規図面に自動で入ります</li>
@@ -512,7 +517,7 @@
   </div>
   <!-- ツールパレット：部品の3Dアイコンを並べる -->
   <div id="palette">
-    <div class="pal-title">アイテム</div>
+    <div class="pal-title" id="palTitle" title="クリックで折りたたみ">アイテム<span class="il-caret" id="palCaret">▾</span></div>
     <select id="partSelect" class="pal-select"></select>
     <div class="pal-items" id="palItems"></div>
     <div class="pal-opts" id="flangeOptsUI">
@@ -569,8 +574,9 @@
       <div class="dwg-row2"><span>設計</span><input id="dwgDesign" type="text"><span>製図</span><input id="dwgDraw" type="text"></div>
       <div class="dwg-row2"><span>検図</span><input id="dwgCheck" type="text"><span>承認</span><input id="dwgApprove" type="text"></div>
     </div>
-    <!-- 図面情報（作成年月日・場所・名称・図番） -->
-    <div class="il-foot">
+    <!-- 図面情報（作成年月日・場所・名称・図番）：ヘッダクリックで折りたたみ -->
+    <div class="il-spechead" id="dwgHead" title="クリックで折りたたみ">図面情報<span class="il-caret" id="dwgCaret">▾</span></div>
+    <div class="il-foot" id="dwgFoot">
       <div class="dwg-row2 dwg-daterow"><span>年月日</span><input id="dwgDate" type="date"><span>改訂</span><input id="dwgRev" type="text"></div>
       <div class="dwg-row"><span>場所</span><input id="dwgPlace" type="text"></div>
       <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
