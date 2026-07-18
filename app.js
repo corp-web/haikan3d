@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-C';
+const APP_VER = 'v0719-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4477,8 +4477,9 @@ function orientStep(shift) {
       if (shift) { const r = window.__dimRollStep(); if (r) startDimRollSpin(r); }
       else { const r = window.__dimSkewToggle(); if (r) startDimSkewSpin(r); }
     }
-    // 構築線は短い右クリックでは回転させない（微調整は右クリック長押し＝平行移動/Shiftで角度）。線分は従来どおり45°回転
-    else if (!(window.__annSelIsXline && window.__annSelIsXline())) window.__annRotate(shift);
+    // 構築線も向き/回転ボタン・右クリックで45°回転できる（2026-07-19 社長要望で解禁。
+    // 微調整は従来どおり右クリック長押し＝平行移動/Shiftで方位角スピナー）
+    else window.__annRotate(shift);
   }
 }
 if (rotAInput) {
@@ -7698,6 +7699,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         rebuildAnn(r);
       }
     }
+    if ([...selAnns].some(r => r.type === 'xline')) updateXlinePts();   // 構築線を回したら交点を引き直す
     refreshAnnHi(); refreshHandles();
     if (typeof updateForm === 'function') updateForm();
   };
@@ -8791,13 +8793,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const delta = i => { const gg = g(); return gg ? Math.round((gg.b[i] - gg.a[i]) * 1000) : 0; };
         const setDelta = (i, mm) => { const gg = g(); if (!gg) return; const nb = gg.b.slice(); nb[i] = gg.a[i] + mm / 1000; window.__annPropsSet({ b: nb }); };
         const dvec = () => { const gg = g(); return gg ? [gg.b[0] - gg.a[0], gg.b[1] - gg.a[1], gg.b[2] - gg.a[2]] : [1, 0, 0]; };
-        sec(a.type === 'xline' ? '起点（中心）' : '起点');
-        edRow('EL', { get: () => absA(1), set: v => moveWhole(1, v), unit: 'mm', step: 1 });   // 起点はELのみ（2026-07-18 社長要望）
-        sec(a.type === 'xline' ? '方向（起点に対して）' : '終点（起点に対して）');
-        edRow('ΔX', { get: () => delta(0), set: v => setDelta(0, v), unit: 'mm', step: 1 });
-        edRow('ΔY 高低差', { get: () => delta(1), set: v => setDelta(1, v), unit: 'mm', step: 1 });
-        edRow('ΔZ', { get: () => delta(2), set: v => setDelta(2, v), unit: 'mm', step: 1 });
-        if (a.type === 'line') edRow('長さ', { get: () => { const gg = g(); return gg ? Math.round(gg.len * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ len: v / 1000 }); }, unit: 'mm', step: 1 });
+        if (a.type === 'xline') {
+          sec('高さ');   // 構築線は無限長＝起点・終点を持たない（2026-07-19 社長指摘）。高さと向きだけを編集
+          edRow('EL', { get: () => absA(1), set: v => moveWhole(1, v), unit: 'mm', step: 1 });
+          sec('向き');
+        } else {
+          sec('起点');
+          edRow('EL', { get: () => absA(1), set: v => moveWhole(1, v), unit: 'mm', step: 1 });   // 起点はELのみ（2026-07-18 社長要望）
+          sec('終点（起点に対して）');
+          edRow('ΔX', { get: () => delta(0), set: v => setDelta(0, v), unit: 'mm', step: 1 });
+          edRow('ΔY 高低差', { get: () => delta(1), set: v => setDelta(1, v), unit: 'mm', step: 1 });
+          edRow('ΔZ', { get: () => delta(2), set: v => setDelta(2, v), unit: 'mm', step: 1 });
+          edRow('長さ', { get: () => { const gg = g(); return gg ? Math.round(gg.len * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ len: v / 1000 }); }, unit: 'mm', step: 1 });
+        }
         edRow('方位角', { get: () => { const d = dvec(); if (Math.hypot(d[0], d[2]) < 1e-9) return 0; let deg = Math.atan2(d[0], -d[2]) * 180 / Math.PI; if (deg < 0) deg += 360; return Math.round(deg * 10) / 10; },
           set: v => { const gg = g(); if (!gg) return; const d = dvec(); const hl = Math.hypot(d[0], d[2]); if (hl < 1e-9) return; const r = v * Math.PI / 180;
             window.__annPropsSet({ b: [gg.a[0] + Math.sin(r) * hl, gg.a[1] + d[1], gg.a[2] - Math.cos(r) * hl] }); }, unit: '°', step: 0.5 });
@@ -8807,7 +8815,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
             const hl0 = Math.hypot(d[0], d[2]); const ux = hl0 > 1e-9 ? d[0] / hl0 : 1, uz = hl0 > 1e-9 ? d[2] / hl0 : 0;
             const hl2 = L * Math.cos(r), dy2 = L * Math.sin(r);
             window.__annPropsSet({ b: [gg.a[0] + ux * hl2, gg.a[1] + dy2, gg.a[2] + uz * hl2] }); }, unit: '°', step: 0.5 });
-        note('起点ELを変更すると線全体が上下に平行移動します（終点は起点に対する相対を維持）。方位角＝北(後Z−)0°から時計回りで東(右X+)90°、立面角＋＝上り（全長を保って傾き変更）。');
+        note(a.type === 'xline'
+          ? '構築線は無限長のため高さ（EL）と向きだけを持ちます。方位角＝北(後Z−)0°から時計回りで東(右X+)90°。向き/回転ボタン・右クリックで45°送り、長押し＝平行移動/方位角スピナーも使えます。'
+          : '起点ELを変更すると線全体が上下に平行移動します（終点は起点に対する相対を維持）。方位角＝北(後Z−)0°から時計回りで東(右X+)90°、立面角＋＝上り（全長を保って傾き変更）。');
       } else if (a.type === 'circle') {
         sec('中心');
         for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
