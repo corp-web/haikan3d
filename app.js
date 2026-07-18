@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-H';
+const APP_VER = 'v0718-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8602,7 +8602,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       roRow('サイズ', () => `${c.size}${c.cls && c.cls !== '—' ? ' / ' + c.cls : ''}`);
       sec('位置（起点）');
       edRow('X', { get: () => mmv(originModelPos(p).x), set: v => setPartAxis(p, 'x', v), unit: 'mm', step: 1 });
-      edRow('Y ＝EL(COP)', { get: () => mmv(originModelPos(p).y), set: v => setPartAxis(p, 'y', v), unit: 'mm', step: 1 });
+      edRow('Y ＝' + (heightLabelFor(p) === 'EL' ? 'FL' : heightLabelFor(p)), { get: () => mmv(originModelPos(p).y), set: v => setPartAxis(p, 'y', v), unit: 'mm', step: 1 });
       edRow('Z', { get: () => mmv(originModelPos(p).z), set: v => setPartAxis(p, 'z', v), unit: 'mm', step: 1 });
       if (u.partType === 'pipe' && u.pipe) {
         sec('パイプ');
@@ -8626,12 +8626,33 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const setPt = (key, axis, v) => { const g = window.__annPropsGet(); if (!g) return; const arr = g[key]; arr['xyz'.indexOf(axis)] = v / 1000; window.__annPropsSet({ [key]: arr }); };
       const getPt = (key, axis) => { const g = window.__annPropsGet(); return g ? mmv(g[key]['xyz'.indexOf(axis)]) : 0; };
       if (a.type === 'line' || a.type === 'xline') {
-        const bl = a.type === 'xline' ? '通過点' : '終点';
-        sec(a.type === 'xline' ? '中心点' : '始点');
-        for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
-        sec(bl);
-        for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('b', ax), set: v => setPt('b', ax, v), unit: 'mm', step: 1 });
-        if (a.type === 'line') edRow('長さ', { get: () => { const g = window.__annPropsGet(); return g ? Math.round(g.len * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ len: v / 1000 }); }, unit: 'mm', step: 1 });
+        // 起点＝絶対座標（高さはFL/COP）・編集すると線全体が平行移動（終点との相対関係を維持）。
+        // 終点＝起点に対する相対（Δ）。水平角・立面角も表示・編集可（2026-07-18 社長要望）
+        const g = () => window.__annPropsGet();
+        const absA = i => { const gg = g(); return gg ? Math.round(gg.a[i] * 1000) : 0; };
+        const moveWhole = (i, mm) => { const gg = g(); if (!gg) return; const d = mm / 1000 - gg.a[i]; const na = gg.a.slice(), nb = gg.b.slice(); na[i] += d; nb[i] += d; window.__annPropsSet({ a: na, b: nb }); };
+        const delta = i => { const gg = g(); return gg ? Math.round((gg.b[i] - gg.a[i]) * 1000) : 0; };
+        const setDelta = (i, mm) => { const gg = g(); if (!gg) return; const nb = gg.b.slice(); nb[i] = gg.a[i] + mm / 1000; window.__annPropsSet({ b: nb }); };
+        const dvec = () => { const gg = g(); return gg ? [gg.b[0] - gg.a[0], gg.b[1] - gg.a[1], gg.b[2] - gg.a[2]] : [1, 0, 0]; };
+        sec(a.type === 'xline' ? '起点（中心）' : '起点');
+        edRow('X', { get: () => absA(0), set: v => moveWhole(0, v), unit: 'mm', step: 1 });
+        edRow('FL(COP)', { get: () => absA(1), set: v => moveWhole(1, v), unit: 'mm', step: 1 });
+        edRow('Z', { get: () => absA(2), set: v => moveWhole(2, v), unit: 'mm', step: 1 });
+        sec(a.type === 'xline' ? '方向（起点に対して）' : '終点（起点に対して）');
+        edRow('ΔX', { get: () => delta(0), set: v => setDelta(0, v), unit: 'mm', step: 1 });
+        edRow('ΔY 高低差', { get: () => delta(1), set: v => setDelta(1, v), unit: 'mm', step: 1 });
+        edRow('ΔZ', { get: () => delta(2), set: v => setDelta(2, v), unit: 'mm', step: 1 });
+        if (a.type === 'line') edRow('長さ', { get: () => { const gg = g(); return gg ? Math.round(gg.len * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ len: v / 1000 }); }, unit: 'mm', step: 1 });
+        edRow('水平角', { get: () => { const d = dvec(); let deg = Math.atan2(d[2], d[0]) * 180 / Math.PI; if (deg < 0) deg += 360; return Math.round(deg * 10) / 10; },
+          set: v => { const gg = g(); if (!gg) return; const d = dvec(); const hl = Math.hypot(d[0], d[2]); if (hl < 1e-9) return; const r = v * Math.PI / 180;
+            window.__annPropsSet({ b: [gg.a[0] + Math.cos(r) * hl, gg.a[1] + d[1], gg.a[2] + Math.sin(r) * hl] }); }, unit: '°', step: 0.5 });
+        edRow('立面角', { get: () => { const d = dvec(); return Math.round(Math.atan2(d[1], Math.hypot(d[0], d[2])) * 180 / Math.PI * 10) / 10; },
+          set: v => { const gg = g(); if (!gg) return; const d = dvec(); const L = Math.hypot(d[0], d[1], d[2]); if (L < 1e-9) return;
+            const r = Math.max(-89.9, Math.min(89.9, v)) * Math.PI / 180;
+            const hl0 = Math.hypot(d[0], d[2]); const ux = hl0 > 1e-9 ? d[0] / hl0 : 1, uz = hl0 > 1e-9 ? d[2] / hl0 : 0;
+            const hl2 = L * Math.cos(r), dy2 = L * Math.sin(r);
+            window.__annPropsSet({ b: [gg.a[0] + ux * hl2, gg.a[1] + dy2, gg.a[2] + uz * hl2] }); }, unit: '°', step: 0.5 });
+        note('起点を変更すると線全体が平行移動します（終点は起点に対する相対を維持）。水平角0°＝X軸方向、立面角＋＝上り（全長を保って傾き変更）。');
       } else if (a.type === 'circle') {
         sec('中心');
         for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
