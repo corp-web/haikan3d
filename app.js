@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0717-A';
+const APP_VER = 'v0718-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3211,7 +3211,15 @@ function updateDirMove(clientX, clientY) {
   // 45°ライン上に本当に乗っている機点があれば、その距離へ吸着（along のみ合わせるのでラインは崩れない）
   const exParts = new Set([dirDrag.part]);
   if (dirDrag.group) for (const g of dirDrag.group) exParts.add(g.part);
-  const snapAlong = nearestDirSnap(dirDrag.startOrigin, dir, clientX, clientY, exParts);
+  // 吸着判定は「起点の現在位置」の画面座標で行う（カーソル基準だと、起点から離れた所を掴んだ時に
+  // カーソルが機点の上を通っただけで起点が吸着＝起点以外の場所でスナップして飛ぶ）
+  let sx = clientX, sy = clientY;
+  {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const on = modelGroup.localToWorld(dirDrag.startOrigin.clone().add(dir.clone().multiplyScalar(dist))).project(activeCam());
+    if (on.z < 1) { sx = rect.left + (on.x * 0.5 + 0.5) * rect.width; sy = rect.top + (-on.y * 0.5 + 0.5) * rect.height; }
+  }
+  const snapAlong = nearestDirSnap(dirDrag.startOrigin, dir, sx, sy, exParts);
   if (snapAlong != null) dist = snapAlong;
   setPartByOrigin(dirDrag.part, dirDrag.startOrigin.clone().add(dir.clone().multiplyScalar(dist)));
   applyGroupDelta(dirDrag.group, dirDrag.part, dirDrag.primaryStartPos);  // グループを同じ分だけ平行移動
@@ -6282,10 +6290,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (d < bestD) { bestD = d; best = mpos.clone(); }
     };
     for (const p of placedParts) {
-      if (!p.userData.faceLocal) continue;
+      if (!p.userData.faceLocal || p.userData.hidden) continue;
       for (const local of connsOf(p)) test(connModelPos(p, local));
     }
-    for (const r of annStore) { if (r === drawState.editRec) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）
+    for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）
     for (const p of xlinePts) test(p);   // 構築線どうしの交点（CADの交点スナップ）
     return best;
   }
@@ -6299,10 +6307,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, markerRadiusFor(part, isSnap));
     };
     for (const p of placedParts) {
-      if (!p.userData.faceLocal) continue;
+      if (!p.userData.faceLocal || p.userData.hidden) continue;
       for (const local of connsOf(p)) mark(connModelPos(p, local), p);
     }
-    for (const r of annStore) { if (r === drawState.editRec) continue; for (const sp of annSnapPoints(r)) mark(sp, null); }
+    for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, null); }
     for (const p of xlinePts) mark(p, null);
   }
   // 起点 P1 から水平面上の点に角度刻み angleStep を適用（0=自由）
@@ -7912,6 +7920,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return P1.clone().addScaledVector(dir, s);
   }
   // 移動の起点（grip）がカーソル付近で吸い付ける機点を探す。移動中の選択自身は除外。返り値＝3D点 or null
+  // 掴んだ画面位置と起点の画面オフセット（差分移動用）。部品の moveGrabOff と同じ考え方＝
+  // 起点から離れた所を掴んでも飛ばず、スナップは「起点が来るべき位置」で判定される（起点基準スナップ）
+  function grabOffsetFor(origin, cx, cy) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const n = modelGroup.localToWorld(origin.clone()).project(activeCam());
+    if (n.z >= 1) return { x: 0, y: 0 };
+    return { x: cx - (rect.left + (n.x * 0.5 + 0.5) * rect.width), y: cy - (rect.top + (-n.y * 0.5 + 0.5) * rect.height) };
+  }
   function moveSnapForGrip(cx, cy, exParts, exAnns) {
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
     let best = null, bestD = SNAP_PX;
@@ -7922,8 +7938,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const d = Math.hypot(sx - cx, sy - cy);
       if (d < bestD) { bestD = d; best = mpos.clone(); }
     };
-    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal) continue; for (const local of connsOf(p)) test(connModelPos(p, local)); }
-    for (const r of annStore) { if (exAnns.has(r)) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
+    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; for (const local of connsOf(p)) test(connModelPos(p, local)); }
+    for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
     for (const pt of xlinePts) test(pt);   // 構築線どうしの交点へも吸着
     return best;
   }
@@ -7932,9 +7948,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     clearMarkers();
     addMarker(gripPt, 0xff8a3c, markerRadiusFor(null, false));
     const mark = (pt, rN, rB) => { const isSnap = snapPoint && pt.distanceTo(snapPoint) < 1e-6; addMarker(pt, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN); };
-    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal) continue; const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true); for (const local of connsOf(p)) mark(connModelPos(p, local), rN, rB); }
+    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true); for (const local of connsOf(p)) mark(connModelPos(p, local), rN, rB); }
     const lN = markerRadiusFor(null, false), lB = markerRadiusFor(null, true);
-    for (const r of annStore) { if (exAnns.has(r)) continue; for (const sp of annSnapPoints(r)) mark(sp, lN, lB); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
+    for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, lN, lB); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
     for (const p of xlinePts) mark(p, lN, lB);
   }
   let _lnLastT = 0, _lnLastX = 0, _lnLastY = 0, _lnLastRec = null;   // ダブルクリック検出（自由移動）
@@ -7969,6 +7985,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         else {                                            // シングル＝ドラッグで移動できるよう sel を仕込む
           const origin = recT.a.clone();
           lineDrag = { mode: 'sel', free: false, noMove: !moveMode, origin, planeY: origin.y, gRec: recT, gEnd: 0, nearEnd: false,
+                       grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
+                       startHit: planeHitAt(e.clientX, e.clientY, origin.y) || origin.clone(),
                        downX: e.clientX, downY: e.clientY, moved: false,
                        annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: null })),
                        partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
@@ -8025,6 +8043,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const info = nearestEndpointInfo(rec, e.clientX, e.clientY);   // 起点アンカー＋端の近くを押したか
       const origin = info.pt.clone();
       lineDrag = { mode: 'sel', free: isDbl, noMove: !moveMode, origin, planeY: origin.y, gRec: rec, gEnd: info.end, nearEnd: info.near,
+                   grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
+                   startHit: planeHitAt(e.clientX, e.clientY, origin.y) || origin.clone(),
                    downX: e.clientX, downY: e.clientY, moved: false,
                    annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })),
                    partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
@@ -8081,13 +8101,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const exParts = lineDrag._exParts || (lineDrag._exParts = new Set(lineDrag.partSnap.map(s => s.p)));
       let dx = 0, dy = 0, dz = 0, snappedPt = null;
       if (lineDrag.free) {                               // 自由移動（ダブルクリックドラッグ）：起点を他アイテムの機点へスナップ
-        const snap = moveSnapForGrip(e.clientX, e.clientY, exParts, selAnns);
+        // 差分移動：掴んだ位置と起点の画面オフセットを引いた点で追従・スナップ判定（部品の自由移動と同じ）。
+        // カーソル位置で判定すると、起点から離れた所を掴んだ時に「起点以外の場所」で吸着が発火して飛ぶ。
+        const gOff = lineDrag.grabOff || { x: 0, y: 0 };
+        const snap = moveSnapForGrip(e.clientX - gOff.x, e.clientY - gOff.y, exParts, selAnns);
         if (snap) { dx = snap.x - lineDrag.origin.x; dy = snap.y - lineDrag.origin.y; dz = snap.z - lineDrag.origin.z; snappedPt = snap; }
-        else { const hit = planeHitAt(e.clientX, e.clientY, lineDrag.planeY); if (!hit) return; dx = hit.x - lineDrag.origin.x; dz = hit.z - lineDrag.origin.z; }
+        else { const hit = planeHitAt(e.clientX - gOff.x, e.clientY - gOff.y, lineDrag.planeY); if (!hit) return; dx = hit.x - lineDrag.origin.x; dz = hit.z - lineDrag.origin.z; }
       } else {                                           // 直行移動：角度を45°（または指定角）にスナップ＋投影距離
+        // 移動量は「指を置いた地点(startHit)からの差分」で測る（部品の updateDirMove と同じ）。
+        // 起点基準だと、起点から離れた所を掴んだ瞬間にそのオフセット分だけ飛んでしまう。
         const hit = planeHitAt(e.clientX, e.clientY, lineDrag.planeY);
         if (!hit) return;
-        const vx = hit.x - lineDrag.origin.x, vz = hit.z - lineDrag.origin.z;
+        const base = lineDrag.startHit || lineDrag.origin;
+        const vx = hit.x - base.x, vz = hit.z - base.z;
         const step = angleStep ? angleStep * Math.PI / 180 : Math.PI / 4;
         const ang = Math.round(Math.atan2(vz, vx) / step) * step;
         const cdx = Math.cos(ang), cdz = Math.sin(ang);
