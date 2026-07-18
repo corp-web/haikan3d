@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-M';
+const APP_VER = 'v0719-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4300,6 +4300,15 @@ window.addEventListener('pointerup', e => {
   if (moved) selectPartsInRect(x0, y0, x1, y1);            // 窓選択
   else if (!(window.__annToggleAt && window.__annToggleAt(e.clientX, e.clientY)))
     pickPartAt(e.clientX, e.clientY, true);               // Ctrl+クリック＝線が無ければ部品をトグル
+});
+// iPadのシステムジェスチャ等で pointerup が来ずに取り消された時の後始末。
+// ドラッグ状態と controls.enabled=false が残り「たまに操作できなくなる」不具合の対策（2026-07-19 社長報告）
+window.addEventListener('pointercancel', () => {
+  if (pipeEndDrag) cancelPipeEndDrag();
+  if (dirDrag && !dirDrag.locked) cancelDirDrag();
+  if (movingPart && movingByDrag) dropMovingPart();
+  if (boxSel) { boxSel = null; selBoxEl.style.display = 'none'; }
+  controls.enabled = true;
 });
 // Esc=移動取消/追従解除/選択解除、Delete・Backspace=選択部品の削除
 window.addEventListener('keydown', e => {
@@ -8718,6 +8727,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       e.stopImmediatePropagation();
     }
   }, true);
+  window.addEventListener('pointercancel', () => {   // ジェスチャ取消＝線ドラッグの後始末（操作不能の残留防止）
+    if (!lineDrag) return;
+    lineDrag = null;
+    clearMarkers();
+    if (typeof hideLineBoxes === 'function') hideLineBoxes();
+    if (typeof updateForm === 'function') updateForm();
+  });
   window.addEventListener('pointerup', e => {
     if (drawActive() || e.button !== 0 || !lineDrag) return;
     const mode = lineDrag.mode, moved = lineDrag.moved, nearEnd = lineDrag.nearEnd;

@@ -205,7 +205,9 @@
     padding: 2px 5px; white-space: nowrap; font-family: inherit; }
   #ribbon button .ic, #topBar button .ic { font-size: 15px; line-height: 1; }
   #ribbon button .ic svg, #topBar button .ic svg { width: 15px; height: 15px; display: block; }   /* 画像ボタン用：文字色を継ぐモノクロ線画 */
-  #ribbon button:hover, #topBar button:hover { background: rgba(127,168,232,.16); border-color: #3c4f7e; }
+  @media (hover: hover) and (pointer: fine) {   /* ホバーはマウスのみ（タッチはタップ後に貼り付いて紛らわしい） */
+    #ribbon button:hover, #topBar button:hover { background: rgba(127,168,232,.16); border-color: #3c4f7e; }
+      }
   #ribbon button:active, #topBar button:active { background: rgba(127,168,232,.30); }
   #ribbon button.active, #topBar button.active { background: rgba(47,123,255,.32); border-color: #2f7bff; color: #eaf1ff; }
   #ribbon button.rb-dis { opacity: .3; pointer-events: none; }
@@ -303,7 +305,6 @@
   #fileMenu button { display: flex; flex-direction: row; align-items: center; gap: 9px; background: #0f1830; color: #dbe4f3;
     border: 1px solid #36436b; border-radius: 6px; padding: 7px 14px; font: bold 12px Meiryo, sans-serif; cursor: pointer;
     text-align: left; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
-  #fileMenu button:hover { border-color: #7fa8e8; background: rgba(127,168,232,.15); }
   #fileMenu button .ic { font-size: 15px; line-height: 1; }
   #fileMenu button .ic svg { width: 15px; height: 15px; display: block; }
   body.light #fileMenu { background: rgba(248,250,253,.97); border-color: #c4ccda; }
@@ -314,7 +315,6 @@
   #saveMenu button { background: #0f1830; color: #dbe4f3; border: 1px solid #36436b; border-radius: 6px;
     padding: 8px 14px; font: bold 13px Meiryo, sans-serif; cursor: pointer; text-align: left; white-space: nowrap;
     -webkit-tap-highlight-color: transparent; }
-  #saveMenu button:hover { border-color: #7fa8e8; background: rgba(127,168,232,.15); }
   body.light #saveMenu { background: rgba(248,250,253,.97); border-color: #c4ccda; }
   body.light #saveMenu button { background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #saveMenu button:hover { background: rgba(31,111,208,.10); border-color: #aebcd6; }
@@ -342,7 +342,9 @@
   body.light #ribbon .brand, body.light #ribbon .brand .dia, body.light #ribbon #cmdHelp { color: #1f6fd0; }
   body.light #ribbon .rb-group, body.light #ribbon .rb-right { border-color: #cdd4e0; }
   body.light #ribbon button, body.light #topBar button { color: #33405c; }
-  body.light #ribbon button:hover, body.light #topBar button:hover { background: rgba(31,111,208,.12); border-color: #aebcd6; }
+  @media (hover: hover) and (pointer: fine) {
+    body.light #ribbon button:hover, body.light #topBar button:hover { background: rgba(31,111,208,.12); border-color: #aebcd6; }
+  }
   body.light #ribbon button.active, body.light #topBar button.active { background: rgba(47,123,255,.22); border-color: #2f7bff; color: #143a78; }
   body.light #ribbon .brand { border-right-color: #c2cad8; }
   /* パネル（パレット・アイテム一覧・ヘルプ） */
