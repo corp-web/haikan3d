@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-A';
+const APP_VER = 'v0719-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3005,24 +3005,51 @@ function cancelMovePart() {           // Escで取消（元位置へ戻す）
   controls.enabled = true;
   clearMarkers();
 }
-// 移動中：右クリック＝方向送り、Shift+右クリック＝ひねり切替。起点は保つ。
+// 現在の姿勢が「向き/回転テーブル」の姿勢と一致しているか（±qは同一姿勢）。
+// プロパティの方位角・立面角・回転や角度スピナーで自由回転した後は一致しない。
+function tablePoseQuat(dirIdx, rollIdx) {
+  const d = DIR_QUATS[((dirIdx % DIR_COUNT) + DIR_COUNT) % DIR_COUNT];
+  const r = (((rollIdx | 0) % ROLL_COUNT) + ROLL_COUNT) % ROLL_COUNT;
+  return d.clone().multiply(new THREE.Quaternion().setFromAxisAngle(_rollAxis, r * Math.PI / 4));
+}
+function poseNearTable(p, dirIdx, rollIdx) {
+  return Math.abs(tablePoseQuat(dirIdx, rollIdx).dot(p.quaternion)) > 0.99995;
+}
+// テーブル外（自由回転済み）の姿勢から45°送る：向き＝鉛直軸まわり（方位を送る）／回転＝フェイス軸まわり。
+// テーブル姿勢へ巻き戻さない（2026-07-19 社長報告：水平向きフランジが回転ボタンで立面へ飛ぶ不具合の修正）
+function stepFreePose(p, shift) {
+  const axis = shift ? new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion).normalize()
+                     : new THREE.Vector3(0, 1, 0);
+  const ang = shift ? Math.PI / 4 : -Math.PI / 4;   // 向き送りは方位角+45°（北→東の時計回り。+Y回転は方位角を減らすため負）
+  p.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, ang));
+}
+// 移動中：右クリック＝方向送り、Shift+右クリック＝回転（旧ひねり）切替。起点は保つ。
 function cycleMoveOrientation(shift) {
   if (!movingPart) return;
   const keep = originModelPos(movingPart);
-  if (shift) movingRoll = (movingRoll + 1) % ROLL_COUNT;
-  else movingOrient = (movingOrient + 1) % DIR_COUNT;
-  orientRotation(movingPart, movingOrient, movingRoll);
+  if (!poseNearTable(movingPart, movingOrient, movingRoll)) {
+    stepFreePose(movingPart, shift);
+  } else {
+    if (shift) movingRoll = (movingRoll + 1) % ROLL_COUNT;
+    else movingOrient = (movingOrient + 1) % DIR_COUNT;
+    orientRotation(movingPart, movingOrient, movingRoll);
+  }
   setPartByOrigin(movingPart, keep);
   showInteractionMarkers(movingPart, null);
 }
 // 配置済み（選択中）：右クリック＝方向送り、Shift+右クリック＝ひねり切替。起点は保つ。
 function cycleSelectedOrientation(shift) {
-  if (!selectedPart || !selectedPart.userData.faceLocal) return;
-  const keep = originModelPos(selectedPart);
-  if (shift) selectedPart.userData.roll = ((selectedPart.userData.roll || 0) + 1) % ROLL_COUNT;
-  else selectedPart.userData.orient = ((selectedPart.userData.orient || 0) + 1) % DIR_COUNT;
-  orientRotation(selectedPart, selectedPart.userData.orient || 0, selectedPart.userData.roll || 0);
-  setPartByOrigin(selectedPart, keep);
+  const p = selectedPart;
+  if (!p || !p.userData.faceLocal) return;
+  const keep = originModelPos(p);
+  if (!poseNearTable(p, p.userData.orient || 0, p.userData.roll || 0)) {
+    stepFreePose(p, shift);           // 自由回転済み＝今の姿勢から45°（テーブルへ巻き戻さない）
+  } else {
+    if (shift) p.userData.roll = ((p.userData.roll || 0) + 1) % ROLL_COUNT;
+    else p.userData.orient = ((p.userData.orient || 0) + 1) % DIR_COUNT;
+    orientRotation(p, p.userData.orient || 0, p.userData.roll || 0);
+  }
+  setPartByOrigin(p, keep);
   _idleSig = null;                    // パイプ端マーカー等を更新
   updateForm();                       // 向きでCOP↔ELが変わるのでラベル更新
 }
