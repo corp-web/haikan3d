@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-L';
+const APP_VER = 'v0719-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4444,6 +4444,16 @@ function positionRotForm(cx, cy) {
   rotForm.style.top = Math.round(Math.max(rect.top + 4, Math.min(sy - fh - 10, rect.bottom - fh - 4))) + 'px';
 }
 function startRotSpin(shift, cx, cy, noKbd) {
+  // 寸法線（単独選択）の長押し＝数値フォーム：無シフト＝逃げ／シフト＝回転
+  //（タップ・45°送りではフォームを出さない＝長押しの時だけ・2026-07-19 社長要望）
+  if (!selectedPart && window.__annSelIsSingleDim && window.__annSelIsSingleDim()) {
+    const recD = window.__dimValueSel ? window.__dimValueSel() : null;
+    if (recD) {
+      if (shift) { _spinNoKbd = !!noKbd; startDimRollSpin(recD); }
+      else startDimOffSpin(recD, 'none', noKbd);
+      return;
+    }
+  }
   // 構築線を選択中：無Shift＝1mm平行移動スピナー、Shift＝方位角スピナー。それ以外（パイプ等）＝従来の角度スピナー
   const xlineSel = !selectedPart && window.__annSelIsXline && window.__annSelIsXline();
   if (xlineSel) _nudgeMode = shift ? 'heading' : 'move';
@@ -4529,8 +4539,9 @@ function orientStep(shift) {
   else if (window.__annHasSel && window.__annHasSel()) {
     // 寸法線（単独選択）：右クリック＝スライド寸法（+45°→−45°→0°→繰返し）／Shift+右クリック＝逃げ方向をAB軸まわりに45°回転
     if (window.__annSelIsSingleDim && window.__annSelIsSingleDim()) {
-      if (shift) { const r = window.__dimRollStep(); if (r) startDimRollSpin(r); }
-      else { const r = window.__dimSkewToggle(); if (r) startDimSkewSpin(r); }
+      // 45°送りはフォームを出さずに実行（数値フォームは長押しの時だけ・2026-07-19 社長要望）
+      if (shift) { window.__dimRollStep && window.__dimRollStep(); }
+      else { window.__dimSkewToggle && window.__dimSkewToggle(); }
     }
     // 構築線も向き/回転ボタン・右クリックで45°回転できる（2026-07-19 社長要望で解禁。
     // 微調整は従来どおり右クリック長押し＝平行移動/Shiftで方位角スピナー）
@@ -6012,11 +6023,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           o.position.copy(mid).addScaledVector(camRightL, ox).addScaledVector(camUpL, oy);
           const lm = o.userData.dimLeader;                   // 引出線も文字に追従（両端を毎フレーム更新）
           if (lm) {
-            const ul = dt.b.clone().sub(dt.a); const L = ul.length(); if (L > 1e-9) ul.multiplyScalar(1 / L); else ul.set(1, 0, 0);
-            const tC = Math.max(-L / 2, Math.min(L / 2, dt.textOff.t * k));
-            const p0 = mid.clone().addScaledVector(ul, tC);
+            // 付け根は寸法線（矢印の付いた線）のセンター固定（2026-07-19 社長要望）
             const pa2 = lm.geometry.attributes.position;
-            pa2.setXYZ(0, p0.x, p0.y, p0.z); pa2.setXYZ(1, o.position.x, o.position.y, o.position.z);
+            pa2.setXYZ(0, mid.x, mid.y, mid.z); pa2.setXYZ(1, o.position.x, o.position.y, o.position.z);
             pa2.needsUpdate = true;
           }
           return;
@@ -8736,15 +8745,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       // 寸法線（平行/立面）の本体クリックのみ再選択＝逃げ量スピナーを開いて逃げを再調整。
       //   タッチではキーボードを出さず ▲▼ ボタンで1mm刻み→3D画面タップで確定（立面は続けて方位スピナーへ連鎖）。
       //   端点(補助線の先)の付け替えは端の近くを掴んだ時だけ(=nearEnd)なので、!nearEnd を条件にして競合させない。
-      else if (!moved && !nearEnd && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir)
-        startDimOffSpin(lineSel, 'none', e.pointerType !== 'mouse');   // 'none'＝方位連鎖なし。足の長さだけ調整し、元の逃げ方向（平行）を保つ
+      // 寸法のタップでは逃げスピナーを出さない（2026-07-19 社長要望：数値フォームは長押しの時だけ＝startRotSpin側）
       // 半径/直径/角度の再選択（クリックのみ）＝逃げ（リーダー長・円弧半径/位置）の再調整に入る
       else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind)) drawState.dimReadjust = { rec: lineSel };
     } else if (mode === 'dimtext') {                     // 値ドラッグの終了。タップ（動かしていない）＝本体タップと同じ扱い
       if (typeof updateForm === 'function') updateForm();
-      if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir)
-        startDimOffSpin(lineSel, 'none', e.pointerType !== 'mouse');
-      else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind))
+      // 値タップでも逃げスピナーは出さない（数値フォームは長押し時のみ）
+      if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind))
         drawState.dimReadjust = { rec: lineSel };
     }
   }, true);
@@ -8760,6 +8767,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (drawActive() || !lineSel) return;
     if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (e.key === 'Escape' && drawState.dimReadjust) { e.stopImmediatePropagation(); drawState.dimReadjust = null; clearLineGuide(); return; }   // 再調整だけ抜ける（選択は維持）
+    if (e.key === 'Escape' && typeof nudgeActive === 'function' && nudgeActive()) return;   // スピナー表示中＝グローバル側の取消に委ねる（選択は保つ）
     if (e.key === 'Escape') { e.stopImmediatePropagation(); clearDrawTemp(); deselectLine(); }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.stopImmediatePropagation();
