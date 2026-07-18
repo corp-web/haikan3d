@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-G';
+const APP_VER = 'v0719-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5306,7 +5306,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         if (a.groupId != null) r.groupId = a.groupId;
         if (a.hidden) { r.hidden = true; r.obj.visible = false; }
       }
-      if (data.annotations.some(a => a.hidden && a.type === 'xline') && window.__annXptsRefresh) window.__annXptsRefresh();   // 隠した構築線の交点を消す
+      if (data.annotations.some(a => a.hidden && (a.type === 'xline' || a.type === 'line')) && window.__annXptsRefresh) window.__annXptsRefresh();   // 隠した構築線の交点を消す
     }
     let maxG = 0;
     for (const p of placedParts) if (p.userData.groupId > maxG) maxG = p.userData.groupId;
@@ -6265,7 +6265,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
-    if (type === 'xline') updateXlinePts();
+    if (type === 'xline' || type === 'line') updateXlinePts();
   }
   function clearAnnotations() {
     for (const r of annStore) { annGroup.remove(r.obj); disposeObj(r.obj); }
@@ -6280,23 +6280,33 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   modelGroup.add(xptGroup);
   let xlinePts = [];                          // 交点（modelローカル）の一覧
   function xlineIntersections() {
-    const xs = annStore.filter(r => r.type === 'xline' && !r.hidden);   // 非表示の構築線は交点を作らない
+    // 構築線どうしに加え、線分×線分・線分×構築線の交点も表示・スナップ対象（2026-07-19 社長要望）。
+    // 3Dの最近接点間距離が0.5mm以内＝実際に交差している所だけ（高さ違い・ねじれは対象外）。
+    // 線分の端点どうしが繋がる角（連鎖の継ぎ目）は交点扱いしない（端点スナップと重複するだけのため）
+    const els = annStore.filter(r => (r.type === 'xline' || r.type === 'line') && !r.hidden);
     const out = [];
-    const L = 12, tolY = 0.0005;              // 描画範囲±12m／EL一致とみなす許容0.5mm
-    for (let i = 0; i < xs.length; i++) for (let j = i + 1; j < xs.length; j++) {
-      const r1 = xs[i], r2 = xs[j];
-      if (Math.abs(r1.a.y - r2.a.y) > tolY) continue;       // ELが違う＝交わらない
-      const d1 = r1.b.clone().sub(r1.a), d2 = r2.b.clone().sub(r2.a);
-      const l1 = Math.hypot(d1.x, d1.z), l2 = Math.hypot(d2.x, d2.z);
-      if (l1 < 1e-9 || l2 < 1e-9) continue;                 // 水平成分なし（垂直）は対象外
-      const u1x = d1.x / l1, u1z = d1.z / l1, u2x = d2.x / l2, u2z = d2.z / l2;
-      const den = u1x * u2z - u1z * u2x;
-      if (Math.abs(den) < 1e-9) continue;                   // 平行
-      const wx = r2.a.x - r1.a.x, wz = r2.a.z - r1.a.z;
-      const t = (wx * u2z - wz * u2x) / den;                // r1中心からの符号付き距離
-      const u = (wx * u1z - wz * u1x) / den;                // r2中心からの符号付き距離（範囲判定のみに使用）
-      if (Math.abs(t) > L || Math.abs(u) > L) continue;     // レーザーの描画範囲外
-      out.push(new V3(r1.a.x + u1x * t, (r1.a.y + r2.a.y) / 2, r1.a.z + u1z * t));
+    const XR = 12, tol = 0.0005, endTol = 0.001;   // 構築線の描画範囲±12m／交差許容0.5mm／端点判定1mm
+    for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
+      const r1 = els[i], r2 = els[j];
+      const u1 = r1.b.clone().sub(r1.a), L1 = u1.length();
+      const u2 = r2.b.clone().sub(r2.a), L2 = u2.length();
+      if (L1 < 1e-9 || L2 < 1e-9) continue;
+      u1.multiplyScalar(1 / L1); u2.multiplyScalar(1 / L2);
+      const w0 = r1.a.clone().sub(r2.a);
+      const b = u1.dot(u2), d = u1.dot(w0), e = u2.dot(w0);
+      const denom = 1 - b * b;
+      if (Math.abs(denom) < 1e-9) continue;                 // 平行
+      const s = (b * e - d) / denom;                        // r1上の符号付き距離
+      const t = (e - b * d) / denom;                        // r2上の符号付き距離
+      const s0 = r1.type === 'xline' ? -XR : 0, s1 = r1.type === 'xline' ? XR : L1;
+      const t0 = r2.type === 'xline' ? -XR : 0, t1 = r2.type === 'xline' ? XR : L2;
+      if (s < s0 - 1e-6 || s > s1 + 1e-6 || t < t0 - 1e-6 || t > t1 + 1e-6) continue;   // 範囲外＝交差していない
+      const P1 = r1.a.clone().addScaledVector(u1, s), P2 = r2.a.clone().addScaledVector(u2, t);
+      if (P1.distanceTo(P2) > tol) continue;                // 高さ違い・ねじれ
+      const nearEnd1 = r1.type === 'line' && (s < endTol || s > L1 - endTol);
+      const nearEnd2 = r2.type === 'line' && (t < endTol || t > L2 - endTol);
+      if (nearEnd1 && nearEnd2) continue;                   // 角（端点どうしの継ぎ目）
+      out.push(P1.add(P2).multiplyScalar(0.5));
     }
     return out;
   }
@@ -6858,7 +6868,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     annGroup.remove(rec.obj); disposeObj(rec.obj);
     rec.obj = buildAnn(rec.type, rec.a, rec.b, rec.style);
     annGroup.add(rec.obj);
-    if (rec.type === 'xline') updateXlinePts();   // 構築線が動いたら交点を引き直す
+    if (rec.type === 'xline' || rec.type === 'line') updateXlinePts();   // 構築線・線分が動いたら交点を引き直す
   }
   window.__rebuildAllAnns = () => { for (const r of annStore) rebuildAnn(r); refreshAnnHi(); };   // テーマ切替で合成方式を反映
   function clearDrawTemp() {    // 描画途中の状態を全消去（線は残す）
@@ -7380,7 +7390,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     } else if ((e.key === 'Delete' || e.key === 'Backspace') && !drawState.first && annStore.length) {
       e.stopImmediatePropagation();
       const r = annStore.pop(); annGroup.remove(r.obj); disposeObj(r.obj);   // 直近の注釈を取消
-      if (r.type === 'xline') updateXlinePts();   // 構築線なら交点も引き直す
+      if (r.type === 'xline' || r.type === 'line') updateXlinePts();   // 構築線・線分なら交点も引き直す
     }
   }, true);
 
@@ -7540,7 +7550,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     annStore.splice(i, 1); annGroup.remove(rec.obj); disposeObj(rec.obj);
     if (lineSel === rec) { lineSel = null; clearLineHandles(); clearGrip(); }
     selAnns.delete(rec); refreshAnnHi(); refreshHandles();
-    if (rec.type === 'xline') updateXlinePts();
+    if (rec.type === 'xline' || rec.type === 'line') updateXlinePts();
     if (typeof updateForm === 'function') updateForm();
   };
   // 部品選択時などの線選択全解除。lineSel も必ず消す（残っているとパイプ端クリックを
@@ -7561,7 +7571,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     let n = list.length;
     if (gid != null && typeof hidePartOnly === 'function')
       for (const p of placedParts) if (p.userData.groupId === gid && !p.userData.hidden) { hidePartOnly(p); n++; }
-    if (list.some(r => r.type === 'xline')) updateXlinePts();
+    if (list.some(r => r.type === 'xline' || r.type === 'line')) updateXlinePts();
     clearAnnHi(); refreshHandles();
     if (typeof updateForm === 'function') updateForm();
     if (typeof refreshItemList === 'function') refreshItemList();
@@ -7573,7 +7583,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const list = [...selAnns];
     for (const r of list) { r.hidden = true; r.obj.visible = false; }
     deselectLine();                                        // ハイライト・ハンドル・値フォームも消す
-    if (list.some(r => r.type === 'xline')) updateXlinePts();
+    if (list.some(r => r.type === 'xline' || r.type === 'line')) updateXlinePts();
     return list.length;
   };
   // 指定グループの注釈を隠す（部品タップからのグループ非表示用）。返り値＝隠した件数
@@ -7582,7 +7592,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const r of annStore) if (r.groupId === gid && !r.hidden) {
       r.hidden = true; r.obj.visible = false; selAnns.delete(r);
       if (lineSel === r) { lineSel = null; clearLineHandles(); }
-      if (r.type === 'xline') hadX = true;
+      if (r.type === 'xline' || r.type === 'line') hadX = true;
       n++;
     }
     if (n) { if (hadX) updateXlinePts(); clearAnnHi(); refreshHandles(); }
@@ -7591,7 +7601,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 非表示の注釈をすべて再表示。返り値＝戻した件数
   window.__annShowAll = () => {
     let n = 0, hadX = false;
-    for (const r of annStore) if (r.hidden) { r.hidden = false; r.obj.visible = true; if (r.type === 'xline') hadX = true; n++; }
+    for (const r of annStore) if (r.hidden) { r.hidden = false; r.obj.visible = true; if (r.type === 'xline' || r.type === 'line') hadX = true; n++; }
     if (hadX) updateXlinePts();
     return n;
   };
