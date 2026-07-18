@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-C';
+const APP_VER = 'v0718-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5875,22 +5875,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
   }
   // 寸法の実測表示文字（上書きが無いときに出る値）。種別ごと：平行=数値／半径=R＋値／直径=φ＋値／角度=度／引出=注記
+  // 小数第1位まで。ちょうど「.0」になる時は整数で表示（例 123.4 / 120。2026-07-18 社長要望）
+  const fmtDim1 = v => { const s = v.toFixed(1); return s.endsWith('.0') ? s.slice(0, -2) : s; };
   function dimMeasuredStr(a, b, style) {
     const kind = (style && style.dimKind) || 'parallel';
-    const mm = (a.distanceTo(b) * 1000).toFixed(1);   // 小数第1位まで表示（例 123.4）
+    const mm = fmtDim1(a.distanceTo(b) * 1000);   // 小数第1位まで表示（.0は省略）
     if (kind === 'angle') {
       const V = a, P1 = b, P2 = (style && style.angP2) ? new V3(style.angP2[0], style.angP2[1], style.angP2[2]) : b;
       const d1 = P1.clone().sub(V), d2 = P2.clone().sub(V);
       let deg = (d1.lengthSq() > 1e-12 && d2.lengthSq() > 1e-12) ? d1.angleTo(d2) * 180 / Math.PI : 0;
       if (style && style.angReflex) deg = 360 - deg;
-      return deg.toFixed(1) + '°';
+      return fmtDim1(deg) + '°';
     }
     if (kind === 'radius') return 'R' + mm;
     if (kind === 'diameter') return 'φ' + mm;
     if (kind === 'leader' || kind === 'text') return '';   // 引出・文字は既定文字なし（入力した文字だけ表示）
     if (style && style.dimFixDir && style.dimDir) {   // リニア寸法は逃げ方向に垂直な成分の長さ＝寸法線の実長（足を下ろした水平/垂直の寸法値）
       const dn = new V3(style.dimDir.x, style.dimDir.y, style.dimDir.z);
-      if (dn.lengthSq() > 1e-9) { dn.normalize(); const ab = b.clone().sub(a); return (ab.addScaledVector(dn, -ab.dot(dn)).length() * 1000).toFixed(1); }
+      if (dn.lengthSq() > 1e-9) { dn.normalize(); const ab = b.clone().sub(a); return fmtDim1(ab.addScaledVector(dn, -ab.dot(dn)).length() * 1000); }
     }
     return String(mm);
   }
