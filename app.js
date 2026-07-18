@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-K';
+const APP_VER = 'v0719-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1858,6 +1858,12 @@ function makeValve(opts) {
 
   g.userData.partType = 'valve';
   g.userData.valve = { kind: k, sizeA: sizeA, rating: cls, style: (k === 'butterfly' ? (o.style || 'flange') : undefined), sizeB: (k === 'safety' ? ((VALVE_SIZES.includes(o.sizeB) ? o.sizeB : sizeA)) : undefined) };
+  // 面間センターの機点（2026-07-19 社長要望：バルブ中心にも起点候補。安全弁は工作点=中心が既にある）
+  if (g.userData.faceLocal && g.userData.backLocal && !g.userData.cornerLocal) {
+    const midC = g.userData.faceLocal.clone().add(g.userData.backLocal).multiplyScalar(0.5);
+    g.userData.extraLocals = g.userData.extraLocals || [];
+    if (!g.userData.extraLocals.some(e => e.distanceTo(midC) < 1e-6)) g.userData.extraLocals.push(midC);
+  }
   return g;
 }
 // バルブ用：呼び径ドロップダウン表／クランプ
@@ -2055,7 +2061,7 @@ function updateF2F() {
     if (obj) {
       computeConns(obj);
       const u = obj.userData;
-      const mm1 = v => (v * 1000).toFixed(1);   // 小数第一位まで表示（2026-07-14 社長要望）
+      const mm1 = v => { const t = (v * 1000).toFixed(1); return t.endsWith('.0') ? t.slice(0, -2) : t; };   // 小数第一位まで・.0は省略（2026-07-19 社長要望）
       if (u.partType === 'gasket') {
         lines.push(`厚み ${mm1(u.faceLocal.distanceTo(u.backLocal))}mm`);
       } else if (u.partType === 'pipe') {
@@ -9043,6 +9049,25 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 非表示／再表示。旧index.html（10分キャッシュ）と新app.jsが混在してもボタン無しで壊れないよう null 許容
   const _bHide = $('cmdHide'); if (_bHide) _bHide.onclick = hideCommand;
   const _bShow = $('cmdShow'); if (_bShow) _bShow.onclick = showAllHidden;
+  // ファイルメニュー（リボン「ファイル」をクリック／長押しで開く。中身は従来のファイル系ボタン＝配線は各IDのまま）
+  const _bFile = $('cmdFile'), _fileMenu = document.getElementById('fileMenu');
+  if (_bFile && _fileMenu) {
+    const closeFile = () => { _fileMenu.style.display = 'none'; _bFile.classList.remove('active'); };
+    const openFile = () => {
+      _fileMenu.style.display = 'flex';
+      _bFile.classList.add('active');
+      const r = _bFile.getBoundingClientRect();
+      _fileMenu.style.left = Math.round(Math.max(6, Math.min(r.left, window.innerWidth - _fileMenu.offsetWidth - 6))) + 'px';
+    };
+    let fTimer = null, fLong = false;
+    _bFile.addEventListener('pointerdown', () => { fLong = false; fTimer = setTimeout(() => { fLong = true; openFile(); }, 500); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => _bFile.addEventListener(ev, () => { if (fTimer) { clearTimeout(fTimer); fTimer = null; } }));
+    _bFile.addEventListener('click', () => { if (fLong) { fLong = false; return; } if (_fileMenu.style.display === 'flex') closeFile(); else openFile(); });
+    _fileMenu.addEventListener('click', e => { if (e.target.closest('button')) setTimeout(closeFile, 0); });   // 項目選択で閉じる（各ボタンのonclick実行後）
+    document.addEventListener('pointerdown', e => {
+      if (_fileMenu.style.display === 'flex' && !_fileMenu.contains(e.target) && !_bFile.contains(e.target)) closeFile();
+    }, true);
+  }
   // 設定メニュー（スナップ／近接点のON/OFF。状態は記憶。旧「近接」トグルはここへ統合）
   const _bSet = $('cmdSet'), _setMenu = document.getElementById('setMenu');
   if (_bSet && _setMenu) {
@@ -9354,13 +9379,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const specBody = document.getElementById('specBodyWrap');
   const specCaret = document.getElementById('specCaret');
   if (specHead && specBody) {
-    let specCollapsed = false;
-    specHead.addEventListener('click', () => {
-      specCollapsed = !specCollapsed;
+    let specCollapsed = true;   // 既定＝たたむ（2026-07-19 社長要望。開閉は記憶）
+    const applySpec = () => {
       specBody.style.display = specCollapsed ? 'none' : '';
       if (specCaret) specCaret.textContent = specCollapsed ? '▸' : '▾';
       specHead.title = specCollapsed ? 'クリックで展開' : 'クリックで折りたたみ';
-    });
+      try { localStorage.setItem('p3d_spec_open', specCollapsed ? '0' : '1'); } catch (e) {}
+    };
+    specHead.addEventListener('click', () => { specCollapsed = !specCollapsed; applySpec(); });
+    try { specCollapsed = localStorage.getItem('p3d_spec_open') !== '1'; } catch (e) {}
+    applySpec();
   }
   // 図面情報（年月日・場所・名称・図番・社名）の開閉（2026-07-18 社長要望：作図中は畳んで広く使う。状態を記憶）
   const dwgHead = document.getElementById('dwgHead');
