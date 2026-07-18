@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-B';
+const APP_VER = 'v0718-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5292,6 +5292,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     scene.background = new THREE.Color(0xffffff);
     renderer.setClearColor(0xffffff, 1);
     if (grid) grid.visible = false;
+    // 寸法値の背景マスクを白（紙色）で作り直す（作り直すと文字の向き・サイズが初期化されるので合わせ直す）
+    if (window.__dimMaskPrint) { window.__dimMaskPrint(true); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }
 
     // 各部品メッシュ：陰影なしの淡い面に差し替え＋黒い稜線(EdgesGeometry)を重ねる。
     const { fill, edge } = _printMats();
@@ -5339,6 +5341,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     scene.background = prevBg;
     renderer.setClearColor(prevClear, prevAlpha);
     if (grid) grid.visible = prevGrid;
+    if (window.__dimMaskPrint) { window.__dimMaskPrint(false); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }   // マスクを画面用に戻す
     renderer.clear();
     renderer.render(scene, activeCam());
     return url;
@@ -5705,6 +5708,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 寸法文字：枠・背景なしの赤文字スプライト。常にカメラ正対なので裏表・潰れが起きない。
   // 向きと位置は毎フレーム __updateDimTextFacing が画面投影に合わせて調整する
   // （画面上で寸法線と平行に回転し、画面で見て線の「上側」に出る）。
+  const DIM_TEXT_PAPER_MM = 3.5;   // 尺度（平行投影）表示・印刷時の数字の紙上高さ(mm)
+  const DIM_TEXT_MIN_PX = 12;      // 透視ビューでの数字の最小画面高(px)＝ズームアウトしても読める
+  let _dimMaskPrint = false;       // 印刷スナップショット中＝背景マスクを白で描く
   function dimTextSprite(text, A2, B2, vUp, opt) {
     let col = (opt && opt.color != null) ? opt.color : DIM_TEXT_CSS;   // 文字色（既定＝寸法の赤）
     if (typeof col === 'number') col = '#' + ('000000' + (col >>> 0).toString(16)).slice(-6);
@@ -5730,6 +5736,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const cv = document.createElement('canvas');
     cv.width = tw + pad * 2; cv.height = fs + pad * 2 + extra;
     const c = cv.getContext('2d');
+    // 背景マスク：数字の背面に不透明の下地を敷き、線や他の値が突き抜けて読めなくなるのを防ぐ
+    // （寸法値のみ。文字注釈は noMask）。色＝画面の背景色、印刷スナップショット中は白。
+    if (!(opt && opt.noMask)) {
+      c.fillStyle = _dimMaskPrint ? '#ffffff' : (lightMode ? '#d2dbe8' : '#141c33');
+      c.fillRect(0, 0, cv.width, cv.height);
+    }
     if (deco === 'box') { c.strokeStyle = col; c.lineWidth = 3; c.strokeRect(1.5, 1.5, cv.width - 3, cv.height - 3); }
     c.fillStyle = col; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
     const baseY = pad + fs * 0.82 + 2;                 // 大サイズ文字のベースライン（縦中央寄せ）。小数部は同じベースラインで下揃え
@@ -5744,15 +5756,55 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const s = 0.0011;
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
     sp.scale.set(cv.width * s, cv.height * s, 1);
-    sp.userData.dimText = { a: A2.clone(), b: B2.clone(), vUp: vUp.clone(), h: cv.height * s };
-    sp.position.copy(A2.clone().add(B2).multiplyScalar(0.5)).addScaledVector(vUp, (cv.height * s) / 2 + 0.004);
+    sp.userData.dimText = { a: A2.clone(), b: B2.clone(), vUp: vUp.clone(), h: cv.height * s,
+                            sw: cv.width * s, sh: cv.height * s, fsFrac: fs / cv.height,   // 基準スケールと数字部の高さ比（画面サイズ制御用）
+                            textOff: (opt && opt.textOff) ? { t: opt.textOff.t, n: opt.textOff.n } : null };
+    const mid0 = A2.clone().add(B2).multiplyScalar(0.5);
+    if (opt && opt.textOff) {   // 値の移動（textOff）：線方向t・逃げ方向nのオフセット位置が文字の中心
+      const u0 = B2.clone().sub(A2); if (u0.lengthSq() > 1e-12) u0.normalize(); else u0.set(1, 0, 0);
+      sp.position.copy(mid0).addScaledVector(u0, opt.textOff.t).addScaledVector(vUp, opt.textOff.n);
+    } else {
+      sp.position.copy(mid0).addScaledVector(vUp, (cv.height * s) / 2 + 0.004);
+    }
     sp.renderOrder = 1000;
     return sp;
+  }
+  window.__dimMaskPrint = on => {   // 印刷スナップショット用：マスクを白に切替えて寸法を作り直す
+    _dimMaskPrint = !!on;
+    for (const r of annStore) if (r.type === 'dim') rebuildAnn(r);
+  };
+  // 文字の表示倍率k：透視＝最小px保証／平行投影(尺度)＝紙上mm固定。値のオフセット(textOff)も
+  // このkを掛けて表示する＝ズーム・尺度を変えても「文字何個ぶんずらした」という見た目が保たれる。
+  // 値の引出線（寸法線→動かした値）。端点は __updateDimTextFacing が毎フレーム合わせる
+  function mkTextLeader(sp) {
+    const g = new THREE.BufferGeometry().setFromPoints([sp.position.clone(), sp.position.clone()]);
+    const lm = new THREE.Line(g, new THREE.LineBasicMaterial({ color: DIM_COLOR, transparent: true, opacity: 0.9, depthTest: false }));
+    lm.renderOrder = 997; lm.userData.baseColor = DIM_COLOR;
+    sp.userData.dimLeader = lm;
+    return lm;
+  }
+  function dimTextScaleK(dt, atLocal) {
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const camUpW = new V3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+    const w0 = modelGroup.localToWorld(atLocal.clone()).project(cam);
+    const w1 = modelGroup.localToWorld(atLocal.clone()).add(camUpW.multiplyScalar(dt.sh || dt.h)).project(cam);
+    const px = Math.hypot((w1.x - w0.x) * rect.width, (w1.y - w0.y) * rect.height) / 2;
+    if (!(px > 1e-6) || !dt.fsFrac) return 1;
+    const digitPx = px * dt.fsFrac;
+    if (useOrtho) return (DIM_TEXT_PAPER_MM * PX_PER_M / 1000) / digitPx;
+    return digitPx < DIM_TEXT_MIN_PX ? DIM_TEXT_MIN_PX / digitPx : 1;
   }
   // 毎フレーム：寸法文字を「画面上で寸法線と平行・線の上側」に合わせる（常に読める向き）
   window.__updateDimTextFacing = () => {
     const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
     const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: (n.x * 0.5 + 0.5) * rect.width, y: (-n.y * 0.5 + 0.5) * rect.height }; };
+    // 文字の画面サイズ制御：透視＝最小px保証（ズームアウトしても読める）／平行投影(尺度)＝紙上mm固定（印刷で狙いの大きさ）
+    const scaleK = (o, dt, at) => {
+      if (dt.sw == null) { dt.sw = o.scale.x; dt.sh = o.scale.y; }
+      const k = dimTextScaleK(dt, at);
+      o.scale.set(dt.sw * k, dt.sh * k, 1);
+      return k;
+    };
     for (const rec of annStore) {
       if (rec.type !== 'dim') continue;
       const isText = rec.style && rec.style.dimKind === 'text';
@@ -5761,9 +5813,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         if (!dt || !o.material) return;
         if (isText) {                                        // 文字：配置点に置き、style.textRot で画面内回転（正立は0°）
           o.material.rotation = (rec.style.textRot || 0) * Math.PI / 180;
+          const k = scaleK(o, dt, dt.a);
           const pm = scr(dt.a), pu = scr(dt.a.clone().addScaledVector(dt.vUp, 0.01));
           const s = (pu.y <= pm.y) ? 1 : -1;
-          o.position.copy(dt.a).addScaledVector(dt.vUp, s * (dt.h / 2 + 0.004));
+          o.position.copy(dt.a).addScaledVector(dt.vUp, s * ((dt.h * k) / 2 + 0.004));
           return;
         }
         const pa = scr(dt.a), pb = scr(dt.b);
@@ -5772,9 +5825,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         else if (ang < -Math.PI / 2) ang += Math.PI;
         o.material.rotation = ang;
         const mid = dt.a.clone().add(dt.b).multiplyScalar(0.5);
+        const k = scaleK(o, dt, mid);
+        if (dt.textOff) {                                    // 値を動かしてある＝オフセット（文字サイズ基準＝×k）の位置へ
+          const u = dt.b.clone().sub(dt.a); if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
+          o.position.copy(mid).addScaledVector(u, dt.textOff.t * k).addScaledVector(dt.vUp, dt.textOff.n * k);
+          const lm = o.userData.dimLeader;                   // 引出線も文字に追従（両端を毎フレーム更新）
+          if (lm) {
+            const L2 = dt.b.distanceTo(dt.a) / 2;
+            const tC = Math.max(-L2, Math.min(L2, dt.textOff.t * k));
+            const p0 = mid.clone().addScaledVector(u, tC);
+            const pa2 = lm.geometry.attributes.position;
+            pa2.setXYZ(0, p0.x, p0.y, p0.z); pa2.setXYZ(1, o.position.x, o.position.y, o.position.z);
+            pa2.needsUpdate = true;
+          }
+          return;
+        }
         const pm = scr(mid), pu = scr(mid.clone().addScaledVector(dt.vUp, 0.01));
         const sgn = (pu.y <= pm.y) ? 1 : -1;                 // 画面で見て上側へ
-        o.position.copy(mid).addScaledVector(dt.vUp, sgn * (dt.h / 2 + 0.004));
+        o.position.copy(mid).addScaledVector(dt.vUp, sgn * ((dt.h * k) / 2 + 0.004));
       });
     }
   };
@@ -5888,7 +5956,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       };
       if (isText) {
         // 文字：a=配置点。線は引かず、点aに常に正立した文字だけを置く（空なら何も描かない）。色・飾りはstyle。
-        if (shown !== '') grp.add(dimTextSprite(shown, a, a.clone(), new V3(0, 1, 0), { color: style.textColor, deco: style.textDeco }));
+        if (shown !== '') grp.add(dimTextSprite(shown, a, a.clone(), new V3(0, 1, 0), { color: style.textColor, deco: style.textDeco, noMask: true }));
       } else if (isLeader) {
         // 引出線：a=矢印先端（指す点）／b=肘(knee)。bから水平に棚（横線）を自動で伸ばし、その上に注記文字を置く。
         grp.add(glowSeg(a, b));            // 斜めの引出線
@@ -5924,7 +5992,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const tan = arc[Math.min(N, Math.floor(N / 2) + 1)].clone().sub(arc[Math.max(0, Math.floor(N / 2) - 1)]);
         if (tan.lengthSq() > 1e-9) tan.normalize(); else tan.copy(d1);
         const Tp = mid.clone().addScaledVector(outward, 0.006);
-        grp.add(dimTextSprite(shown, Tp.clone().addScaledVector(tan, -0.004), Tp.clone().addScaledVector(tan, 0.004), outward));
+        grp.add(dimTextSprite(shown, Tp.clone().addScaledVector(tan, -0.004), Tp.clone().addScaledVector(tan, 0.004), outward, { textOff: style.textOff }));
       } else if (kind === 'radius' || kind === 'diameter') {
         // 円/楕円の半径(R)・直径(φ)。radius: a=中心,b=縁／diameter: a,b=中心を通る両縁。
         // style.dimLead＝中心から値までの距離。縁より外なら補助線(リーダー)を縁から値まで伸ばす。
@@ -5942,7 +6010,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         if (vUp.lengthSq() < 1e-6) vUp.set(1, 0, 0);
         vUp.normalize();
         const eps = 0.004;
-        grp.add(dimTextSprite(shown, P.clone().addScaledVector(dir, -eps), P.clone().addScaledVector(dir, eps), vUp));
+        grp.add(dimTextSprite(shown, P.clone().addScaledVector(dir, -eps), P.clone().addScaledVector(dir, eps), vUp, { textOff: style.textOff }));
       } else {
       const ends = dimLineEnds(a, b, style);
       if (ends) {
@@ -5955,7 +6023,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         mkArrow(A2, B2); if (!isLeader) mkArrow(B2, A2);     // 両端の矢印（引出は指す側=A2のみ）
         const dd2 = style.dimDir;
         const vUp = new V3(dd2.x, dd2.y, dd2.z).multiplyScalar((style.dimOff || 0) >= 0 ? 1 : -1).normalize();
-        grp.add(dimTextSprite(shown, A2, B2, vUp));
+        const sp = dimTextSprite(shown, A2, B2, vUp, { textOff: style.textOff });
+        grp.add(sp);
+        if (style.textOff) grp.add(mkTextLeader(sp));   // 値を離してある＝寸法線→値の引出線（毎フレーム追従）
       } else {
         grp.add(glowSeg(a, b));
         mkArrow(a, b); if (!isLeader) mkArrow(b, a);          // 直書きでも両端に矢印（引出は片側のみ）
@@ -5965,7 +6035,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         if (vUp.lengthSq() < 1e-6) vUp.set(-uN.z, 0, uN.x);     // 垂直線はクロス水平方向
         if (vUp.lengthSq() < 1e-6) vUp.set(1, 0, 0);
         vUp.normalize();
-        grp.add(dimTextSprite(shown, a, b, vUp));
+        const sp2 = dimTextSprite(shown, a, b, vUp, { textOff: style.textOff });
+        grp.add(sp2);
+        if (style.textOff) grp.add(mkTextLeader(sp2));
       }
       }
     } else if (type === 'circle') {
@@ -6046,7 +6118,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return best;
   }
   function addAnnotation(type, a, b, style) {
-    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat } : styleFor(type);
+    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat, textOff: style.textOff ? { t: style.textOff.t, n: style.textOff.n } : undefined } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
@@ -6804,11 +6876,48 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const ux = Math.cos(ang), uz = Math.sin(ang);
     return { off: Math.max(0, vx * ux + vz * uz), dir: { x: ux, y: 0, z: uz } };
   }
+  // 新規寸法の値が既存の値と重なる時だけ、逃げ方向へ1段ずつ積んで自動回避（新規作成時のみ。既存は動かさない）
+  // 位置・大きさは表示倍率k込みの「見た目」で判定する（textOff は k=1 基準で保存＝表示は×k）
+  function autoShiftDimText(rec) {
+    let sp = null; rec.obj.traverse(o => { if (!sp && o.userData.dimText) sp = o; });
+    if (!sp) return;
+    const dt = sp.userData.dimText;
+    const u = dt.b.clone().sub(dt.a); if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
+    const mid = dt.a.clone().add(dt.b).multiplyScalar(0.5);
+    const k = dimTextScaleK(dt, mid) || 1;
+    const others = [];
+    for (const r of annStore) {
+      if (r === rec || r.type !== 'dim' || r.hidden || (r.style && r.style.dimKind === 'text')) continue;
+      r.obj.traverse(o => { if (o.userData.dimText) others.push(o); });
+    }
+    if (!others.length) return;
+    const posOf = () => {   // 現在の textOff での表示位置（既定＝線の上側）
+      const toff = rec.style.textOff;
+      return toff ? mid.clone().addScaledVector(u, toff.t * k).addScaledVector(dt.vUp, toff.n * k)
+                  : mid.clone().addScaledVector(dt.vUp, (dt.h * k) / 2 + 0.004);
+    };
+    let shifted = false;
+    for (let tries = 0; tries < 4; tries++) {
+      const c = posOf();
+      const halfW = (dt.sw * k) / 2, halfH = (dt.sh * k) / 2;
+      let clash = false;
+      for (const o of others) {
+        const d = o.position.clone().sub(c);
+        if (Math.abs(d.dot(u)) < halfW + o.scale.x / 2 && Math.abs(d.dot(dt.vUp)) < halfH + o.scale.y / 2) { clash = true; break; }
+      }
+      if (!clash) break;
+      const cur = rec.style.textOff || { t: 0, n: dt.h / 2 + 0.004 };   // 1.25文字高ずつ上へ（k=1基準で保存）
+      rec.style.textOff = { t: cur.t, n: cur.n + dt.h * 1.25 };
+      shifted = true;
+    }
+    if (shifted) rebuildAnn(rec);
+  }
   function commitDimWithOffset() {                      // 3回目クリック＝逃げを確定して寸法線を作る
     const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
     const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff || 0, dimDir: drawState.dimDir || null });
     addAnnotation('dim', a, b, st);
     const rec = annStore[annStore.length - 1];
+    autoShiftDimText(rec);                              // 既存の値と重なるなら値を1段ずつ上へ逃がす
     clearDrawTemp();
     cancelDraw();   // ツールを抜ける（構築線と同様、以後クリックや窓で再選択できる）
     // 逃げ位置を決めた3回目クリックで確定とする＝ここでフォーム/キーボードは出さない（社長要望）。
@@ -8021,7 +8130,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           drawState.dimReadjust = null; clearLineGuide();  // 半径/直径/角度の再調整中なら終える
           if (window.__openDimValueForm) window.__openDimValueForm(true);
           if (window.__focusDimValueInput) window.__focusDimValueInput();
-        } else {                                            // シングル＝ドラッグで移動/逃げ調整できるよう sel を仕込む
+        } else if (recT.style && recT.style.dimKind !== 'text' && recT.style.dimKind !== 'leader') {
+          // 寸法の値ドラッグ＝値だけを動かす（本体ドラッグ＝逃げ調整・値ダブル＝編集。2026-07-18 社長承認の割当て）
+          let spr = null; recT.obj.traverse(o => { if (!spr && o.userData.dimText) spr = o; });
+          lineDrag = { mode: 'dimtext', rec: recT, spr, downX: e.clientX, downY: e.clientY, moved: false };
+        } else {                                            // 文字・引出はシングル＝ドラッグで全体移動できるよう sel を仕込む
           const origin = recT.a.clone();
           lineDrag = { mode: 'sel', free: false, noMove: !moveMode, origin, planeY: origin.y, gRec: recT, gEnd: 0, nearEnd: false,
                        grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
@@ -8116,6 +8229,33 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         e.stopImmediatePropagation();   // 全体移動の処理へは進ませない
         return;
       }
+    }
+    if (lineDrag.mode === 'dimtext') {                   // 寸法の値ドラッグ＝値だけを（線方向・逃げ方向の平面上で）動かす
+      if (!lineDrag.moved || !lineDrag.spr) { e.stopImmediatePropagation(); return; }
+      const rec = lineDrag.rec, dt = lineDrag.spr.userData.dimText;
+      const u = dt.b.clone().sub(dt.a); if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
+      const mid = dt.a.clone().add(dt.b).multiplyScalar(0.5);
+      const rect2 = renderer.domElement.getBoundingClientRect();
+      pickNdc.x = ((e.clientX - rect2.left) / rect2.width) * 2 - 1;
+      pickNdc.y = -((e.clientY - rect2.top) / rect2.height) * 2 + 1;
+      pickRay.setFromCamera(pickNdc, activeCam());
+      const O = modelGroup.worldToLocal(pickRay.ray.origin.clone());
+      const D = modelGroup.worldToLocal(pickRay.ray.origin.clone().add(pickRay.ray.direction)).sub(O);
+      let nrm = u.clone().cross(dt.vUp);
+      if (nrm.lengthSq() < 1e-9) nrm = D.clone().negate();   // 退避：カメラ正対の平面で受ける
+      nrm.normalize();
+      const dn = D.dot(nrm);
+      if (Math.abs(dn) < 1e-9) { e.stopImmediatePropagation(); return; }
+      const P = O.clone().addScaledVector(D, mid.clone().sub(O).dot(nrm) / dn);
+      const t = P.clone().sub(mid).dot(u), n = P.clone().sub(mid).dot(dt.vUp);
+      const k = dimTextScaleK(dt, mid) || 1;   // 保存は表示倍率kで正規化＝ズーム・尺度を変えても見た目の位置関係を維持
+      rec.style = rec.style || {};
+      if (Math.abs(t) < dt.h * k && Math.abs(n) < dt.h * k * 1.5) delete rec.style.textOff;   // 元の位置の近く＝既定位置へ戻す
+      else rec.style.textOff = { t: Math.round((t / k) * 10000) / 10000, n: Math.round((n / k) * 10000) / 10000 };
+      rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+      if (window.__updateDimTextFacing) window.__updateDimTextFacing();   // 向き・サイズも即時追従（次フレームを待たない）
+      e.stopImmediatePropagation();
+      return;
     }
     if (lineDrag.mode === 'circleaxis') {                // 円：四半円点を掴んで半径変更。通常＝真円・Shift＝その軸だけ＝楕円
       const rec = lineDrag.rec, c = rec.a;
@@ -8251,6 +8391,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         startDimOffSpin(lineSel, 'none', e.pointerType !== 'mouse');   // 'none'＝方位連鎖なし。足の長さだけ調整し、元の逃げ方向（平行）を保つ
       // 半径/直径/角度の再選択（クリックのみ）＝逃げ（リーダー長・円弧半径/位置）の再調整に入る
       else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind)) drawState.dimReadjust = { rec: lineSel };
+    } else if (mode === 'dimtext') {                     // 値ドラッグの終了。タップ（動かしていない）＝本体タップと同じ扱い
+      if (typeof updateForm === 'function') updateForm();
+      if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && lineSel.style.dimDir)
+        startDimOffSpin(lineSel, 'none', e.pointerType !== 'mouse');
+      else if (!moved && lineSel && lineSel.type === 'dim' && lineSel.style && ['radius', 'diameter', 'angle'].includes(lineSel.style.dimKind))
+        drawState.dimReadjust = { rec: lineSel };
     }
   }, true);
   // 再調整中：カーソルで逃げ（リーダー長・円弧半径/位置）を更新。スナップ＝緑印
