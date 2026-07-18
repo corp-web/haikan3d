@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-F';
+const APP_VER = 'v0719-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2759,7 +2759,7 @@ function setPartByOrigin(obj, targetModelLocal) {
   obj.position.copy(targetModelLocal).sub(off);
 }
 // カーソル近傍の他部品の機点を探す（画面距離）。見つかれば modelGroupローカル点を返す。
-function resolveSnap(clientX, clientY, exclude) {
+function resolveSnap(clientX, clientY, exclude, noNear) {
   if (!snapOn) return null;                             // 設定でスナップOFF＝吸着しない
   const rect = renderer.domElement.getBoundingClientRect();
   const cam = activeCam();
@@ -2788,13 +2788,15 @@ function resolveSnap(clientX, clientY, exclude) {
     }
   }
   // 近接スナップON＝点の候補が無ければ線分・構築線の線上へ吸着
-  if (!best && nearSnapOn && window.__annNearestOnLine) best = window.__annNearestOnLine(clientX, clientY, NEAR_SNAP_PX);
+  //（noNear＝作図側から呼ばれるフォールバック時は適用しない。作図の近接判定は drawSnapPoint 側が
+  //  直角優先・起点張り付き防止つきで済ませており、ここで再吸着すると短い線が引けなくなる）
+  if (!best && !noNear && nearSnapOn && window.__annNearestOnLine) best = window.__annNearestOnLine(clientX, clientY, NEAR_SNAP_PX);
   return best;
 }
 // 配置/移動の着地点を決める：まず機点スナップ、無ければ高さ planeY の水平面。
 // planeY を渡すと「その高さの平面」上で平行移動できる（再移動で高さが床に戻らない）。
-function resolveTarget(clientX, clientY, exclude, planeY = 0) {
-  const snap = resolveSnap(clientX, clientY, exclude);
+function resolveTarget(clientX, clientY, exclude, planeY = 0, noNear = false) {
+  const snap = resolveSnap(clientX, clientY, exclude, noNear);
   if (snap) return { point: snap, snapped: true };
   const rect = renderer.domElement.getBoundingClientRect();
   placeNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -6548,6 +6550,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       // 2点目の位置決め中＝起点からの「垂線の足（直角点）」を最優先（直角がぴったり出る）。無ければ一般の線上へ
       if (drawState.first) best = nearestPerpFoot(drawState.first, clientX, clientY, SNAP_PX, r => r === drawState.editRec);
       if (!best) best = nearestOnLine(clientX, clientY, NEAR_SNAP_PX, r => r === drawState.editRec);
+      // 起点のすぐ近く（画面12px以内）へ潰れる線上吸着は捨てる＝起点が線上にある時に短い線分が
+      // 起点へ張り付いて引けなくなるのを防ぐ（点スナップは対象外＝端点への吸着はそのまま）
+      if (best && drawState.first) {
+        const s1 = modelGroup.localToWorld(drawState.first.clone()).project(cam);
+        const s2 = modelGroup.localToWorld(best.clone()).project(cam);
+        const d12 = Math.hypot((s2.x - s1.x) * rect.width, (s2.y - s1.y) * rect.height) / 2;
+        if (d12 < 12) best = null;
+      }
     }
     return best;
   }
@@ -6610,7 +6620,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function pickFirstPoint(clientX, clientY) {
     const snap = drawSnapPoint(clientX, clientY);
     if (snap) return { p: snap, snapped: true };
-    const t = resolveTarget(clientX, clientY, null, 0);
+    const t = resolveTarget(clientX, clientY, null, 0, true);   // noNear＝近接の再判定はしない（drawSnapPoint で済み）
     return { p: t ? t.point.clone() : null, snapped: false };
   }
   // 2点目：スナップ最優先 → Shiftでvert(Y方向) → 水平面+角度スナップ
@@ -6618,7 +6628,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const snap = drawSnapPoint(clientX, clientY);
     if (snap) return { p: snap, snapped: true };
     if (vert) return { p: vertPoint(clientX, clientY, P1), snapped: false };
-    const t = resolveTarget(clientX, clientY, null, P1.y);
+    const t = resolveTarget(clientX, clientY, null, P1.y, true);   // noNear＝同上
     return { p: t ? applyAngleSnap(P1, t.point.clone()) : null, snapped: false };
   }
 
@@ -8301,6 +8311,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (L < 1e-9) continue;
       u.multiplyScalar(1 / L);
       let t = from.clone().sub(r.a).dot(u);              // from からの垂線の足（線上パラメータ）
+      // 起点がこの線の上（1.5mm以内）に乗っている場合は対象外＝足が起点自身になり、2点目が起点へ
+      // 張り付いてゼロ長で線が作れなくなる（構築線上から引き始める時の「線分が引けない」の修正）
+      if (r.a.clone().addScaledVector(u, t).distanceTo(from) < 0.0015) continue;
       t = r.type === 'xline' ? Math.max(-12, Math.min(12, t)) : Math.max(0, Math.min(L, t));
       const P = r.a.clone().addScaledVector(u, t);
       const n = modelGroup.localToWorld(P.clone()).project(cam);
