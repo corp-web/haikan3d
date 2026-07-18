@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-A';
+const APP_VER = 'v0718-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6010,6 +6010,41 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const k = Math.abs(skew) > 1e-6 ? Math.abs(off) * Math.tan(skew) : 0;   // 斜めの分だけAB方向へ滑らせる
     return { A2: a.clone().add(dv).addScaledVector(u, k), B2: b.clone().add(dv).addScaledVector(u, k) };
   }
+  // 逃げ量スライド中：他の寸法線の矢印（寸法線の両端A2/B2）と揃う逃げ量へ吸着（2026-07-18 社長要望）。
+  // 候補点Pに寸法線が乗る逃げ量＝(P−基準)·逃げ方向。今の量との差を画面pxに換算し SNAP_PX 以内、かつ
+  // その逃げ量で寸法線（無限直線）が実際にPをほぼ通る（残差1.5mm以内＝同一平面・同一レベル）ものだけ吸着する。
+  function dimOffArrowSnap(rec, off) {
+    const st = rec.style || {};
+    if (!st.dimDir) return null;
+    const dn = new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z);
+    if (dn.lengthSq() < 1e-9) return null;
+    dn.normalize();
+    const base = (st.dimFixDir && st.dimFixPt) ? new V3(st.dimFixPt.x, st.dimFixPt.y, st.dimFixPt.z) : rec.a;
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return n.z < 1 ? { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height } : null; };
+    const s0 = scr(base), s1 = scr(base.clone().addScaledVector(dn, 0.1));
+    if (!s0 || !s1) return null;
+    const pxPerM = Math.hypot(s1.x - s0.x, s1.y - s0.y) * 10;   // 0.1m の画面距離×10＝1mあたりpx
+    if (pxPerM < 1e-6) return null;
+    let best = null, bestPx = SNAP_PX;
+    for (const r of annStore) {
+      if (r === rec || r.hidden || r.type !== 'dim' || !r.style || r.style.dimKind === 'text') continue;
+      const ends = dimLineEnds(r.a, r.b, r.style);
+      if (!ends) continue;
+      for (const P of [ends.A2, ends.B2]) {
+        const offP = P.clone().sub(base).dot(dn);
+        const dpx = Math.abs(offP - off) * pxPerM;
+        if (dpx >= bestPx) continue;
+        const e2 = dimLineEnds(rec.a, rec.b, Object.assign({}, st, { dimOff: offP }));   // その逃げ量で実際にPを通るか
+        if (!e2) continue;
+        const dl = e2.B2.clone().sub(e2.A2), L = dl.length();
+        const resid = L > 1e-9 ? P.clone().sub(e2.A2).cross(dl.multiplyScalar(1 / L)).length() : P.distanceTo(e2.A2);
+        if (resid > 0.0015) continue;   // 平面・レベルが違う矢印には吸着しない
+        bestPx = dpx; best = { off: offP, pt: P.clone() };
+      }
+    }
+    return best;
+  }
   function addAnnotation(type, a, b, style) {
     const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
@@ -7973,30 +8008,28 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         if (sp.userData && sp.userData.faceLocal && nearestConnLocal(sp, e.clientX, e.clientY)) return;
       }
     }
-    // 寸法の値（赤文字）をクリック＝その寸法線を選択して「値」入力を開く（文字の編集）
+    // 寸法の値（赤文字）・文字をクリック：シングル＝選択（文字はドラッグ移動／寸法は本体クリックと同じ逃げ調整）、
+    // ダブルクリック＝値・文字の編集フォーム（2026-07-18 社長要望：寸法の値の編集もダブルクリックに統一）
     {
       const recT = pickDimTextAt(e.clientX, e.clientY);
-      if (recT && recT.style && recT.style.dimKind === 'text') {
-        // 文字：シングルクリック＝選択（移動・削除）／ダブルクリック＝編集フォーム
+      if (recT) {
         const isDbl = (e.timeStamp - _lnLastT < 350) && Math.hypot(e.clientX - _lnLastX, e.clientY - _lnLastY) < 6 && _lnLastRec === recT;
         _lnLastT = e.timeStamp; _lnLastX = e.clientX; _lnLastY = e.clientY; _lnLastRec = recT;
         if (!selAnns.has(recT)) selectLine(recT);
-        if (isDbl) { if (window.__openDimValueForm) window.__openDimValueForm(true); if (window.__focusDimValueInput) window.__focusDimValueInput(); }
-        else {                                            // シングル＝ドラッグで移動できるよう sel を仕込む
+        if (isDbl) {
+          if (nudgeActive()) endRotSpin(true);             // 1回目のタップで開いた逃げスピナーは確定して閉じる
+          drawState.dimReadjust = null; clearLineGuide();  // 半径/直径/角度の再調整中なら終える
+          if (window.__openDimValueForm) window.__openDimValueForm(true);
+          if (window.__focusDimValueInput) window.__focusDimValueInput();
+        } else {                                            // シングル＝ドラッグで移動/逃げ調整できるよう sel を仕込む
           const origin = recT.a.clone();
           lineDrag = { mode: 'sel', free: false, noMove: !moveMode, origin, planeY: origin.y, gRec: recT, gEnd: 0, nearEnd: false,
                        grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
                        startHit: planeHitAt(e.clientX, e.clientY, origin.y) || origin.clone(),
                        downX: e.clientX, downY: e.clientY, moved: false,
-                       annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: null })),
+                       annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })),
                        partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
         }
-        e.stopImmediatePropagation(); return;
-      }
-      if (recT) {
-        selectLine(recT);
-        if (window.__openDimValueForm) window.__openDimValueForm(true);   // 値クリック＝編集フォームを開く（編集）
-        if (window.__focusDimValueInput) window.__focusDimValueInput();
         e.stopImmediatePropagation(); return;
       }
     }
@@ -8071,8 +8104,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                                           : dRec.a.clone().add(dRec.b).multiplyScalar(0.5);
           const off = projectOffsetAlongDir(e.clientX, e.clientY, ref, dRec.style.dimDir);   // 逃げ方向(水平/垂直)は固定し長さだけ＝元の向きをキープ
           if (off != null) {
-            dRec.style.dimOff = off;
+            // 他の寸法線の矢印（寸法線の両端）と揃う逃げ量が近ければ吸着＝寸法線どうしを一直線に並べられる
+            const snap = dimOffArrowSnap(dRec, off);
+            dRec.style.dimOff = snap ? snap.off : off;
             rebuildAnn(dRec); refreshAnnHi(); refreshHandles();
+            clearMarkers();
+            if (snap) addMarker(snap.pt, 0x39ff8a, markerRadiusFor(null, true));   // 吸着中＝相手の矢印を緑で強調
             if (typeof updateForm === 'function') updateForm();
           }
         }
