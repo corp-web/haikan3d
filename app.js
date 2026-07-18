@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-B';
+const APP_VER = 'v0719-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3353,10 +3353,7 @@ const legZBox = document.getElementById('legZBox');
 // ティーは主管×枝管の交点(中心)を高さ基準とするため常に COP。
 const _zeroLocal = new THREE.Vector3(0, 0, 0);
 function heightLabelFor(obj) {
-  if (!obj) return 'COP';
-  if (behType(obj) === 'tee') return 'COP';
-  const n = new THREE.Vector3(0, 1, 0).applyQuaternion(obj.quaternion);   // フェイス法線(=ローカル+Y)の世界向き
-  return Math.abs(n.y) > 0.5 ? 'EL' : 'COP';
+  return 'EL';   // 高さ表記はELに統一（2026-07-19 社長要望。旧：向きによりCOP/EL切替）
 }
 // 高さ基準点(model座標)。ティーは主管×枝管の交点(ローカル原点=中心)、他は起点(grip)。
 function heightRefModelPos(obj) {
@@ -8694,7 +8691,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     // フェイス面（部品ローカル+Y）の世界向き。方位角＝コンパス式：北0°・東90°・南180°・西270°
     // （北=Z−=ジズモ「後」、東=X+=「右」、南=Z+=「前」、西=X−=「左」）。立面角+90°=上向き
-    const faceN = p => new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion);
+    const faceSign = p => (behType(p) === 'elbow' ? -1 : 1);   // エルボは向き表示を反転（2026-07-19 社長要望：南表示→北、西→東）
+    const faceN = p => new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion).multiplyScalar(faceSign(p));
     const azimuthOf = (x, z) => { let d = Math.atan2(x, -z) * 180 / Math.PI; if (d < 0) d += 360; return Math.round(d * 10) / 10; };
     const faceBearing = p => { const n = faceN(p); if (Math.hypot(n.x, n.z) < 1e-3) return 0; return azimuthOf(n.x, n.z); };
     const faceElev = p => { const n = faceN(p); return Math.round(Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI * 10) / 10; };
@@ -8754,12 +8752,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 起点ラベル：起点になっている機点の「軸」が鉛直（＝面が水平）ならEL、水平ならCOP（2026-07-19 社長要望。
     // エルボ・ティ等は起点の機点ごとに変わる：例＝立ちエルボの上端面が起点ならEL、横端ならCOP）
     function partHeightLabel(p) {
-      const gl = gripLocalOf(p);
-      let axisLocal = (gl && gl.lengthSq() > 1e-8) ? gl : null;
-      if (!axisLocal) { const f = p.userData.faceLocal; axisLocal = (f && f.lengthSq() > 1e-8) ? f : null; }   // 中心起点（ティ工作点等）＝主管軸で判定
-      if (!axisLocal) return 'EL';
-      const a = axisLocal.clone().normalize().applyQuaternion(p.quaternion);
-      return Math.abs(a.y) > 0.5 ? 'EL' : 'COP';
+      return 'EL';   // 高さ表記はELに統一（2026-07-19 社長要望。旧：起点機点の軸でEL/COP切替）
     }
     function buildPart(p) {
       const u = p.userData, c = partColumns(p);
