@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-H';
+const APP_VER = 'v0719-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2428,6 +2428,11 @@ try { nearSnapOn = localStorage.getItem('p3d_near_snap') === '1'; } catch (e) {}
 // スナップ全体（機点・端点・中点・交点などの点吸着）のON/OFF（リボン「設定」から。既定ON）
 let snapOn = true;
 try { snapOn = localStorage.getItem('p3d_snap') !== '0'; } catch (e) {}
+// 起点・機点マーカー（選択中の点表示）と交点（点表示＋吸着）のON/OFF（2026-07-19 社長要望・設定から）
+let showOriginPts = true;
+try { showOriginPts = localStorage.getItem('p3d_show_origin') !== '0'; } catch (e) {}
+let showXpts = true;
+try { showXpts = localStorage.getItem('p3d_show_xpt') !== '0'; } catch (e) {}
 
 // 複数選択中に primary を掴んだとき、一緒に動かす他メンバーの開始位置を記録する。
 // primary が選択集合に入っていて2件以上なら集団移動、そうでなければ空（=単体移動）。
@@ -2656,6 +2661,7 @@ function drawSelectedConns(part) {
 }
 function updateIdleMarkers() {
   if (followTool || movingPart || dirDrag || pipeEndDrag) { _idleSig = null; return; }
+  if (!showOriginPts) { if (_idleSig !== 'off') { clearMarkers(); _idleSig = 'off'; } return; }   // 設定＝起点表示OFF
   let sig = null;
   if (pipeSelected() && selectedPart.userData.faceLocal) {
     const f = connModelPos(selectedPart, selectedPart.userData.faceLocal);
@@ -6313,6 +6319,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function updateXlinePts() {
     while (xptGroup.children.length) { const c = xptGroup.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
     xlinePts = xlineIntersections();
+    xptGroup.visible = showXpts;                        // 設定＝交点表示OFFなら点を出さない
     for (const p of xlinePts) {
       const m = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 12, 10),
         new THREE.MeshBasicMaterial({ color: XPT_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
@@ -6555,7 +6562,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       for (const local of connsOf(p)) test(connModelPos(p, local));
     }
     for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）
-    for (const p of xlinePts) test(p);   // 構築線どうしの交点（CADの交点スナップ）
+    if (showXpts) for (const p of xlinePts) test(p);   // 線どうしの交点（CADの交点スナップ。設定でOFF可）
     if (!best && nearSnapOn) {
       // 2点目の位置決め中＝起点からの「垂線の足（直角点）」を最優先（直角がぴったり出る）。無ければ一般の線上へ
       if (drawState.first) best = nearestPerpFoot(drawState.first, clientX, clientY, SNAP_PX, r => r === drawState.editRec);
@@ -6586,7 +6593,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       for (const local of connsOf(p)) mark(connModelPos(p, local), p);
     }
     for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, null); }
-    for (const p of xlinePts) mark(p, null);
+    if (showXpts) for (const p of xlinePts) mark(p, null);
   }
   // 起点 P1 から水平面上の点に角度刻み angleStep を適用（0=自由）
   function applyAngleSnap(P1, pt) {
@@ -7397,7 +7404,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ===================================================================
   //  描画後の線分：再選択 / 移動 / 端点ドラッグで長さ変更（描画モード外で動作）
   // ===================================================================
-  window.__annSnapPoints = () => { const a = []; for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; if (annMoveSnap && selAnns.has(r)) continue; for (const sp of annSnapPoints(r)) a.push(sp); } for (const p of xlinePts) a.push(p); return a; };   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
+  window.__annSnapPoints = () => { const a = []; for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; if (annMoveSnap && selAnns.has(r)) continue; for (const sp of annSnapPoints(r)) a.push(sp); } if (showXpts) for (const p of xlinePts) a.push(p); return a; };   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
   const lineSelGroup = new THREE.Group();   // 選択中の線の端点ハンドル（青球）
   modelGroup.add(lineSelGroup);
   let lineSel = null, lineDrag = null;
@@ -7612,7 +7619,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const r = lineSel, st = r.style || {};
     const o = { type: r.type, kind: st.dimKind || null, a: [r.a.x, r.a.y, r.a.z], b: [r.b.x, r.b.y, r.b.z] };
     if (r.type === 'line' || r.type === 'xline') o.len = r.a.distanceTo(r.b);
-    if (r.type === 'circle') { const cr = circleRadii(st, r.a, r.b); o.rx = cr.rx; o.rz = cr.rz; }
+    if (r.type === 'circle') {
+      const cr = circleRadii(st, r.a, r.b); o.rx = cr.rx; o.rz = cr.rz;
+      const nq = new V3(0, 1, 0).applyQuaternion(quatFromStyle(st));   // 円の面の法線
+      if (Math.hypot(nq.x, nq.z) < 1e-3) o.cAz = 0;
+      else { let dg = Math.atan2(nq.x, -nq.z) * 180 / Math.PI; if (dg < 0) dg += 360; o.cAz = Math.round(dg * 10) / 10; }
+      o.cEl = Math.round(Math.asin(Math.max(-1, Math.min(1, nq.y))) * 180 / Math.PI * 10) / 10;
+    }
     if (r.type === 'dim' && st.dimKind !== 'text') {
       o.dimOff = st.dimOff || 0; o.dimSkew = st.dimSkew || 0;
       o.dimText = st.dimText || ''; o.meas = dimMeasuredStr(r.a, r.b, st);
@@ -7634,6 +7647,31 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (patch.rz != null) r.style.rz = Math.max(0.001, patch.rz);
       const ax = new V3(1, 0, 0).applyQuaternion(quatFromStyle(r.style));   // bは+X四半円点に正規化（移動グリップ用）
       r.b.copy(r.a).addScaledVector(ax, r.style.rx != null ? r.style.rx : 0.01);
+    }
+    if (r.type === 'circle' && (patch.cAz != null || patch.cEl != null)) {
+      // 円の面の向き（方位角＝北0°時計回り／立面角90°=水平置き）を法線の回転で設定
+      const q0 = quatFromStyle(r.style);
+      const n = new V3(0, 1, 0).applyQuaternion(q0);
+      let rot = null;
+      if (patch.cAz != null) {
+        if (Math.hypot(n.x, n.z) >= 1e-3) {
+          let az0 = Math.atan2(n.x, -n.z) * 180 / Math.PI; if (az0 < 0) az0 += 360;
+          rot = new THREE.Quaternion().setFromAxisAngle(new V3(0, 1, 0), (az0 - patch.cAz) * Math.PI / 180);
+        }
+      } else {
+        const phi0 = Math.asin(Math.max(-1, Math.min(1, n.y)));
+        const t = Math.max(-90, Math.min(90, patch.cEl)) * Math.PI / 180;
+        let axis = new V3(0, 1, 0).cross(n);
+        if (axis.lengthSq() < 1e-9) axis = new V3(1, 0, 0).applyQuaternion(q0);
+        axis.normalize();
+        rot = new THREE.Quaternion().setFromAxisAngle(axis, phi0 - t);
+      }
+      if (rot) {
+        const cq = rot.multiply(q0);
+        r.style.quat = { x: cq.x, y: cq.y, z: cq.z, w: cq.w };
+        const ax = new V3(1, 0, 0).applyQuaternion(cq);
+        r.b.copy(r.a).addScaledVector(ax, circleRadii(r.style, r.a, r.b).rx);
+      }
     }
     if (patch.dimOff != null) r.style.dimOff = patch.dimOff;
     if (patch.dimSkew != null) r.style.dimSkew = patch.dimSkew;
@@ -8355,7 +8393,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     };
     for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; for (const local of connsOf(p)) test(connModelPos(p, local)); }
     for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
-    for (const pt of xlinePts) test(pt);   // 構築線どうしの交点へも吸着
+    if (showXpts) for (const pt of xlinePts) test(pt);   // 線どうしの交点へも吸着（設定でOFF可）
     if (!best && nearSnapOn) best = nearestOnLine(cx, cy, NEAR_SNAP_PX, r => exAnns.has(r) || r === drawState.editRec || (annMoveSnap && selAnns.has(r)));   // 近接＝線上へ
     return best;
   }
@@ -8368,7 +8406,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true); for (const local of connsOf(p)) mark(connModelPos(p, local), rN, rB); }
     const lN = markerRadiusFor(null, false), lB = markerRadiusFor(null, true);
     for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, lN, lB); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
-    for (const p of xlinePts) mark(p, lN, lB);
+    if (showXpts) for (const p of xlinePts) mark(p, lN, lB);
   }
   let _lnLastT = 0, _lnLastX = 0, _lnLastY = 0, _lnLastRec = null;   // ダブルクリック検出（自由移動）
   window.addEventListener('pointerdown', e => {
@@ -8921,12 +8959,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           ? '構築線は無限長のため高さ（EL）と向きだけを持ちます。方位角＝北(後Z−)0°から時計回りで東(右X+)90°。向き/回転ボタン・右クリックで45°送り、長押し＝平行移動/方位角スピナーも使えます。'
           : '起点ELを変更すると線全体が上下に平行移動します（終点は起点に対する相対を維持）。方位角＝北(後Z−)0°から時計回りで東(右X+)90°、立面角＋＝上り（全長を保って傾き変更）。');
       } else if (a.type === 'circle') {
-        sec('中心');
-        for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
+        const gC = () => window.__annPropsGet();
+        sec('中心');   // 中心はELのみ（2026-07-19 社長要望）。編集＝円全体を上下移動
+        edRow('EL', { get: () => { const gg = gC(); return gg ? Math.round(gg.a[1] * 1000) : 0; },
+          set: v => { const gg = gC(); if (!gg) return; const d = v / 1000 - gg.a[1]; const na = gg.a.slice(), nb = gg.b.slice(); na[1] += d; nb[1] += d; window.__annPropsSet({ a: na, b: nb }); }, unit: 'mm', step: 1 });
         sec('半径');
-        edRow('X半径', { get: () => { const g = window.__annPropsGet(); return g ? Math.round(g.rx * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ rx: v / 1000 }); }, unit: 'mm', step: 1 });
-        edRow('Z半径', { get: () => { const g = window.__annPropsGet(); return g ? Math.round(g.rz * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ rz: v / 1000 }); }, unit: 'mm', step: 1 });
-        note('真円にするにはX半径とZ半径を同じ値にしてください。');
+        edRow('X半径', { get: () => { const gg = gC(); return gg ? Math.round(gg.rx * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ rx: v / 1000 }); }, unit: 'mm', step: 1 });
+        edRow('Z半径', { get: () => { const gg = gC(); return gg ? Math.round(gg.rz * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ rz: v / 1000 }); }, unit: 'mm', step: 1 });
+        sec('向き（面）');
+        edRow('方位角', { get: () => (gC() || {}).cAz || 0, set: v => window.__annPropsSet({ cAz: v }), unit: '°', step: 1 });
+        edRow('立面角', { get: () => (gC() || {}).cEl || 0, set: v => window.__annPropsSet({ cEl: v }), unit: '°', step: 1 });
+        note('立面角90°＝水平に置いた円（面が上向き）・0°＝立てた円（方位角＝立てた面の向き。北0°から時計回り）。真円はX半径とZ半径を同じ値に。');
       } else if (a.kind === 'text') {
         edRow('内容', { type: 'text', get: () => (window.__annPropsGet() || {}).text || '', set: v => window.__annPropsSet({ text: String(v) }) });
         edRow('回転', { get: () => (window.__annPropsGet() || {}).textRot || 0, set: v => window.__annPropsSet({ textRot: v }), unit: '°', step: 1 });
@@ -8975,7 +9018,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const _bSet = $('cmdSet'), _setMenu = document.getElementById('setMenu');
   if (_bSet && _setMenu) {
     const cbS = document.getElementById('setSnap'), cbN = document.getElementById('setNear');
-    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; };
+    const cbO = document.getElementById('setOrigin'), cbX = document.getElementById('setXpt');
+    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; };
     const closeSet = () => { _setMenu.style.display = 'none'; _bSet.classList.remove('active'); };
     _bSet.onclick = () => {
       const open = _setMenu.style.display !== 'block';
@@ -8988,6 +9032,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     };
     if (cbS) cbS.addEventListener('change', () => { snapOn = cbS.checked; try { localStorage.setItem('p3d_snap', snapOn ? '1' : '0'); } catch (e) {} });
     if (cbN) cbN.addEventListener('change', () => { nearSnapOn = cbN.checked; try { localStorage.setItem('p3d_near_snap', nearSnapOn ? '1' : '0'); } catch (e) {} });
+    if (cbO) cbO.addEventListener('change', () => { showOriginPts = cbO.checked; _idleSig = null; try { localStorage.setItem('p3d_show_origin', showOriginPts ? '1' : '0'); } catch (e) {} });
+    if (cbX) cbX.addEventListener('change', () => { showXpts = cbX.checked; if (window.__annXptsRefresh) window.__annXptsRefresh(); try { localStorage.setItem('p3d_show_xpt', showXpts ? '1' : '0'); } catch (e) {} });
     document.addEventListener('pointerdown', e => {
       if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
     }, true);
