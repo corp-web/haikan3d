@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-G';
+const APP_VER = 'v0718-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8509,7 +8509,41 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (open) { sig = null; render(); }
     }
     if (btn) btn.onclick = () => setOpen(!open);
-    head.addEventListener('click', () => setOpen(false));
+    const closeBtn = document.getElementById('ppClose');
+    if (closeBtn) closeBtn.addEventListener('click', e => { e.stopPropagation(); setOpen(false); });
+    // 見出しドラッグでパネルを移動（2026-07-18 社長要望）。位置は記憶し、画面内に収まるようクランプ
+    function applyPos(l, t) {
+      const w = panel.offsetWidth || 248;
+      l = Math.max(2, Math.min(l, window.innerWidth - w - 2));
+      t = Math.max(2, Math.min(t, window.innerHeight - 46));   // 最低でも見出しが画面に残る
+      panel.style.left = Math.round(l) + 'px'; panel.style.top = Math.round(t) + 'px';
+      panel.style.bottom = 'auto'; panel.style.right = 'auto';
+    }
+    let hdrDrag = null;
+    head.addEventListener('pointerdown', e => {
+      if (closeBtn && (e.target === closeBtn || closeBtn.contains(e.target))) return;
+      const r = panel.getBoundingClientRect();
+      hdrDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      if (head.setPointerCapture) try { head.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    });
+    head.addEventListener('pointermove', e => { if (hdrDrag) applyPos(e.clientX - hdrDrag.dx, e.clientY - hdrDrag.dy); });
+    const endHdrDrag = () => {
+      if (!hdrDrag) return;
+      hdrDrag = null;
+      try { const r = panel.getBoundingClientRect(); localStorage.setItem('p3d_props_pos', Math.round(r.left) + ',' + Math.round(r.top)); } catch (e) {}
+    };
+    head.addEventListener('pointerup', endHdrDrag);
+    head.addEventListener('pointercancel', endHdrDrag);
+    (function restorePos() {   // 保存済みの位置を復元
+      const s = localStorage.getItem('p3d_props_pos');
+      if (!s) return;
+      const a = s.split(','), l = parseFloat(a[0]), t = parseFloat(a[1]);
+      if (isFinite(l) && isFinite(t)) applyPos(l, t);
+    })();
+    window.addEventListener('resize', () => {   // iPadの縦横回転などでも画面内に収める
+      if (panel.style.top && panel.style.top !== '') { const r = panel.getBoundingClientRect(); applyPos(r.left, r.top); }
+    });
     const mmv = v => Math.round(v * 1000);   // m → mm（表示）
     let sig = null, fields = [];             // fields: [{inp, get}] 値の追従更新用
     function selInfo() {
