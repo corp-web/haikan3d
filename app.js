@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-I';
+const APP_VER = 'v0718-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8589,35 +8589,60 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       body.appendChild(row);
       fields.push({ inp, get: opts.get });
     }
-    // 部品の起点座標編集（1軸だけ差し替え）
-    function setPartAxis(p, axis, mmVal) {
-      const o = originModelPos(p).clone(); o[axis] = mmVal / 1000;
-      setPartByOrigin(p, o);
+    // フェイス面（部品ローカル+Y）の世界向き。方位角0°=右(X+)・90°=前(Z+)、立面角+90°=上向き（ジズモの呼び方と同じ）
+    const faceN = p => new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion);
+    const faceBearing = p => { const n = faceN(p); if (Math.hypot(n.x, n.z) < 1e-3) return 0; let d = Math.atan2(n.z, n.x) * 180 / Math.PI; if (d < 0) d += 360; return Math.round(d * 10) / 10; };
+    const faceElev = p => { const n = faceN(p); return Math.round(Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI * 10) / 10; };
+    const faceDirText = p => {
+      const el = faceElev(p);
+      if (el > 60) return '上向き';
+      if (el < -60) return '下向き';
+      const names = ['右', '右前', '前', '左前', '左', '左後', '後', '右後'];   // 方角＝ジズモの面（右=X+・前=Z+）
+      const t = names[Math.round(faceBearing(p) / 45) % 8];
+      return Math.abs(el) > 5 ? t + (el > 0 ? '・上り' : '・下り') : t;
+    };
+    const rotPartWorld = (p, q) => {
+      const keep = originModelPos(p).clone();
+      p.quaternion.premultiply(q);
+      setPartByOrigin(p, keep);
+      if (selectedParts.has(p)) setEmissive(p, SEL_COLOR);
       updateForm();
-    }
+    };
+    const setFaceBearing = (p, v) => {
+      const n = faceN(p);
+      if (Math.hypot(n.x, n.z) < 1e-3) { if (window.__toast) window.__toast('上/下向きのフェイスは、先に立面角を横向き（0°など）にしてください'); return; }
+      const a = Math.atan2(n.z, n.x) - v * Math.PI / 180;   // +Y回転はatan2(z,x)を減らす向き
+      rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), a));
+    };
+    const setFaceElev = (p, v) => {
+      const n = faceN(p);
+      const phi0 = Math.asin(Math.max(-1, Math.min(1, n.y)));
+      const t = Math.max(-90, Math.min(90, v)) * Math.PI / 180;
+      let axis = new THREE.Vector3(0, 1, 0).cross(n);
+      if (axis.lengthSq() < 1e-9) axis = new THREE.Vector3(1, 0, 0).applyQuaternion(p.quaternion);   // 真上/真下は部品ローカルXまわりに倒す
+      axis.normalize();
+      rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(axis, phi0 - t));   // Y×n まわりの＋回転はフェイスを下げる向き
+    };
     function buildPart(p) {
       const u = p.userData, c = partColumns(p);
       sec('部品');
       roRow('種別', () => `${c.kind} ${c.type}`.trim());
       roRow('サイズ', () => `${c.size}${c.cls && c.cls !== '—' ? ' / ' + c.cls : ''}`);
       sec('位置（起点）');
-      edRow('X', { get: () => mmv(originModelPos(p).x), set: v => setPartAxis(p, 'x', v), unit: 'mm', step: 1 });
-      edRow('Y ＝' + (heightLabelFor(p) === 'EL' ? 'FL' : heightLabelFor(p)), { get: () => mmv(originModelPos(p).y), set: v => setPartAxis(p, 'y', v), unit: 'mm', step: 1 });
-      edRow('Z', { get: () => mmv(originModelPos(p).z), set: v => setPartAxis(p, 'z', v), unit: 'mm', step: 1 });
+      edRow(heightLabelFor(p), { get: () => mmv(heightRefModelPos(p).y), set: v => { setPartByHeight(p, v / 1000); updateForm(); }, unit: 'mm', step: 1 });
       if (u.partType === 'pipe' && u.pipe) {
         sec('パイプ');
         edRow('長さ', { get: () => Math.round(u.pipe.length), set: v => { if (v >= 1) rebuildPipe(p, v, 'face'); updateForm(); }, unit: 'mm', step: 1 });
       }
-      if (u.faceLocal && u.orient != null && !isFreeRotPart(p)) {
-        sec('向き');
-        edRow('向き', { get: () => u.orient || 0, set: v => { const keep = originModelPos(p); orientRotation(p, (parseInt(v, 10) || 0) % DIR_COUNT, u.roll || 0); setPartByOrigin(p, keep); updateForm(); },
-                        options: Array.from({ length: DIR_COUNT }, (_, i) => [i, '方向 ' + (i + 1)]) });
-        edRow('ひねり', { get: () => u.roll || 0, set: v => { const keep = originModelPos(p); orientRotation(p, u.orient || 0, (parseInt(v, 10) || 0) % ROLL_COUNT); setPartByOrigin(p, keep); updateForm(); },
-                          options: Array.from({ length: ROLL_COUNT }, (_, i) => [i, (i * 45) + '°']) });
+      if (u.faceLocal) {
+        sec('向き（フェイス面）');
+        roRow('方角', () => faceDirText(p));
+        edRow('方位角', { get: () => faceBearing(p), set: v => setFaceBearing(p, v), unit: '°', step: 1 });
+        edRow('立面角', { get: () => faceElev(p), set: v => setFaceElev(p, v), unit: '°', step: 1 });
       }
       sec('その他');
       edRow('材質', { type: 'text', get: () => u.mat || '', set: v => { u.mat = String(v).trim(); refreshItemList(); } });
-      note('呼び径・タイプ・クラス等の仕様は、選択したまま左のパレットで変更できます。');
+      note('方位角0°=右(X+)・90°=前(Z+)、立面角+90°=上向き。45°送り・ひねりは従来どおり右クリック／タッチ操作でも回せます。仕様は左のパレットで変更。');
     }
     function buildAnnProps(a) {
       const label = a.type === 'line' ? '線分' : a.type === 'xline' ? '構築線' : a.type === 'circle' ? '円'
@@ -8635,9 +8660,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const setDelta = (i, mm) => { const gg = g(); if (!gg) return; const nb = gg.b.slice(); nb[i] = gg.a[i] + mm / 1000; window.__annPropsSet({ b: nb }); };
         const dvec = () => { const gg = g(); return gg ? [gg.b[0] - gg.a[0], gg.b[1] - gg.a[1], gg.b[2] - gg.a[2]] : [1, 0, 0]; };
         sec(a.type === 'xline' ? '起点（中心）' : '起点');
-        edRow('X', { get: () => absA(0), set: v => moveWhole(0, v), unit: 'mm', step: 1 });
-        edRow('FL(COP)', { get: () => absA(1), set: v => moveWhole(1, v), unit: 'mm', step: 1 });
-        edRow('Z', { get: () => absA(2), set: v => moveWhole(2, v), unit: 'mm', step: 1 });
+        edRow('EL', { get: () => absA(1), set: v => moveWhole(1, v), unit: 'mm', step: 1 });   // 起点はELのみ（2026-07-18 社長要望）
         sec(a.type === 'xline' ? '方向（起点に対して）' : '終点（起点に対して）');
         edRow('ΔX', { get: () => delta(0), set: v => setDelta(0, v), unit: 'mm', step: 1 });
         edRow('ΔY 高低差', { get: () => delta(1), set: v => setDelta(1, v), unit: 'mm', step: 1 });
@@ -8652,7 +8675,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
             const hl0 = Math.hypot(d[0], d[2]); const ux = hl0 > 1e-9 ? d[0] / hl0 : 1, uz = hl0 > 1e-9 ? d[2] / hl0 : 0;
             const hl2 = L * Math.cos(r), dy2 = L * Math.sin(r);
             window.__annPropsSet({ b: [gg.a[0] + ux * hl2, gg.a[1] + dy2, gg.a[2] + uz * hl2] }); }, unit: '°', step: 0.5 });
-        note('起点を変更すると線全体が平行移動します（終点は起点に対する相対を維持）。水平角0°＝X軸方向、立面角＋＝上り（全長を保って傾き変更）。');
+        note('起点ELを変更すると線全体が上下に平行移動します（終点は起点に対する相対を維持）。水平角0°=右(X+)・90°=前(Z+)、立面角＋＝上り（全長を保って傾き変更）。');
       } else if (a.type === 'circle') {
         sec('中心');
         for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
@@ -8676,7 +8699,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     function render() {
       if (!open) return;
       const info = selInfo();
-      const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0));
+      const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid + heightLabelFor(info.p) : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0));
       if (s === sig) {   // 選択が同じ＝値だけ追従（編集中の欄は上書きしない）
         for (const f of fields) {
           if (f.ro) { const v = String(f.get()); if (f.ro.textContent !== v) f.ro.textContent = v; }
