@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-I';
+const APP_VER = 'v0719-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2423,8 +2423,8 @@ const SNAP_PX = 18;           // 機点スナップが効く画面距離(px)
 // 近接スナップ（2026-07-19 社長要望）：線分・構築線の「線上」（端点・中点・交点以外）にも吸着する。
 // 誤吸着を避けるため、リボン「近接」トグルでONの時だけ・点スナップが無い時だけ・少し狭い距離で効く
 const NEAR_SNAP_PX = 14;
-let nearSnapOn = false;
-try { nearSnapOn = localStorage.getItem('p3d_near_snap') === '1'; } catch (e) {}
+let nearSnapOn = true;   // 既定ON（2026-07-19 社長要望：設定の既定はすべてON）
+try { nearSnapOn = localStorage.getItem('p3d_near_snap') !== '0'; } catch (e) {}
 // スナップ全体（機点・端点・中点・交点などの点吸着）のON/OFF（リボン「設定」から。既定ON）
 let snapOn = true;
 try { snapOn = localStorage.getItem('p3d_snap') !== '0'; } catch (e) {}
@@ -5246,7 +5246,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const btn = document.getElementById('cmdSave');
     const r = btn ? btn.getBoundingClientRect() : { left: 20, top: window.innerHeight - 60 };
     saveMenu.style.left = Math.max(8, Math.round(r.left)) + 'px';
-    saveMenu.style.bottom = Math.round(window.innerHeight - r.top + 8) + 'px';
+    if (r.top < window.innerHeight / 2) { saveMenu.style.top = Math.round(r.bottom + 8) + 'px'; saveMenu.style.bottom = 'auto'; }   // 右上バー＝下へ開く
+    else { saveMenu.style.top = 'auto'; saveMenu.style.bottom = Math.round(window.innerHeight - r.top + 8) + 'px'; }
     saveMenu.style.display = 'flex';
   }
   document.getElementById('svOver').onclick = () => { hideSaveMenu(); saveOverwrite(); };
@@ -9029,6 +9030,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       _bSet.classList.add('active');
       const r = _bSet.getBoundingClientRect();
       _setMenu.style.left = Math.round(Math.max(6, Math.min(r.left, window.innerWidth - _setMenu.offsetWidth - 6))) + 'px';
+      if (r.top < window.innerHeight / 2) { _setMenu.style.top = Math.round(r.bottom + 8) + 'px'; _setMenu.style.bottom = 'auto'; }   // ボタンが上＝下へ開く
+      else { _setMenu.style.top = 'auto'; _setMenu.style.bottom = '52px'; }
     };
     if (cbS) cbS.addEventListener('change', () => { snapOn = cbS.checked; try { localStorage.setItem('p3d_snap', snapOn ? '1' : '0'); } catch (e) {} });
     if (cbN) cbN.addEventListener('change', () => { nearSnapOn = cbN.checked; try { localStorage.setItem('p3d_near_snap', nearSnapOn ? '1' : '0'); } catch (e) {} });
@@ -9351,7 +9354,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const palEl = document.getElementById('palette');
   const palCaret = document.getElementById('palCaret');
   if (palTitle && palEl) {
-    let palCollapsed = false;
+    let palCollapsed = true;   // 既定＝たたむ（2026-07-19 社長要望。開いた状態は記憶で復元）
     const applyPal = () => {
       palEl.classList.toggle('collapsed', palCollapsed);
       if (palCaret) palCaret.textContent = palCollapsed ? '▸' : '▾';
@@ -9359,6 +9362,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       try { localStorage.setItem('p3d_pal_open', palCollapsed ? '0' : '1'); } catch (e) {}
     };
     palTitle.addEventListener('click', () => { palCollapsed = !palCollapsed; applyPal(); });
-    if (localStorage.getItem('p3d_pal_open') === '0') { palCollapsed = true; applyPal(); }
+    try { palCollapsed = localStorage.getItem('p3d_pal_open') !== '1'; } catch (e) {}
+    applyPal();
   }
 })();
