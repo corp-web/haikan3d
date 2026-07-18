@@ -64,6 +64,29 @@
   #rollCCW { right: 122px; top: 16px; }   /* ビューキューブの左上側 */
   #rollCW  { right: 12px;  top: 16px; }   /* ビューキューブの右上側 */
   /* 設置アイテム一覧（右側・ビューキューブの下・表形式） */
+  /* プロパティパネル（選択オブジェクトの値を表示・編集） */
+  #propPanel { position: fixed; left: 10px; bottom: 56px; width: 248px; max-height: 52vh;
+    background: rgba(20,28,51,.94); border: 1px solid #36436b; border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.4); display: none; flex-direction: column; overflow: hidden; z-index: 22; }
+  #propPanel .il-head { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
+    padding: 6px 8px; border-bottom: 1px solid #36436b; letter-spacing: 1px; cursor: pointer; user-select: none; }
+  #propPanel .il-head:hover { color: #cfe0fb; background: rgba(127,168,232,.10); }
+  #ppBody { overflow-y: auto; padding: 6px 8px 8px; font-size: 11px; color: #c3cee2; }
+  #ppBody .pp-sec { color: #8fb4ee; font-weight: 700; margin: 6px 0 3px; border-bottom: 1px solid #2a3450; padding-bottom: 2px; }
+  #ppBody .pp-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  #ppBody .pp-row label { flex: 0 0 74px; color: #9fb2d6; white-space: nowrap; overflow: hidden; }
+  #ppBody .pp-row input, #ppBody .pp-row select { flex: 1 1 auto; min-width: 0; background: #121a30; color: #e6eeff;
+    border: 1px solid #36436b; border-radius: 4px; font: 11px Meiryo, sans-serif; padding: 2px 5px; }
+  #ppBody .pp-row .pp-unit { flex: 0 0 auto; color: #7f8db0; }
+  #ppBody .pp-row .pp-ro { flex: 1 1 auto; color: #dbe6fb; }
+  #ppBody .pp-note { color: #7f8db0; margin: 6px 0 2px; line-height: 1.5; }
+  body.light #propPanel { background: rgba(248,250,253,.96); border-color: #c4ccda; }
+  body.light #propPanel .il-head { color: #33405c; border-bottom-color: #c4ccda; }
+  body.light #ppBody { color: #33405c; }
+  body.light #ppBody .pp-sec { color: #1f6fd0; border-bottom-color: #cdd4e0; }
+  body.light #ppBody .pp-row label, body.light #ppBody .pp-note, body.light #ppBody .pp-row .pp-unit { color: #5a6a88; }
+  body.light #ppBody .pp-row input, body.light #ppBody .pp-row select { background: #fff; color: #1c2740; border-color: #c4ccda; }
+  body.light #ppBody .pp-row .pp-ro { color: #1c2740; }
   #itemList { position: fixed; right: 10px; bottom: 56px; width: 424px; max-height: 54vh;
     background: rgba(20,28,51,.94); border: 1px solid #36436b; border-radius: 10px;
     box-shadow: 0 4px 14px rgba(0,0,0,.4); display: flex; flex-direction: column; overflow: hidden; }
@@ -380,6 +403,7 @@
         <button id="cmdClash" title="部品同士の干渉（ぶつかり）を検査して赤く表示（参考）"><span class="ic">⚠</span>干渉</button>
         <button id="cmdHide" title="非表示コマンド：選択中のアイテムを隠す／選択なしで押すと次にタップしたアイテムを隠す（1回で終了・Esc・再押下で取消）"><span class="ic">◌</span>非表示</button>
         <button id="cmdShow" title="非表示にしたアイテムをすべて再表示"><span class="ic">◉</span>再表示</button>
+        <button id="cmdProps" title="プロパティ：選択したオブジェクト（部品・線・寸法・文字・円）の位置や値を一覧で表示・編集"><span class="ic">☰</span>ﾌﾟﾛﾊﾟﾃｨ</button>
       </div>
       <div class="rb-title">編集</div>
     </div>
@@ -450,6 +474,7 @@
         <li><b>CSV</b>＝部品表をCSVで書き出し（Excelでそのまま開けます）。<b>ガスケット・ボルト・溶接口・パイプ合計長さの自動集計</b>付き（機点の接続から推定した参考値。アイテムリスト下部にも表示）</li>
         <li><b>自動保存</b>＝作業内容を20秒ごとにブラウザ内へ自動バックアップ。誤って閉じても<b>次回起動時に「復元しますか？」</b>と出ます</li>
         <li><b>干渉</b>（編集グループ）＝部品同士のぶつかりを検査して<b>赤表示</b>（接続済みの部品は除外・参考値。クリックで解除）</li>
+        <li><b>プロパティ</b>（編集グループ）＝選択したオブジェクトの値を<b>左下のパネルに一覧表示・編集</b>できます。部品＝位置X/Y/Z（EL・COP）・パイプ長さ・向き/ひねり・材質。線分/構築線＝始点終点・長さ。円＝中心・半径。寸法＝実測値・値の上書き・逃げ・スライド角。文字＝内容・回転・配置点。<b>ドラッグ中も値が追従表示</b>されるので、空間での直接編集と併用できます（数値はEnterで確定・変更は「元に戻す」対応）</li>
         <li><b>非表示／再表示</b>（編集グループ）＝<b>選択したアイテムを一時的に隠せます</b>。①アイテムを選択→「非表示」②「非表示」→隠すアイテムをタップ、のどちらでも可（1回で終了・Esc・再押下で取消）。隠したアイテムは選択・スナップ・干渉チェックの対象外になりますが、<b>アイテムリスト・自動集計・保存ファイルには残ります</b>（リストでは淡色表示）。<b>「再表示」ですべて元に戻ります</b>（「元に戻す」でも戻せます）</li>
         <li><b>図面情報の既定値</b>＝右下の図面情報の<b>「この内容を既定として記憶」</b>を押すと、設計仕様・場所・社名が記憶され、以後の新規図面に自動で入ります</li>
         <li><b>印刷</b>＝図面（白地・線画）＋3D方位コンパス＋アイテムリスト・設計仕様・図面情報をA3横で印刷（アイテムリスト／設計仕様は折りたたみ中なら省略）／<b>画像</b>＝画面をPNG書き出し</li>
@@ -516,6 +541,11 @@
     </div>
     <!-- 現在の仕様の面間寸法（自動計算・読み取り専用）。エルボ/ティー=中心-面、フランジ=面-背面 -->
     <div id="palF2F" title="現在の仕様の面間寸法（自動計算）">面間 —</div>
+  </div>
+  <!-- プロパティパネル（左下・選択オブジェクトの値の表示・編集） -->
+  <div id="propPanel">
+    <div class="il-head" id="ppHead" title="クリックで閉じる（リボンのプロパティで再表示）">プロパティ<span class="il-caret">✕</span></div>
+    <div id="ppBody"></div>
   </div>
   <!-- 設置アイテム一覧（右側・表形式） -->
   <div id="itemList">

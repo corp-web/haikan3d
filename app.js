@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0718-E';
+const APP_VER = 'v0718-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3272,6 +3272,7 @@ function dirActive() { return !!(dirDrag && (dirDrag.started || dirDrag.locked))
 // 線分が選択中（部品は未選択）なら、その起点側の基準点を返す。それ以外は null
 function lineElRef() { return (!selectedPart && selectedParts.size === 0 && window.__lineElRef) ? window.__lineElRef() : null; }
 function updateForm() {
+  if (window.__propsRefresh) window.__propsRefresh();   // プロパティパネルへ選択・値の変化を通知（早期returnより前）
   if (!hYInput) return;
   if (dirActive()) {
     if (hLabel) hLabel.textContent = '距離';
@@ -7459,6 +7460,45 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return n;
   };
   window.__annXptsRefresh = updateXlinePts;   // ファイル読込で構築線を隠した時の交点更新用
+  // ---- プロパティパネル用（単一選択の注釈の値の取得・適用。2026-07-18 社長要望） ----
+  window.__annPropsGet = () => {
+    if (selAnns.size !== 1 || !lineSel) return null;
+    const r = lineSel, st = r.style || {};
+    const o = { type: r.type, kind: st.dimKind || null, a: [r.a.x, r.a.y, r.a.z], b: [r.b.x, r.b.y, r.b.z] };
+    if (r.type === 'line' || r.type === 'xline') o.len = r.a.distanceTo(r.b);
+    if (r.type === 'circle') { const cr = circleRadii(st, r.a, r.b); o.rx = cr.rx; o.rz = cr.rz; }
+    if (r.type === 'dim' && st.dimKind !== 'text') {
+      o.dimOff = st.dimOff || 0; o.dimSkew = st.dimSkew || 0;
+      o.dimText = st.dimText || ''; o.meas = dimMeasuredStr(r.a, r.b, st);
+    }
+    if (st.dimKind === 'text') { o.text = st.dimText || ''; o.textRot = st.textRot || 0; }
+    return o;
+  };
+  window.__annPropsSet = (patch) => {
+    if (selAnns.size !== 1 || !lineSel) return;
+    const r = lineSel; r.style = r.style || {};
+    if (patch.a) r.a.set(patch.a[0], patch.a[1], patch.a[2]);
+    if (patch.b) r.b.set(patch.b[0], patch.b[1], patch.b[2]);
+    if (patch.len != null && r.type === 'line') {          // 長さ変更＝a端固定で軸方向を保って伸縮
+      const d = r.b.clone().sub(r.a), L = d.length();
+      if (L > 1e-9 && patch.len > 0) r.b.copy(r.a).addScaledVector(d.multiplyScalar(1 / L), patch.len);
+    }
+    if (r.type === 'circle' && (patch.rx != null || patch.rz != null)) {
+      if (patch.rx != null) r.style.rx = Math.max(0.001, patch.rx);
+      if (patch.rz != null) r.style.rz = Math.max(0.001, patch.rz);
+      const ax = new V3(1, 0, 0).applyQuaternion(quatFromStyle(r.style));   // bは+X四半円点に正規化（移動グリップ用）
+      r.b.copy(r.a).addScaledVector(ax, r.style.rx != null ? r.style.rx : 0.01);
+    }
+    if (patch.dimOff != null) r.style.dimOff = patch.dimOff;
+    if (patch.dimSkew != null) r.style.dimSkew = patch.dimSkew;
+    if (patch.dimText !== undefined) r.style.dimText = (patch.dimText === '' || patch.dimText === dimMeasuredStr(r.a, r.b, r.style)) ? null : patch.dimText;
+    if (patch.text !== undefined) r.style.dimText = patch.text === '' ? null : patch.text;
+    if (patch.textRot != null) r.style.textRot = patch.textRot;
+    rebuildAnn(r);
+    if (r.type === 'xline') updateXlinePts();
+    refreshAnnHi(); refreshHandles();
+    if (typeof updateForm === 'function') updateForm();
+  };
   // Ctrl+クリック：カーソル下の線を選択へ出し入れ（部品の個別トグルと同じ感覚）。線が無ければ false
   window.__annToggleAt = (cx, cy) => {
     const rec = pickAnnAt(cx, cy);
@@ -8448,6 +8488,152 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       clearDrawTemp(); deselectLine();
     }
   }, true);
+
+  // ================= プロパティパネル（2026-07-18 社長要望） =================
+  // 選択中オブジェクト（部品・線分・構築線・円・寸法・文字）の値を左下のパネルに一覧表示し、その場で編集できる。
+  // 空間上の直接編集（ドラッグ・スピナー等）は従来どおり併用可。表示は updateForm 経由で常時追従（ドラッグ中も更新）。
+  (function propsPanel() {
+    const panel = document.getElementById('propPanel'), body = document.getElementById('ppBody');
+    const head = document.getElementById('ppHead'), btn = document.getElementById('cmdProps');
+    if (!panel || !body) return;
+    let open = localStorage.getItem('p3d_props_open') === '1';
+    function setOpen(on) {
+      open = !!on;
+      panel.style.display = open ? 'flex' : 'none';
+      if (btn) btn.classList.toggle('active', open);
+      try { localStorage.setItem('p3d_props_open', open ? '1' : '0'); } catch (e) {}
+      if (open) { sig = null; render(); }
+    }
+    if (btn) btn.onclick = () => setOpen(!open);
+    head.addEventListener('click', () => setOpen(false));
+    const mmv = v => Math.round(v * 1000);   // m → mm（表示）
+    let sig = null, fields = [];             // fields: [{inp, get}] 値の追従更新用
+    function selInfo() {
+      const nAnn = window.__annSelCount ? window.__annSelCount() : 0;
+      if (selectedParts.size === 1 && selectedPart && !nAnn) return { kind: 'part', p: selectedPart };
+      if (!selectedParts.size && nAnn === 1) { const a = window.__annPropsGet ? window.__annPropsGet() : null; if (a) return { kind: 'ann', a }; }
+      const n = selectedParts.size + nAnn;
+      return n ? { kind: 'multi', n } : { kind: 'none' };
+    }
+    function sec(t) { const d = document.createElement('div'); d.className = 'pp-sec'; d.textContent = t; body.appendChild(d); }
+    function note(t) { const d = document.createElement('div'); d.className = 'pp-note'; d.textContent = t; body.appendChild(d); }
+    function roRow(label, get) {
+      const row = document.createElement('div'); row.className = 'pp-row';
+      const lb = document.createElement('label'); lb.textContent = label; row.appendChild(lb);
+      const sp = document.createElement('span'); sp.className = 'pp-ro'; sp.textContent = get(); row.appendChild(sp);
+      body.appendChild(row);
+      fields.push({ ro: sp, get });
+    }
+    // 編集行。set(値)を呼んだ後は render 側が値を追従更新する。number は unit 表示付き
+    function edRow(label, opts) {
+      const row = document.createElement('div'); row.className = 'pp-row';
+      const lb = document.createElement('label'); lb.textContent = label; row.appendChild(lb);
+      let inp;
+      if (opts.options) {
+        inp = document.createElement('select');
+        opts.options.forEach(([v, t]) => { const o = document.createElement('option'); o.value = String(v); o.textContent = t; inp.appendChild(o); });
+      } else {
+        inp = document.createElement('input');
+        inp.type = opts.type || 'number';
+        if (inp.type === 'number' && opts.step != null) inp.step = String(opts.step);
+      }
+      inp.value = String(opts.get());
+      inp.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } if (e.key === 'Escape') { e.preventDefault(); inp.value = String(opts.get()); inp.blur(); } });
+      inp.addEventListener('change', () => {
+        let v = inp.value;
+        if (!opts.options && inp.type === 'number') { v = parseFloat(v); if (!isFinite(v)) { inp.value = String(opts.get()); return; } }
+        opts.set(v);
+        inp.value = String(opts.get());
+      });
+      ['pointerdown', 'click'].forEach(ev => inp.addEventListener(ev, e => e.stopPropagation()));
+      row.appendChild(inp);
+      if (opts.unit) { const u = document.createElement('span'); u.className = 'pp-unit'; u.textContent = opts.unit; row.appendChild(u); }
+      body.appendChild(row);
+      fields.push({ inp, get: opts.get });
+    }
+    // 部品の起点座標編集（1軸だけ差し替え）
+    function setPartAxis(p, axis, mmVal) {
+      const o = originModelPos(p).clone(); o[axis] = mmVal / 1000;
+      setPartByOrigin(p, o);
+      updateForm();
+    }
+    function buildPart(p) {
+      const u = p.userData, c = partColumns(p);
+      sec('部品');
+      roRow('種別', () => `${c.kind} ${c.type}`.trim());
+      roRow('サイズ', () => `${c.size}${c.cls && c.cls !== '—' ? ' / ' + c.cls : ''}`);
+      sec('位置（起点）');
+      edRow('X', { get: () => mmv(originModelPos(p).x), set: v => setPartAxis(p, 'x', v), unit: 'mm', step: 1 });
+      edRow('Y ＝EL(COP)', { get: () => mmv(originModelPos(p).y), set: v => setPartAxis(p, 'y', v), unit: 'mm', step: 1 });
+      edRow('Z', { get: () => mmv(originModelPos(p).z), set: v => setPartAxis(p, 'z', v), unit: 'mm', step: 1 });
+      if (u.partType === 'pipe' && u.pipe) {
+        sec('パイプ');
+        edRow('長さ', { get: () => Math.round(u.pipe.length), set: v => { if (v >= 1) rebuildPipe(p, v, 'face'); updateForm(); }, unit: 'mm', step: 1 });
+      }
+      if (u.faceLocal && u.orient != null && !isFreeRotPart(p)) {
+        sec('向き');
+        edRow('向き', { get: () => u.orient || 0, set: v => { const keep = originModelPos(p); orientRotation(p, (parseInt(v, 10) || 0) % DIR_COUNT, u.roll || 0); setPartByOrigin(p, keep); updateForm(); },
+                        options: Array.from({ length: DIR_COUNT }, (_, i) => [i, '方向 ' + (i + 1)]) });
+        edRow('ひねり', { get: () => u.roll || 0, set: v => { const keep = originModelPos(p); orientRotation(p, u.orient || 0, (parseInt(v, 10) || 0) % ROLL_COUNT); setPartByOrigin(p, keep); updateForm(); },
+                          options: Array.from({ length: ROLL_COUNT }, (_, i) => [i, (i * 45) + '°']) });
+      }
+      sec('その他');
+      edRow('材質', { type: 'text', get: () => u.mat || '', set: v => { u.mat = String(v).trim(); refreshItemList(); } });
+      note('呼び径・タイプ・クラス等の仕様は、選択したまま左のパレットで変更できます。');
+    }
+    function buildAnnProps(a) {
+      const label = a.type === 'line' ? '線分' : a.type === 'xline' ? '構築線' : a.type === 'circle' ? '円'
+        : a.kind === 'text' ? '文字' : '寸法' + (a.kind && a.kind !== 'parallel' ? `（${a.kind}）` : '');
+      sec(label);
+      const setPt = (key, axis, v) => { const g = window.__annPropsGet(); if (!g) return; const arr = g[key]; arr['xyz'.indexOf(axis)] = v / 1000; window.__annPropsSet({ [key]: arr }); };
+      const getPt = (key, axis) => { const g = window.__annPropsGet(); return g ? mmv(g[key]['xyz'.indexOf(axis)]) : 0; };
+      if (a.type === 'line' || a.type === 'xline') {
+        const bl = a.type === 'xline' ? '通過点' : '終点';
+        sec(a.type === 'xline' ? '中心点' : '始点');
+        for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
+        sec(bl);
+        for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('b', ax), set: v => setPt('b', ax, v), unit: 'mm', step: 1 });
+        if (a.type === 'line') edRow('長さ', { get: () => { const g = window.__annPropsGet(); return g ? Math.round(g.len * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ len: v / 1000 }); }, unit: 'mm', step: 1 });
+      } else if (a.type === 'circle') {
+        sec('中心');
+        for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
+        sec('半径');
+        edRow('X半径', { get: () => { const g = window.__annPropsGet(); return g ? Math.round(g.rx * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ rx: v / 1000 }); }, unit: 'mm', step: 1 });
+        edRow('Z半径', { get: () => { const g = window.__annPropsGet(); return g ? Math.round(g.rz * 1000) : 0; }, set: v => { if (v >= 1) window.__annPropsSet({ rz: v / 1000 }); }, unit: 'mm', step: 1 });
+        note('真円にするにはX半径とZ半径を同じ値にしてください。');
+      } else if (a.kind === 'text') {
+        edRow('内容', { type: 'text', get: () => (window.__annPropsGet() || {}).text || '', set: v => window.__annPropsSet({ text: String(v) }) });
+        edRow('回転', { get: () => (window.__annPropsGet() || {}).textRot || 0, set: v => window.__annPropsSet({ textRot: v }), unit: '°', step: 1 });
+        sec('配置点');
+        for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
+      } else {   // 寸法（平行/リニア/半径/直径/角度/引出）
+        roRow('実測値', () => (window.__annPropsGet() || {}).meas || '');
+        edRow('値(上書き)', { type: 'text', get: () => (window.__annPropsGet() || {}).dimText || '', set: v => window.__annPropsSet({ dimText: String(v) }) });
+        if (a.dimOff != null) edRow('逃げ', { get: () => { const g = window.__annPropsGet(); return g ? Math.round((g.dimOff || 0) * 1000) : 0; }, set: v => window.__annPropsSet({ dimOff: v / 1000 }), unit: 'mm', step: 1 });
+        if (a.dimOff != null) edRow('スライド角', { get: () => (window.__annPropsGet() || {}).dimSkew || 0, set: v => window.__annPropsSet({ dimSkew: Math.max(-80, Math.min(80, v)) }), unit: '°', step: 1 });
+        note('値(上書き)を空にすると実測値の表示に戻ります。測定点の付け替えは起点（足の先）をドラッグ。');
+      }
+    }
+    function render() {
+      if (!open) return;
+      const info = selInfo();
+      const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0));
+      if (s === sig) {   // 選択が同じ＝値だけ追従（編集中の欄は上書きしない）
+        for (const f of fields) {
+          if (f.ro) { const v = String(f.get()); if (f.ro.textContent !== v) f.ro.textContent = v; }
+          else if (f.inp && document.activeElement !== f.inp) { const v = String(f.get()); if (f.inp.value !== v) f.inp.value = v; }
+        }
+        return;
+      }
+      sig = s; fields = []; body.innerHTML = '';
+      if (info.kind === 'none') note('オブジェクト（部品・線・寸法など）を選択すると、ここに値が表示されます。');
+      else if (info.kind === 'multi') { sec('複数選択'); roRow('選択数', () => (selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0)) + ' 個'); note('個別の値の編集は1つだけ選択してください。まとめての移動・複製・非表示などはリボンから。'); }
+      else if (info.kind === 'part') buildPart(info.p);
+      else buildAnnProps(info.a);
+    }
+    window.__propsRefresh = render;
+    if (open) setOpen(true);
+  })();
 
   // ================= ボタン結線 =================
   $('cmdNew').onclick = newDrawing;
