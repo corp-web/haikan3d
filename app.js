@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-P';
+const APP_VER = 'v0719-Q';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5783,8 +5783,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const toolStyle = { line: defaultStyle('line'), xline: defaultStyle('xline'), dim: defaultStyle('dim'), circle: defaultStyle('circle') };
   // 寸法の現在の種別（リボン「寸法」右クリックで選択）。平行=現行の2点間距離。
   //   parallel=平行／angle=角度／radius=半径／diameter=直径／leader=引出。操作の基本仕様は全種別とも平行と同じ。
-  let dimKind = 'parallel';
-  const DIM_KIND_LABEL = { parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出' };
+  let dimKind = 'linear';   // 既定＝長さ寸法（2026-07-19 社長要望。CADのDIMLINEAR相当）
+  const DIM_KIND_LABEL = { linear: '長さ', parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出' };
   // 文字の既定書式（リボン「文字」右クリックで設定）。色＝シアン／飾り＝枠なし
   const textOpts = { color: 0x00ffff, deco: 'none' };   // deco: none/box/underline/double
   function styleFor(type) {
@@ -7079,6 +7079,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   //  平面の寸法（ABに水平成分あり）：通常＝ABの水平直交へ／Shift＝縦（上下）へ
   //  立面の寸法（ABが垂直）       ：水平へ逃がす。通常＝方向45°刻み／Shift＝斜め（自由角度）
   function dimOffsetFromCursor(cx, cy, A, B, shift) {
+    if (dimKind === 'linear') return dimLinearFromCursor(cx, cy, A, B, shift);   // 長さ寸法＝軸方向固定（下の専用関数）
     const ab = B.clone().sub(A);
     const isVertAB = ab.x * ab.x + ab.z * ab.z < 1e-9;
     if (!isVertAB && shift) {                     // 平面の寸法＋Shift＝縦方向：カメラに正対する鉛直面で高さを拾う
@@ -7111,6 +7112,49 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const ang = Math.round(Math.atan2(vz, vx) / step) * step;
     const ux = Math.cos(ang), uz = Math.sin(ang);
     return { off: Math.max(0, vx * ux + vz * uz), dir: { x: ux, y: 0, z: uz } };
+  }
+  // 長さ寸法（CADのDIMLINEAR相当・2026-07-19 社長要望）：寸法線を軸方向に固定し、その軸成分の距離を測る。
+  // カーソルを動かした軸（X/Z、Shift＝Y）へ逃がす＝AutoCADと同じ操作感。逃げ量は2点の中点（＝dimFixPt）基準。
+  // 測定値は dimMeasuredStr のリニア寸法分岐＝「逃げ方向に垂直な成分の長さ」＝寸法線の実長。
+  function dimLinearFromCursor(cx, cy, A, B, shift) {
+    const ab = B.clone().sub(A);
+    const mid = A.clone().add(B).multiplyScalar(0.5);
+    const isVertAB = ab.x * ab.x + ab.z * ab.z < 1e-9;
+    if (!isVertAB && shift) {                     // Shift＝縦（上下）へ逃がす＝水平距離の寸法（寸法線は水平のまま）
+      const rect = renderer.domElement.getBoundingClientRect();
+      placeNdc.x = ((cx - rect.left) / rect.width) * 2 - 1;
+      placeNdc.y = -((cy - rect.top) / rect.height) * 2 + 1;
+      placeRay.setFromCamera(placeNdc, activeCam());
+      const Mw = modelGroup.localToWorld(mid.clone());
+      const n = new V3().subVectors(activeCam().position, Mw); n.y = 0;
+      if (n.lengthSq() < 1e-9) n.set(0, 0, 1);
+      n.normalize();
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(n, Mw);
+      const hitV = new V3();
+      if (!placeRay.ray.intersectPlane(plane, hitV)) return null;
+      modelGroup.worldToLocal(hitV);
+      return { off: hitV.y - mid.y, dir: { x: 0, y: 1, z: 0 } };
+    }
+    const hit = planeHitAt(cx, cy, A.y);
+    if (!hit) return null;
+    const vx = hit.x - mid.x, vz = hit.z - mid.z;
+    let useX = Math.abs(vx) >= Math.abs(vz);
+    if (!isVertAB) {                              // その軸へ逃がすと寸法線が潰れる（測る成分が無い）軸は避ける
+      const okX = (ab.y * ab.y + ab.z * ab.z) > 1e-8;   // dir=X の時に寸法線へ残る成分
+      const okZ = (ab.x * ab.x + ab.y * ab.y) > 1e-8;
+      if (useX && !okX) useX = false;
+      if (!useX && !okZ) useX = true;
+    }
+    return useX ? { off: vx, dir: { x: 1, y: 0, z: 0 } } : { off: vz, dir: { x: 0, y: 0, z: 1 } };
+  }
+  // 長さ寸法の起票フィールド：寸法線の向き(dimFixDir)と基準点(dimFixPt＝2点の中点)を固定（リニア寸法と同じ表現）
+  function linearFixFields(a, b, dd) {
+    const dn = new V3(dd.x, dd.y, dd.z);
+    if (dn.lengthSq() > 1e-9) dn.normalize(); else dn.set(0, 1, 0);
+    const u = b.clone().sub(a); u.addScaledVector(dn, -u.dot(dn));
+    if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
+    const m = a.clone().add(b).multiplyScalar(0.5);
+    return { dimFixDir: { x: u.x, y: u.y, z: u.z }, dimFixPt: { x: m.x, y: m.y, z: m.z } };
   }
   // 新規寸法の値が既存の値と重なる時だけ、逃げ側へ1段ずつ積んで自動回避（新規作成時のみ。既存は動かさない）
   // 判定は「画面上の見た目」で行う：facing更新後の実表示位置・実表示サイズ（×k）を画面へ投影して比較する
@@ -7155,6 +7199,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function commitDimWithOffset() {                      // 3回目クリック＝逃げを確定して寸法線を作る
     const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
     const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff || 0, dimDir: drawState.dimDir || null });
+    if (dimKind === 'linear' && st.dimDir) Object.assign(st, linearFixFields(a, b, st.dimDir));   // 長さ寸法＝軸固定で起票
     addAnnotation('dim', a, b, st);
     const rec = annStore[annStore.length - 1];
     autoShiftDimText(rec);                              // 既存の値と重なるなら値を1段ずつ上へ逃がす
@@ -7416,6 +7461,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (r) { drawState.dimOff = r.off; drawState.dimDir = r.dir; }
       clearPreview();
       const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff, dimDir: drawState.dimDir });
+      if (dimKind === 'linear' && drawState.dimDir) Object.assign(st, linearFixFields(a, b, drawState.dimDir));   // 長さ寸法＝プレビューも軸固定
       drawState.preview = buildAnn('dim', a, b, st);
       drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; });
       annGroup.add(drawState.preview);
@@ -7683,6 +7729,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return n;
   };
   window.__annXptsRefresh = updateXlinePts;   // ファイル読込で構築線を隠した時の交点更新用
+  // 直近に作った注釈の内容（読み取り専用・e2e検証用）
+  window.__annLast = () => {
+    const r = annStore[annStore.length - 1]; if (!r) return null;
+    return { type: r.type, kind: (r.style && r.style.dimKind) || null, style: JSON.parse(JSON.stringify(r.style || {})),
+             a: [r.a.x, r.a.y, r.a.z], b: [r.b.x, r.b.y, r.b.z],
+             measured: r.type === 'dim' ? dimMeasuredStr(r.a, r.b, r.style) : null };
+  };
   // ---- プロパティパネル用（単一選択の注釈の値の取得・適用。2026-07-18 社長要望） ----
   window.__annPropsGet = () => {
     if (selAnns.size !== 1 || !lineSel) return null;
@@ -8828,14 +8881,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (btn) btn.classList.toggle('active', open);
       try { localStorage.setItem('p3d_props_open', open ? '1' : '0'); } catch (e) {}
       if (open) { sig = null; render(); }
-      // 位置を動かしたことが無ければ画面中央に出す（2026-07-19 社長要望。ドラッグ後は従来どおりその位置を記憶）
-      if (open) {
-        let saved = null; try { saved = localStorage.getItem('p3d_props_pos'); } catch (e) {}
-        if (!saved) {
-          const w = panel.offsetWidth || 248, h = panel.offsetHeight || 320;
-          applyPos((window.innerWidth - w) / 2, (window.innerHeight - h) / 2);
-        }
+    }
+    // 位置を動かしたことが無ければ、初めて表示される時に画面中央へ（2026-07-19 社長要望。ドラッグ後は位置を記憶）
+    let centered = false;
+    function centerIfFresh() {
+      if (centered) return;
+      let saved = null; try { saved = localStorage.getItem('p3d_props_pos'); } catch (e) {}
+      if (!saved) {
+        const w = panel.offsetWidth || 248, h = panel.offsetHeight || 320;
+        applyPos((window.innerWidth - w) / 2, (window.innerHeight - h) / 2);
       }
+      centered = true;
     }
     if (btn) btn.onclick = () => setOpen(!open);
     const closeBtn = document.getElementById('ppClose');
@@ -9007,7 +9063,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     function buildAnnProps(a) {
       const label = a.type === 'line' ? '線分' : a.type === 'xline' ? '構築線' : a.type === 'circle' ? '円'
-        : a.kind === 'text' ? '文字' : '寸法' + (a.kind && a.kind !== 'parallel' ? `（${a.kind}）` : '');
+        : a.kind === 'text' ? '文字' : '寸法' + (a.kind && a.kind !== 'parallel' ? `（${DIM_KIND_LABEL[a.kind] || a.kind}）` : '');
       sec(label);
       const setPt = (key, axis, v) => { const g = window.__annPropsGet(); if (!g) return; const arr = g[key]; arr['xyz'.indexOf(axis)] = v / 1000; window.__annPropsSet({ [key]: arr }); };
       const getPt = (key, axis) => { const g = window.__annPropsGet(); return g ? mmv(g[key]['xyz'.indexOf(axis)]) : 0; };
@@ -9073,19 +9129,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     function render() {
       if (!open) return;
       const info = selInfo();
+      // 何も選択していない時はパネル自体を出さない（2026-07-19 社長要望）。選択したら再表示（トグルはONのまま）
+      panel.style.display = info.kind === 'none' ? 'none' : 'flex';
       const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid + partHeightLabel(info.p) : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0));
       if (s === sig) {   // 選択が同じ＝値だけ追従（編集中の欄は上書きしない）
         for (const f of fields) {
           if (f.ro) { const v = String(f.get()); if (f.ro.textContent !== v) f.ro.textContent = v; }
           else if (f.inp && document.activeElement !== f.inp) { const v = String(f.get()); if (f.inp.value !== v) f.inp.value = v; }
         }
+        if (info.kind !== 'none') centerIfFresh();
         return;
       }
       sig = s; fields = []; body.innerHTML = '';
-      if (info.kind === 'none') note('オブジェクト（部品・線・寸法など）を選択すると、ここに値が表示されます。');
-      else if (info.kind === 'multi') { sec('複数選択'); roRow('選択数', () => (selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0)) + ' 個'); note('個別の値の編集は1つだけ選択してください。まとめての移動・複製・非表示などはリボンから。'); }
+      if (info.kind === 'none') return;   // 選択なし＝説明も出さない（パネルは上でdisplay:none済み）
+      if (info.kind === 'multi') { sec('複数選択'); roRow('選択数', () => (selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0)) + ' 個'); note('個別の値の編集は1つだけ選択してください。まとめての移動・複製・非表示などはリボンから。'); }
       else if (info.kind === 'part') buildPart(info.p);
       else buildAnnProps(info.a);
+      centerIfFresh();
     }
     window.__propsRefresh = render;
     if (open) setOpen(true);
@@ -9223,6 +9283,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
   // ---- 寸法の種別メニュー（リボン「寸法」を右クリックで開く：平行/角度/半径/直径/引出） ----
   const DIM_KINDS = [
+    ['linear',   '長さ', '水平/垂直の距離'],
     ['parallel', '平行', '2点間の距離'],
     ['angle',    '角度', '水平からの傾き'],
     ['radius',   '半径', '中心→縁＝R'],
@@ -9238,7 +9299,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     dimKindMenu.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === dimKind));
   }
   function updateDimBtnTitle() {
-    const b = $('cmdDim'); if (b) b.title = `寸法：${DIM_KIND_LABEL[dimKind] || '平行'}（右クリックで 平行/角度/半径/直径/引出 を選択）`;
+    const b = $('cmdDim'); if (b) b.title = `寸法：${DIM_KIND_LABEL[dimKind] || '長さ'}（右クリックで 長さ/平行/角度/半径/直径/引出 を選択）`;
   }
   function closeDimKindMenu() { dimKindMenu.style.display = 'none'; }
   function openDimKindMenu(ax, atop) {
