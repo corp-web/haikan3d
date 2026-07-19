@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-A';
+const APP_VER = 'v0720-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -32,10 +32,11 @@ vp.appendChild(renderer.domElement);
 // ---- シーン ----
 const scene = new THREE.Scene();
 // 統一カラーモード（2026-07-19 社長決定：ダーク/ホワイト切替を廃止し、昼夜・屋内外で共通に見やすい
-// CAD標準風の中間グレー1本に統一。UIパネルは従来のダーク調のまま）
-const BG_COLOR = 0x878d95;
+// CAD標準風の中間グレー1本に統一。UIパネルも明るい配色＝背景と調和（2026-07-20 社長要望））
+const BG_COLOR = 0x9298a1;
 scene.background = new THREE.Color(BG_COLOR);
 scene.fog = new THREE.Fog(BG_COLOR, 18, 60);
+document.body.classList.add('light');   // UIは明るい配色で固定（旧ホワイトモードのUIスタイルを常時適用）
 
 // ---- カメラ ----
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -71,8 +72,8 @@ function syncOrtho() {
 }
 
 // ---- ライト（2026-07-19 社長要望：全体を明るく・立体感を強く） ----
-scene.add(new THREE.AmbientLight(0xffffff, 0.42));
-scene.add(new THREE.HemisphereLight(0xf2f6ff, 0x39414f, 0.55));   // 空/地の自然グラデ＝面の向きで明るさが変わる
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+scene.add(new THREE.HemisphereLight(0xf2f6ff, 0x434b59, 0.6));   // 空/地の自然グラデ＝面の向きで明るさが変わる
 const key = new THREE.DirectionalLight(0xffffff, 1.05);
 key.position.set(8, 12, 6); scene.add(key);
 const fill = new THREE.DirectionalLight(0x88aaff, 0.3);
@@ -90,7 +91,7 @@ function buildGrid(c1, c2) {
   grid.material.opacity = 0.6; grid.material.transparent = true;
   modelGroup.add(grid);
 }
-buildGrid(0x6d747e, 0x9aa1aa);   // 統一グレー背景用のグリッド（濃線/淡線）
+buildGrid(0x777f89, 0xa4aab3);   // 統一グレー背景用のグリッド（濃線/淡線）
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
 let showGround = true;
@@ -119,7 +120,7 @@ function buildGround(fillC, rimC) {
   groundGroup.visible = showGround;
   modelGroup.add(groundGroup);
 }
-buildGround(0xa4abb5, 0x666e7c);   // 統一グレー背景より一段明るいスラブ＋濃い縁取り
+buildGround(0xafb5be, 0x6f7784);   // 統一グレー背景より一段明るいスラブ＋濃い縁取り
 function applyGround() {
   if (groundGroup) groundGroup.visible = showGround;
   try { localStorage.setItem('p3d_show_ground', showGround ? '1' : '0'); } catch (e) {}
@@ -6063,10 +6064,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const cv = document.createElement('canvas');
     cv.width = tw + pad * 2; cv.height = fs + pad * 2 + extra;
     const c = cv.getContext('2d');
-    // 背景マスク：数字の背面に不透明の下地を敷き、線や他の値が突き抜けて読めなくなるのを防ぐ
-    // （寸法値のみ。文字注釈は noMask）。色＝画面の背景色、印刷スナップショット中は白。
-    if (!(opt && opt.noMask)) {
-      c.fillStyle = _dimMaskPrint ? '#ffffff' : '#878d95';   // 統一グレー背景と同色のマスク
+    // 背景マスク：画面では透明（2026-07-20 社長要望「四角い枠を透明に」）。
+    // 印刷スナップショット中だけ白の下地＝紙で線が値を突き抜けないように従来どおり。
+    if (!(opt && opt.noMask) && _dimMaskPrint) {
+      c.fillStyle = '#ffffff';
       c.fillRect(0, 0, cv.width, cv.height);
     }
     if (deco === 'box') { c.strokeStyle = col; c.lineWidth = 3; c.strokeRect(1.5, 1.5, cv.width - 3, cv.height - 3); }
@@ -7460,6 +7461,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const ang = drawState.angle;
       const placing = ang && ang.V;
       if (placing) {                                    // 確定クリック（円弧位置で確定）
+        if (e.pointerType !== 'mouse') {                // タッチ＝押しただけでは確定しない：ドラッグで方向・逃げを調整し、タップで確定
+          drawDown = { x: e.clientX, y: e.clientY, touch: true, angPlace: true };   //（2026-07-20 社長報告「2つ目選択で確定してしまう」対策）
+          e.stopImmediatePropagation();
+          return;
+        }
         const r = angleDimFrom(ang, e.clientX, e.clientY);
         if (r) addAnnotation('dim', r.a, r.b, r.st);
         cancelDraw();                                   // ツールを抜ける（clearDrawTempでプレビュー消去・緑ハイライト復元・状態解除）
@@ -7576,12 +7582,20 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
     }
     if (!drawDown) return;
-    const touch = drawDown.touch, dimAdj = drawDown.dimAdj, armed = drawDown.armed;
+    const touch = drawDown.touch, dimAdj = drawDown.dimAdj, armed = drawDown.armed, angPlace = drawDown.angPlace;
     const moved = Math.hypot(e.clientX - drawDown.x, e.clientY - drawDown.y);
     drawDown = null;
     e.stopImmediatePropagation();
     if (touch) {                                        // タッチ/ペン
       if (moved > TAP_MOVE) return;                     // ドラッグ＝位置決めのみ。十字カーソルは離した所に残り、まだ確定しない
+      if (angPlace) {                                   // 角度寸法：タップ＝この位置（方向・逃げ）で確定。ドラッグ後は止まった位置で
+        const px = drawParked ? drawParked.x : e.clientX, py = drawParked ? drawParked.y : e.clientY;
+        const ang2 = drawState.angle;
+        if (ang2 && ang2.V) { const r = angleDimFrom(ang2, px, py); if (r) addAnnotation('dim', r.a, r.b, r.st); }
+        drawParked = null;
+        cancelDraw();
+        return;
+      }
       if (dimAdj) { commitDimWithOffset(); return; }    // タップ＝寸法の逃げをこの位置で確定
       placeTouchPoint(e);                               // タップ＝1点目／2点目を確定
       return;
