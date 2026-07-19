@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-H';
+const APP_VER = 'v0720-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -38,13 +38,13 @@ scene.background = (() => {
   const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
   const c = cv.getContext('2d');
   const gr = c.createLinearGradient(0, 0, 0, 256);
-  gr.addColorStop(0, '#edf3fb');     // 上（空）＝明るさそのまま青みを強めに（2026-07-20 社長指示）
-  gr.addColorStop(0.55, '#ccd6e4');  // 中間
-  gr.addColorStop(1, '#b3bcca');     // 下（足元）
+  gr.addColorStop(0, '#9ec9ef');     // 上＝スカイブルー（2026-07-20 社長要望。実際の空と同じ「上ほど青い」）
+  gr.addColorStop(0.55, '#d3e2f2');  // 地平線近く＝白っぽく霞む
+  gr.addColorStop(1, '#b6bfca');     // 足元＝青みグレー（地面と馴染む）
   c.fillStyle = gr; c.fillRect(0, 0, 2, 256);
   return new THREE.CanvasTexture(cv);
 })();
-scene.fog = new THREE.Fog(0xccd6e4, 18, 60);   // フォグは中間トーンに合わせる
+scene.fog = new THREE.Fog(0xd3e2f2, 18, 60);   // フォグは地平線の霞色に合わせる
 document.body.classList.add('light');   // UIは明るい配色で固定（旧ホワイトモードのUIスタイルを常時適用）
 
 // ---- カメラ ----
