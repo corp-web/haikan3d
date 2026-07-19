@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-V';
+const APP_VER = 'v0719-W';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3274,13 +3274,17 @@ function pipeRotateSpinStart(shift) {
   const part = selectedPart; if (!isSpinRotPart(part)) return false;
   const { pivot, dirRef } = partRotPivotDir(part);
   let axis;
+  let baseDeg = 0;   // スピナーの初期表示角（プロパティの「回転」と同じ絶対角。2026-07-19 社長要望）
   if (part.userData.partType === 'flange' || part.userData.partType === 'gasket') {   // フランジ・ガスケットは従来の向き/ひねりと同じ軸で連続回転
-    if (shift) axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // ひねり送り＝フェイス法線(ローカル+Y)
+    if (shift) {
+      axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // ひねり送り＝フェイス法線(ローカル+Y)
+      if (window.__partFaceRoll) baseDeg = window.__partFaceRoll(part);   // 回転（フェイス軸まわり）＝プロパティの角度から開始
+    }
     else { const di = part.userData.orient || 0; axis = (di < DIR_COUNT / 2) ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0); }   // 向き送り＝方向リング軸(世界Z or X)
   } else {
     axis = partRotAxis(part, shift, dirRef);   // パイプ・エルボ・キャップは線分式／ティーのShiftは端面(本管軸)まわり
   }
-  _pipeSpin = { part, pivot: pivot.clone(), axis: axis.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone() };
+  _pipeSpin = { part, pivot: pivot.clone(), axis: axis.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg };
   return true;
 }
 function pipeRotateSpinApply(deg) {
@@ -4423,6 +4427,8 @@ function clearRLong() { if (rLongTimer) { clearTimeout(rLongTimer); rLongTimer =
 // 角度スピナーの対象を「選択中パイプ」か「選択中の線」に振り分ける
 function pipeRotTarget() { return isSpinRotPart(selectedPart); }   // 長押しスピナーの対象（パイプ・エルボ・フランジ）
 function rotSpinStart(shift) { return pipeRotTarget() ? pipeRotateSpinStart(shift) : !!(window.__annRotateSpinStart && window.__annRotateSpinStart(shift)); }
+// スピナーの初期表示角（絶対角で表示する部品＝フランジ等の回転。無ければ0＝従来の相対表示）
+function rotSpinBaseDeg() { return (pipeRotateSpinActive() && _pipeSpin.baseDeg) || 0; }
 function rotSpinApply(deg) { if (pipeRotateSpinActive()) pipeRotateSpinApply(deg); else if (window.__annRotateSpinApply) window.__annRotateSpinApply(deg); }
 function rotSpinEnd() { if (pipeRotateSpinActive()) pipeRotateSpinEnd(); else if (window.__annRotateSpinEnd) window.__annRotateSpinEnd(); }
 function rotSpinCancel() { if (pipeRotateSpinActive()) pipeRotateSpinCancel(); else if (window.__annRotateSpinCancel) window.__annRotateSpinCancel(); }
@@ -4447,7 +4453,7 @@ function nudgeApply(v) {
   else if (_nudgeMode === 'dimoff') { if (window.__dimOffSpinApply) window.__dimOffSpinApply(v); }
   else if (_nudgeMode === 'dimskew') { if (window.__dimSkewSpinApply) window.__dimSkewSpinApply(v); }
   else if (_nudgeMode === 'dimroll') { if (window.__dimRollSpinApply) window.__dimRollSpinApply(v); }
-  else rotSpinApply(v);
+  else rotSpinApply(v - rotSpinBaseDeg());   // 絶対角表示（フランジの回転等）＝初期角との差分だけ回す
 }
 function nudgeActive() {
   if (_nudgeMode === 'move') return !!(window.__annMoveSpinActive && window.__annMoveSpinActive());
@@ -4556,7 +4562,8 @@ function startRotSpin(shift, cx, cy, noKbd) {
   if (!ok) { _nudgeMode = 'angle'; return; }
   _spinNoKbd = !!noKbd;   // タッチ起動＝キーボードを出さず▲▼で操作（3D画面タップで確定）
   setNudgeLabel();
-  rotAInput.value = _nudgeMode === 'heading' ? (window.__annHeadingSpinStartDeg ? window.__annHeadingSpinStartDeg().toFixed(1) : '0') : '0';
+  rotAInput.value = _nudgeMode === 'heading' ? (window.__annHeadingSpinStartDeg ? window.__annHeadingSpinStartDeg().toFixed(1) : '0')
+    : (rotSpinBaseDeg() ? String(rotSpinBaseDeg()) : '0');   // フランジ等の回転＝プロパティの角度から開始（2026-07-19 社長要望）
   positionRotForm(cx, cy);
   rotForm.style.display = 'flex';
   if (!_spinNoKbd) focusSelectAll(rotAInput);
@@ -9192,6 +9199,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const d = ((v - faceRoll(p)) % 360) * Math.PI / 180;
       rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(faceN(p), d));
     };
+    window.__partFaceRoll = faceRoll;   // 回転スピナーの初期角（プロパティの「回転」と同じ値から開始）用
     const setFaceElev = (p, v) => {
       const n = faceN(p);
       const phi0 = Math.asin(Math.max(-1, Math.min(1, n.y)));
@@ -9226,7 +9234,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
       sec('その他');
       edRow('材質', { type: 'text', get: () => u.mat || '', set: v => { u.mat = String(v).trim(); refreshItemList(); } });
-      note('方角＝北(後Z−)・東(右X+)・南(前Z+)・西(左X−)、方位角＝北0°から時計回り。立面角+90°=上向き。回転＝フェイス軸まわり（旧ひねり・ボルト穴合わせ等）。仕様は左のパレットで変更。');
     }
     function buildAnnProps(a) {
       const label = a.type === 'line' ? '線分' : a.type === 'xline' ? '構築線' : a.type === 'circle' ? '円'
@@ -9279,7 +9286,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         sec('向き（面）');
         edRow('方位角', { get: () => (gC() || {}).cAz || 0, set: v => window.__annPropsSet({ cAz: v }), unit: '°', step: 1 });
         edRow('立面角', { get: () => (gC() || {}).cEl || 0, set: v => window.__annPropsSet({ cEl: v }), unit: '°', step: 1 });
-        note('立面角90°＝水平に置いた円（面が上向き）・0°＝立てた円（方位角＝立てた面の向き。北0°から時計回り）。真円はX半径とZ半径を同じ値に。');
       } else if (a.kind === 'text') {
         edRow('内容', { type: 'text', get: () => (window.__annPropsGet() || {}).text || '', set: v => window.__annPropsSet({ text: String(v) }) });
         edRow('回転', { get: () => (window.__annPropsGet() || {}).textRot || 0, set: v => window.__annPropsSet({ textRot: v }), unit: '°', step: 1 });
@@ -9292,7 +9298,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         edRow('値(上書き)', { type: 'text', get: () => (window.__annPropsGet() || {}).dimText || '', set: v => window.__annPropsSet({ dimText: String(v) }) });
         if (a.dimOff != null) edRow('逃げ', { get: () => { const g = window.__annPropsGet(); return g ? Math.round((g.dimOff || 0) * 1000) : 0; }, set: v => window.__annPropsSet({ dimOff: v / 1000 }), unit: 'mm', step: 1 });
         if (a.dimOff != null) edRow('スライド角', { get: () => (window.__annPropsGet() || {}).dimSkew || 0, set: v => window.__annPropsSet({ dimSkew: Math.max(-80, Math.min(80, v)) }), unit: '°', step: 1 });
-        note('実測値を変えると測定点（2点目）が動きます。値(上書き)は表示だけを差し替え、空にすると実測値の表示に戻ります。モデル空間の値編集（ダブルタップ）＝数値なら実測値の変更・文字なら上書き。');
       }
     }
     function render() {
@@ -9322,9 +9327,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
             if (window.__annHasSel && window.__annHasSel() && window.__annMoveStart) { window.__annMoveStart(); window.__annMoveApply(0, dy, 0); window.__annMoveEnd(); }
             _idleSig = null; updateForm();
           }, unit: 'mm', step: 1 });
-          note('EL(起点)＝起点（主選択）部品の高さ。値を変えると選択中の全アイテムがまとめて上下します。個別の値の編集は1つだけ選択してください。');
-        } else {
-          note('個別の値の編集は1つだけ選択してください。まとめての移動・複製・非表示などはリボンから。');
         }
       }
       else if (info.kind === 'part') buildPart(info.p);
@@ -9424,6 +9426,43 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.addEventListener('keydown', e => {
     if (e.key === 'Escape' && helpPanel.style.display === 'flex') setHelp(false);
   });
+  // ---- ヘルプ＝項目（h3）ごとに折りたたみ＋キーワード検索（2026-07-19 社長要望） ----
+  (function helpAccordion() {
+    const body = helpPanel && helpPanel.querySelector('.hp-body');
+    if (!body) return;
+    const sBox = document.createElement('input');
+    sBox.id = 'helpSearch'; sBox.type = 'search';
+    sBox.placeholder = 'キーワード検索（例：寸法 スナップ 印刷）';
+    body.prepend(sBox);
+    // h3ごとに<details>（折りたたみ）へ包み直す。既定＝すべてたたむ
+    const secs = [];
+    for (const h of [...body.querySelectorAll('h3')]) {
+      const det = document.createElement('details');
+      const sum = document.createElement('summary');
+      sum.textContent = h.textContent;
+      det.appendChild(sum);
+      let n = h.nextSibling;
+      while (n && !(n.nodeType === 1 && n.tagName === 'H3')) { const nx = n.nextSibling; det.appendChild(n); n = nx; }
+      h.replaceWith(det);
+      secs.push(det);
+    }
+    // 検索＝スペース区切りのAND。ヒットした行(li)だけ表示し、その項目を開く。空欄＝全部たたんで全行表示
+    sBox.addEventListener('input', () => {
+      const terms = sBox.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      for (const det of secs) {
+        const titleHit = terms.length && terms.every(w => det.querySelector('summary').textContent.toLowerCase().includes(w));
+        let secHit = titleHit;
+        for (const li of det.querySelectorAll('li')) {
+          const hit = !terms.length || titleHit || terms.every(w => li.textContent.toLowerCase().includes(w));
+          li.style.display = hit ? '' : 'none';
+          if (hit && terms.length) secHit = true;
+        }
+        det.style.display = (!terms.length || secHit) ? '' : 'none';
+        det.open = terms.length ? secHit : false;
+      }
+    });
+    sBox.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); sBox.blur(); } });   // Escはヘルプを閉じずに検索欄だけ抜ける
+  })();
 
   // ===================================================================
   //  既定書式メニュー（リボンの 線分/構築線/寸法線 アイコンを右クリックで開く）
