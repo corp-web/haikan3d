@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-X';
+const APP_VER = 'v0719-Y';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2842,6 +2842,14 @@ function gripLocalOf(obj) {
     return pipeEndSel === 'back' ? obj.userData.backLocal : obj.userData.faceLocal;
   return obj.userData.gripLocal || obj.userData.faceLocal;
 }
+// 回転（45°送り・スピナー・方位角/立面角/回転の編集）の基準に使う機点：
+// ボルト穴（boltLocals）が起点でも回転はフェイス中心基準＝穴を中心に振り回さない（2026-07-19 社長報告）
+function rotGripLocalOf(obj) {
+  const g = gripLocalOf(obj);
+  const bl = obj.userData.boltLocals;
+  if (g && bl && bl.some(b => b === g || b.distanceTo(g) < 1e-9)) return obj.userData.faceLocal || g;
+  return g;
+}
 // カーソル近傍(画面SNAP_PX)にある obj 自身の機点ローカルを返す。無ければ null。
 function nearestConnLocal(part, clientX, clientY) {
   const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
@@ -3147,7 +3155,8 @@ function stepFreePose(p, shift) {
 // 移動中：右クリック＝方向送り、Shift+右クリック＝回転（旧ひねり）切替。起点は保つ。
 function cycleMoveOrientation(shift) {
   if (!movingPart) return;
-  const keep = originModelPos(movingPart);
+  const kl = rotGripLocalOf(movingPart);   // ボルト穴起点でも回転はフェイス中心基準
+  const kw = connModelPos(movingPart, kl);
   if (!poseNearTable(movingPart, movingOrient, movingRoll)) {
     stepFreePose(movingPart, shift);
   } else {
@@ -3155,14 +3164,15 @@ function cycleMoveOrientation(shift) {
     else movingOrient = (movingOrient + 1) % DIR_COUNT;
     orientRotation(movingPart, movingOrient, movingRoll);
   }
-  setPartByOrigin(movingPart, keep);
+  movingPart.position.add(kw.sub(connModelPos(movingPart, kl)));
   showInteractionMarkers(movingPart, null);
 }
 // 配置済み（選択中）：右クリック＝方向送り、Shift+右クリック＝ひねり切替。起点は保つ。
 function cycleSelectedOrientation(shift) {
   const p = selectedPart;
   if (!p || !p.userData.faceLocal) return;
-  const keep = originModelPos(p);
+  const kl = rotGripLocalOf(p);       // ボルト穴起点でも回転はフェイス中心基準（穴を中心に振り回さない）
+  const kw = connModelPos(p, kl);
   if (!poseNearTable(p, p.userData.orient || 0, p.userData.roll || 0)) {
     stepFreePose(p, shift);           // 自由回転済み＝今の姿勢から45°（テーブルへ巻き戻さない）
   } else {
@@ -3170,7 +3180,7 @@ function cycleSelectedOrientation(shift) {
     else p.userData.orient = ((p.userData.orient || 0) + 1) % DIR_COUNT;
     orientRotation(p, p.userData.orient || 0, p.userData.roll || 0);
   }
-  setPartByOrigin(p, keep);
+  p.position.add(kw.sub(connModelPos(p, kl)));   // 基準機点をその場に保つ
   _idleSig = null;                    // パイプ端マーカー等を更新
   updateForm();                       // 向きでCOP↔ELが変わるのでラベル更新
 }
@@ -3205,7 +3215,7 @@ function rotShift(part, shift) { return is180Elbow(part) ? !shift : shift; }
 function partRotPivotDir(part) {     // {pivot, dirRef}：起点（grip）の位置と、起点→最も離れた機点の向き
   const gl = (part.userData.partType === 'pipe')
     ? ((pipeEndSel === 'back') ? part.userData.backLocal : part.userData.faceLocal)
-    : gripLocalOf(part);
+    : rotGripLocalOf(part);   // ボルト穴起点でも回転はフェイス中心基準
   const pivot = connModelPos(part, gl);
   let dirRef = new THREE.Vector3(1, 0, 0), best = -1;
   for (const local of connsOf(part)) {
@@ -7423,10 +7433,40 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const ed = pickAngleEdge(e.clientX, e.clientY);
         if (ed && ed.obj !== ang.lines[0]) {
           ang.lines.push(ed.obj); ang.ends.push(ed.ends); markEdge(ed);
-          const e0 = ang.ends[0], e1 = ang.ends[1];
-          ang.V = lineLineClosest(e0[0], e0[1], e1[0], e1[1]);
-          ang.u1 = e0[1].clone().sub(e0[0]).normalize();
-          ang.u2 = e1[1].clone().sub(e1[0]).normalize();
+          const isP = [!!(ang.lines[0].isObject3D && ang.lines[0].userData && ang.lines[0].userData.placed), !!ed.part];
+          let done = false;
+          if (isP[0] !== isP[1]) {
+            // 部品×線分＝フェイス面基準の角度（面に対して89°/91°等が測れる。2026-07-19 社長要望）。
+            // 部品側の方向＝線の向きをフェイス面へ投影した面内方向・頂点＝線とフェイス面の交点。
+            // 面と線の角度＝90°−(軸との角度)。カーソルの側で 89°/91°（θ/180−θ）を選べる。
+            const pi = isP[0] ? 0 : 1, li = 1 - pi;
+            const pe = ang.ends[pi], le = ang.ends[li];
+            const n = pe[1].clone().sub(pe[0]);           // 背面→フェイス＝面の法線
+            const lv = le[1].clone().sub(le[0]);
+            if (n.lengthSq() > 1e-12 && lv.lengthSq() > 1e-12) {
+              n.normalize();
+              const dn = lv.dot(n);
+              const proj = lv.clone().addScaledVector(n, -dn);   // 線の向きの面内成分
+              if (proj.lengthSq() > 1e-10) {                     // 面に垂直な線＝面基準が定まらない→軸基準へ
+                const F = pe[1], L0 = le[0];
+                const V = Math.abs(dn) > 1e-9
+                  ? L0.clone().addScaledVector(lv, F.clone().sub(L0).dot(n) / dn)   // 線とフェイス面の交点
+                  : L0.clone().addScaledVector(n, -L0.clone().sub(F).dot(n));        // 平行＝線を面へ投影
+                const uP = proj.normalize(), uL = lv.clone().normalize();
+                ang.V = V;
+                ang.u1 = pi === 0 ? uP : uL;
+                ang.u2 = pi === 0 ? uL : uP;
+                ang.ends[pi] = [V.clone(), V.clone()];   // 面内方向には実線が無い＝補助線の重なり隠しは無効
+                done = true;
+              }
+            }
+          }
+          if (!done) {                                   // 線×線・部品×部品＝従来どおり（軸どうしの実角）
+            const e0 = ang.ends[0], e1 = ang.ends[1];
+            ang.V = lineLineClosest(e0[0], e0[1], e1[0], e1[1]);
+            ang.u1 = e0[1].clone().sub(e0[0]).normalize();
+            ang.u2 = e1[1].clone().sub(e1[0]).normalize();
+          }
         }
       }
       drawDown = null; e.stopImmediatePropagation();
@@ -9188,9 +9228,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return Math.abs(el) > 5 ? t + (el > 0 ? '・上り' : '・下り') : t;
     };
     const rotPartWorld = (p, q) => {
-      const keep = originModelPos(p).clone();
+      const kl = rotGripLocalOf(p);             // ボルト穴起点でも回転はフェイス中心基準
+      const kw = connModelPos(p, kl);
       p.quaternion.premultiply(q);
-      setPartByOrigin(p, keep);                 // 起点（grip）はその場に残す
+      p.position.add(kw.sub(connModelPos(p, kl)));   // 基準機点はその場に残す
       _idleSig = null;                           // 機点マーカーを強制再描画（起点だけのシグネチャでは回転が検知されない）
       if (selectedParts.has(p)) setEmissive(p, SEL_COLOR);
       updateForm();
