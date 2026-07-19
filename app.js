@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-R';
+const APP_VER = 'v0719-S';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7743,6 +7743,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return n;
   };
   window.__annXptsRefresh = updateXlinePts;   // ファイル読込で構築線を隠した時の交点更新用
+  // 直近に作った注釈を選択（e2e検証用）
+  window.__annSelectLast = () => { const r = annStore[annStore.length - 1]; if (r) selectLine(r); return !!r; };
   // 直近に作った注釈の内容（読み取り専用・e2e検証用）
   window.__annLast = () => {
     const r = annStore[annStore.length - 1]; if (!r) return null;
@@ -7766,6 +7768,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (r.type === 'dim' && st.dimKind !== 'text') {
       o.dimOff = st.dimOff || 0; o.dimSkew = st.dimSkew || 0;
       o.dimText = st.dimText || ''; o.meas = dimMeasuredStr(r.a, r.b, st);
+      const k = st.dimKind || 'parallel';
+      if (k !== 'angle' && k !== 'leader') {   // 実測値（mm・編集可）：長さ/リニアは軸直交成分、他は2点間距離
+        if (st.dimFixDir && st.dimDir) {
+          const dn = new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z);
+          if (dn.lengthSq() > 1e-9) { dn.normalize(); const ab = r.b.clone().sub(r.a); o.measMm = Math.round(ab.addScaledVector(dn, -ab.dot(dn)).length() * 10000) / 10; }
+        }
+        if (o.measMm == null) o.measMm = Math.round(r.a.distanceTo(r.b) * 10000) / 10;
+      }
     }
     if (st.dimKind === 'text') { o.text = st.dimText || ''; o.textRot = st.textRot || 0; }
     return o;
@@ -7810,6 +7820,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         r.b.copy(r.a).addScaledVector(ax, circleRadii(r.style, r.a, r.b).rx);
       }
     }
+    if (patch.meas != null && r.type === 'dim') setDimMeasured(r, patch.meas);   // 実測値の変更＝測定点bを動かす（上書きは別行で管理＝そのまま）
     if (patch.dimOff != null) r.style.dimOff = patch.dimOff;
     if (patch.dimSkew != null) r.style.dimSkew = patch.dimSkew;
     if (patch.dimText !== undefined) r.style.dimText = (patch.dimText === '' || patch.dimText === dimMeasuredStr(r.a, r.b, r.style)) ? null : patch.dimText;
@@ -8140,6 +8151,37 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const ends = dimLineEnds(r.a, r.b, r.style);
     return ends ? ends.A2.clone().add(ends.B2).multiplyScalar(0.5) : r.a.clone().add(r.b).multiplyScalar(0.5);
   };
+  // ---- 実測値の変更（2026-07-19 社長要望）＝測定点を動かして実際の距離を入力値に合わせる ----
+  // a（1点目）は固定し、b（2点目）を動かす。角度・引出・文字は対象外（falseを返す）。rebuildは呼び出し側で。
+  function setDimMeasured(rec, mm) {
+    const L = mm / 1000;
+    if (!(L > 0) || rec.type !== 'dim') return false;
+    const st = rec.style || {}, kind = st.dimKind || 'parallel';
+    if (kind === 'angle' || kind === 'leader' || kind === 'text') return false;
+    const ab = rec.b.clone().sub(rec.a);
+    if (kind === 'diameter') {                    // 中心を保って両端をφ=Lへ
+      const C = rec.a.clone().add(rec.b).multiplyScalar(0.5);
+      const l = ab.length(); if (l < 1e-9) return false;
+      const u = ab.multiplyScalar(1 / l);
+      rec.a.copy(C).addScaledVector(u, -L / 2);
+      rec.b.copy(C).addScaledVector(u, L / 2);
+      return true;
+    }
+    if (st.dimFixDir && st.dimDir) {              // 長さ寸法・リニア寸法＝逃げ方向に垂直な成分だけをLへ（逃げ方向成分は保持）
+      const dn = new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z);
+      if (dn.lengthSq() < 1e-9) return false;
+      dn.normalize();
+      const t = ab.dot(dn);
+      const perp = ab.clone().addScaledVector(dn, -t);
+      const pl = perp.length(); if (pl < 1e-9) return false;
+      rec.b.copy(rec.a).addScaledVector(perp.multiplyScalar(1 / pl), L).addScaledVector(dn, t);
+      return true;
+    }
+    const l = ab.length(); if (l < 1e-9) return false;   // 平行・半径＝bを同方向でLへ
+    rec.b.copy(rec.a).addScaledVector(ab.multiplyScalar(1 / l), L);
+    return true;
+  }
+  const DIM_MEAS_RE = /^[0-9]+(\.[0-9]+)?$/;      // 実測値として受ける入力＝正の数値のみ（それ以外は上書き文字）
   // ---- 寸法の「値」上書き（任意の値）。単独選択中の寸法線に対して hForm（値欄）で入力 ----
   window.__dimValueSel = () => (selAnns.size === 1 && lineSel && lineSel.type === 'dim') ? lineSel : null;
   window.__dimValueGet = () => {
@@ -8148,8 +8190,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   window.__dimValueApply = (v) => {
     const r = window.__dimValueSel(); if (!r) return;
-    const meas = dimMeasuredStr(r.a, r.b, r.style);
     const s = String(v).trim();
+    // モデル空間での数値入力＝実測値の変更（測定点を動かす・2026-07-19 社長要望）。数値以外＝従来の上書き文字
+    if (DIM_MEAS_RE.test(s) && setDimMeasured(r, parseFloat(s))) {
+      r.style.dimText = null;                                // 実測を変えたら上書きは解除（実測がそのまま表示される）
+      rebuildAnn(r); refreshAnnHi(); refreshHandles();
+      if (typeof updateForm === 'function') updateForm();
+      return;
+    }
+    const meas = dimMeasuredStr(r.a, r.b, r.style);
     r.style.dimText = (s !== '' && s !== meas) ? s : null;   // 実測表示と同じ／空なら上書き解除
     rebuildAnn(r); refreshAnnHi();
   };
@@ -8180,20 +8229,33 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   dimValInput.style.cssText = 'width:96px;font:bold 12px Meiryo,sans-serif;color:#ff6a5a;background:#1a0e0e;border:1px solid #7a3030;border-radius:3px;padding:1px 4px';
   dimValForm.appendChild(dimValInput);
   document.body.appendChild(dimValForm);
-  const applyDimVal = () => {
+  const applyDimVal = (commit) => {
     const r = window.__dimValueSel(); if (!r) return;
-    const meas = dimMeasuredStr(r.a, r.b, r.style);
     const s = dimValInput.value.trim();
-    r.style.dimText = (s !== '' && s !== meas) ? s : null;   // 空欄 or 実測と同じ＝上書き解除（実測表示へ）
+    // モデル空間での数値入力＝実測値の変更（測定点bを動かす・2026-07-19 社長要望）。
+    // 入力途中（1→15→150…）で測定点が飛ばないよう、確定（Enter/フォーカス外し）時だけ適用する。
+    const st = r.style || {}, kind = st.dimKind || 'parallel';
+    const measurable = !(kind === 'angle' || kind === 'leader' || kind === 'text');
+    if (measurable && DIM_MEAS_RE.test(s)) {
+      if (commit && setDimMeasured(r, parseFloat(s))) {
+        r.style.dimText = null;                              // 実測を変えたら上書きは解除
+        rebuildAnn(r); refreshAnnHi(); refreshHandles();
+        if (typeof updateForm === 'function') updateForm();
+      }
+      return;                                                // 数値＝入力途中はまだ触らない
+    }
+    const meas = dimMeasuredStr(r.a, r.b, r.style);
+    r.style.dimText = (s !== '' && s !== meas) ? s : null;   // 数値以外＝従来の上書き（空欄 or 実測と同じ＝解除）
     rebuildAnn(r); refreshAnnHi();
   };
-  dimValInput.addEventListener('input', applyDimVal);
+  let dimValEsc = false;   // Esc＝取消（blurで確定させない）
+  dimValInput.addEventListener('input', () => applyDimVal(false));
   dimValInput.addEventListener('keydown', e => {
     e.stopPropagation();
-    if (e.key === 'Enter') { e.preventDefault(); applyDimVal(); dimValInput.blur(); }
-    else if (e.key === 'Escape') { e.preventDefault(); dimValInput.blur(); }
+    if (e.key === 'Enter') { e.preventDefault(); applyDimVal(true); dimValInput.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); dimValEsc = true; dimValInput.blur(); }
   });
-  dimValInput.addEventListener('blur', () => { dimValOpen = false; });   // 編集終了＝フォームを閉じる（以後はDelで削除可）
+  dimValInput.addEventListener('blur', () => { if (!dimValEsc) applyDimVal(true); dimValEsc = false; dimValOpen = false; });   // 確定＆編集終了（Esc＝取消。以後はDelで削除可）
   // 寸法の値（赤文字）の画面上の当たり判定。クリックされた寸法線レコードを返す
   function pickDimTextAt(cx, cy) {
     const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
@@ -9137,11 +9199,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         sec('配置点');
         for (const ax of 'xyz') edRow(ax.toUpperCase(), { get: () => getPt('a', ax), set: v => setPt('a', ax, v), unit: 'mm', step: 1 });
       } else {   // 寸法（平行/リニア/半径/直径/角度/引出）
-        roRow('実測値', () => (window.__annPropsGet() || {}).meas || '');
+        if ((window.__annPropsGet() || {}).measMm != null)   // 実測値＝編集可（測定点を動かして距離を変える。2026-07-19 社長要望）
+          edRow('実測値', { get: () => (window.__annPropsGet() || {}).measMm || 0, set: v => { if (v > 0) window.__annPropsSet({ meas: v }); }, unit: 'mm', step: 1 });
+        else roRow('実測値', () => (window.__annPropsGet() || {}).meas || '');   // 角度・引出＝読み取りのみ
         edRow('値(上書き)', { type: 'text', get: () => (window.__annPropsGet() || {}).dimText || '', set: v => window.__annPropsSet({ dimText: String(v) }) });
         if (a.dimOff != null) edRow('逃げ', { get: () => { const g = window.__annPropsGet(); return g ? Math.round((g.dimOff || 0) * 1000) : 0; }, set: v => window.__annPropsSet({ dimOff: v / 1000 }), unit: 'mm', step: 1 });
         if (a.dimOff != null) edRow('スライド角', { get: () => (window.__annPropsGet() || {}).dimSkew || 0, set: v => window.__annPropsSet({ dimSkew: Math.max(-80, Math.min(80, v)) }), unit: '°', step: 1 });
-        note('値(上書き)を空にすると実測値の表示に戻ります。測定点の付け替えは起点（足の先）をドラッグ。');
+        note('実測値を変えると測定点（2点目）が動きます。値(上書き)は表示だけを差し替え、空にすると実測値の表示に戻ります。モデル空間の値編集（ダブルタップ）＝数値なら実測値の変更・文字なら上書き。');
       }
     }
     function render() {
