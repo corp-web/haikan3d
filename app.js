@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-L';
+const APP_VER = 'v0720-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7387,7 +7387,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (window.__openDimValueForm) window.__openDimValueForm(false);
     if (window.__focusDimValueInput) window.__focusDimValueInput();
   }
-  function commitGuide() {                              // first→cur を確定し、確定待ち(locked)へ
+  function commitGuide() {                              // first→cur を確定
     const rec = commitGuideToStore();
     if (rec) {
       if (rec.type === 'xline') {                    // 構築線：ツールを抜けて選択 → まずEL入力(フォーカス済) → Enterで方位角 → Enterで閉じる
@@ -7396,7 +7396,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         focusElInputSoon();                          // EL欄へ即フォーカス（2026-06-13 社長指示：EL→角度の順）
       } else if (rec.type === 'circle') {             // 円：確定したら脚編集に入らず、その場で次の円を描けるようにする
         clearDrawTemp();
-      } else { drawState.editRec = rec; drawState.locked = true; clearPreview(); }
+      } else {                                        // 線分：構築線と同様に1本で終了して選択（連続では描かない・2026-07-20 社長指示）
+        cancelDraw();
+        selectLine(rec);
+      }
     }
     return rec;
   }
