@@ -9,7 +9,7 @@
       -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }   /* iPad長押しのコピー/検索メニュー・テキスト選択を無効化 */
   input, textarea { -webkit-touch-callout: default; -webkit-user-select: text; user-select: text; }   /* 値の入力欄だけは選択・編集できる */
   html, body { margin: 0; height: 100%; overflow: hidden;
-    font-family: "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif; background: #0d1326; }
+    font-family: "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif; background: #ccd6e4; }   /* 起動直後も統一カラー（旧ダーク#0d1326のフラッシュ防止） */
   #viewport { position: fixed; inset: 0; }
   #viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; }
   #toolbar { position: fixed; right: 10px; bottom: 10px; display: flex; gap: 8px; }
@@ -230,10 +230,13 @@
     border-bottom: 1px dashed #2c3a63; padding-bottom: 3px; }
   #helpPanel h3:first-child { margin-top: 2px; }
   #helpPanel ul { margin: 3px 0; padding-left: 18px; }
-  /* リボンボタン右上の種類バッジ（選択中の寸法種別・線種・文字色を常時表示） */
-  #ribbon button { position: relative; }
-  #ribbon button .kbadge { position: absolute; top: 1px; right: 2px; font-size: 8px; line-height: 1.25;
-    padding: 0 3px; border-radius: 3px; background: #1f6fd0; color: #fff; pointer-events: none; letter-spacing: 0; }
+  /* 長押しメニューの「選択中」を明確に：青地＋白字＋✓（ライトUIで旧スタイルの白文字が読めなかった対策） */
+  body.light #lineFmtMenu .fm-bt.on, body.light #dimKindMenu .dk-bt.on, body.light #textMenu .dk-bt.on {
+    background: #1f6fd0; border-color: #1f6fd0; color: #fff; }
+  body.light #dimKindMenu .dk-bt.on small, body.light #textMenu .dk-bt.on small,
+  body.light #lineFmtMenu .fm-bt.on small { color: #dbe8fb; }
+  #lineFmtMenu .fm-bt.on::before, #dimKindMenu .dk-bt.on::before, #textMenu .dk-bt.on::before { content: '✓ '; font-weight: 700; }
+  body.light #textMenu .tm-sw.on, body.light #lineFmtMenu .fm-sw.on { outline: 2px solid #1f6fd0; box-shadow: 0 0 0 3px rgba(31,111,208,.35); }
   #helpPanel #helpSearch { width: 100%; margin: 8px 0 10px; padding: 6px 10px; box-sizing: border-box;
     background: #0f1830; border: 1px solid #36436b; border-radius: 6px; color: #dbe4f3; font-size: 12.5px; }
   #helpPanel details { border-bottom: 1px solid #24304f; }
@@ -412,7 +415,7 @@
   body.light #hForm input, body.light #rotForm input, body.light .legBox input { background: #fff; color: #2a3550; border-color: #c4ccda; }
 </style>
 </head>
-<body>
+<body class="light">
   <!-- リボン（上部コマンドバー）：ファイル / 描画 / 編集 / 表示 -->
   <div id="ribbon">
     <div class="brand"><span class="dia">♦</span>配管3D</div><!-- 版数は app.js が動的に付与（再読込で毎回最新になる） -->

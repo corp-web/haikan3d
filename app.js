@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-K';
+const APP_VER = 'v0720-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -9658,17 +9658,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function markDimKindActive() {
     dimKindMenu.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === dimKind));
   }
-  // リボンボタン右上の小バッジ＝現在選択中の種類を常時表示（2026-07-20 社長「どれを選択したか分からない」）
-  function setKindBadge(id, text) {
-    const b = document.getElementById(id); if (!b) return;
-    let s = b.querySelector('.kbadge');
-    if (!s) { s = document.createElement('span'); s.className = 'kbadge'; b.appendChild(s); }
-    s.textContent = text;
-  }
-  const LTYPE_SHORT = { solid: '実', dashed: '破', dotted: '点', dashdot: '鎖', dashdotdot: '二鎖' };
   function updateDimBtnTitle() {
     const b = $('cmdDim'); if (b) b.title = `寸法：${DIM_KIND_LABEL[dimKind] || '長さ'}（右クリックで 長さ/平行/角度/半径/直径/引出 を選択）`;
-    setKindBadge('cmdDim', DIM_KIND_LABEL[dimKind] || '長さ');
   }
   function closeDimKindMenu() { dimKindMenu.style.display = 'none'; }
   function openDimKindMenu(ax, atop) {
@@ -9722,22 +9713,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (rec && rec.style) { if (rec.style.textColor != null) textOpts.color = rec.style.textColor; textOpts.deco = rec.style.textDeco || 'none'; }
     openTextMenu(x, y, true);
   };
-  function updateTextBadge() {
-    const hit = TEXT_COLORS.find(([, c]) => c === textOpts.color);
-    setKindBadge('cmdText', hit ? hit[0] : '');
-  }
   textMenu.addEventListener('click', e => {
     const cs = e.target.closest('[data-color]'); const ds = e.target.closest('[data-deco]');
     if (cs) textOpts.color = Number(cs.dataset.color);
     else if (ds) textOpts.deco = ds.dataset.deco;
     else return;
-    markTextActive(); updateTextBadge();
+    markTextActive();
     if (window.__applyTextFmtToSel) window.__applyTextFmtToSel(textOpts.color, textOpts.deco);   // 選択中の文字にも反映
   });
-  // 起動時＝現在の既定をバッジに反映（線分/円=一点鎖線・寸法=長さ・文字=青）
-  setKindBadge('cmdLine', LTYPE_SHORT[toolStyle.line.ltype] || '');
-  setKindBadge('cmdCircle', LTYPE_SHORT[toolStyle.circle.ltype] || '');
-  updateTextBadge();
 
   function maybeCloseFmtMenu() {
     let closed = false;
@@ -9748,11 +9731,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   function applyFmt(act, val) {
     const st = toolStyle[fmtToolType]; if (!st) return;
-    if (act === 'ltype') {
-      st.ltype = val; st.color = ltypeColor(val); st.width = 0.0006;   // 色は線種で決定・太さは極細固定
-      const btn = { line: 'cmdLine', circle: 'cmdCircle' }[fmtToolType];
-      if (btn) setKindBadge(btn, LTYPE_SHORT[val] || '');   // ボタンに選択中の線種を表示
-    }
+    if (act === 'ltype') { st.ltype = val; st.color = ltypeColor(val); st.width = 0.0006; }   // 色は線種で決定・太さは極細固定
     markFmtActive();
     // 選択中の同種オブジェクト（線分/円）にも反映＝再選択して書式変更
     let any = false;
