@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-O';
+const APP_VER = 'v0719-P';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7204,8 +7204,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
     } else {                                             // タップ2回目＝終点を確定
       const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
-      const r = pickSecondPoint(px, py, drawState.first, sh);
-      if (r.p && drawState.mode === 'xline') r.p.y = drawState.first.y;
+      const shx = (e.shiftKey || touchShift) && drawState.mode === 'xline';   // 構築線＋シフト＝鉛直（Y軸）の構築線（2026-07-19 社長要望）
+      const r = pickSecondPoint(px, py, drawState.first, sh || shx);
+      if (r.p && drawState.mode === 'xline') {
+        if (shx) { r.p.x = drawState.first.x; r.p.z = drawState.first.z; }   // 鉛直＝XZを起点に固定（方向は真上下のみ）
+        else r.p.y = drawState.first.y;
+      }
       if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
       if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
       else if (drawState.mode === 'dim') startDimAdjust();                    // 平行寸法は確定せず逃げ調整へ
@@ -7314,9 +7318,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);   // 円は脚三角形を出さない
       }
     } else {                                            // ①の2回目＝終点を現在位置に合わせる（離す時に確定）
-      const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし
-      const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
-      if (r.p && drawState.mode === 'xline') r.p.y = drawState.first.y;   // スナップ先のELにも引っ張られず水平を保つ
+      const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 円はShift勾配なし
+      const shx = (e.shiftKey || touchShift) && drawState.mode === 'xline';   // 構築線＋シフト＝鉛直（Y軸）の構築線（2026-07-19 社長要望）
+      const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh || shx);
+      if (r.p && drawState.mode === 'xline') {
+        if (shx) { r.p.x = drawState.first.x; r.p.z = drawState.first.z; }   // 鉛直＝XZを起点に固定
+        else r.p.y = drawState.first.y;   // 水平＝スナップ先のELにも引っ張られず水平を保つ
+      }
       if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
     }
     drawDown = { x: e.clientX, y: e.clientY, armed: !hadFirst };   // armed=この押下で起点を立てた
@@ -7421,11 +7429,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       else if (r.p && r.snapped) guideDot(r.p, 0x39ff8a, 0.0042);                                // マウスは従来どおり吸着印
       return;
     }
-    const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 構築線・円はShift勾配なし（常に水平）
-    const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh);
+    const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 円はShift勾配なし（常に水平）
+    const shx = (e.shiftKey || touchShift) && drawState.mode === 'xline';   // 構築線＋シフト＝鉛直（Y軸）の構築線
+    const r = pickSecondPoint(e.clientX, e.clientY, drawState.first, sh || shx);
     if (!r.p) return;
     showDrawSnapMarkers(r.snapped ? r.p : null);         // 2点目の位置決め中も機点マーカーを出す
-    if (drawState.mode === 'xline') r.p.y = drawState.first.y;
+    if (drawState.mode === 'xline') { if (shx) { r.p.x = drawState.first.x; r.p.z = drawState.first.z; } else r.p.y = drawState.first.y; }
     if (drawState.mode === 'circle') r.p.y = drawState.first.y;   // 半径点も中心の高さに合わせる（水平な円）
     drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped;
     clearPreview();
@@ -8795,10 +8804,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (e.key === 'Escape') { e.stopImmediatePropagation(); clearDrawTemp(); deselectLine(); }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.stopImmediatePropagation();
-      const i = annStore.indexOf(lineSel);
+      const rec = lineSel;
+      const i = annStore.indexOf(rec);
       if (i >= 0) annStore.splice(i, 1);
-      annGroup.remove(lineSel.obj); disposeObj(lineSel.obj);
+      annGroup.remove(rec.obj); disposeObj(rec.obj);
       clearDrawTemp(); deselectLine();
+      // 相手を失った交点を残さない（この単独Delete経路だけ引き直し漏れだった。2026-07-19 社長報告）
+      if (rec.type === 'xline' || rec.type === 'line') updateXlinePts();
     }
   }, true);
 
