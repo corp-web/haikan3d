@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-M';
+const APP_VER = 'v0720-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -103,8 +103,8 @@ function buildGrid(c1, c2) {
 buildGrid(0x848c96, 0xaeb4bd);   // グリッド＝地面と同系の青みグレー（濃線/淡線）
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
-let showGround = true;
-try { showGround = localStorage.getItem('p3d_show_ground') !== '0'; } catch (e) {}
+let showGround = false;   // 既定OFF（2026-07-20 社長指示。設定でONにすると記憶）
+try { showGround = localStorage.getItem('p3d_show_ground') === '1'; } catch (e) {}
 const GROUND_SIZE = 40;                 // 40m四方（20mグリッドより一回り広く）
 let groundGroup = null;
 function buildGround(fillC, rimC) {
@@ -306,7 +306,7 @@ const axisGizmo = {};
   const L = 1.0;                // 軸の長さ
   const dirs = [
     { d: new THREE.Vector3(1, 0, 0), c: 0xff5a5a, t: 'X' },   // 赤
-    { d: new THREE.Vector3(0, 1, 0), c: 0x5ad27a, t: 'Y' },   // 緑
+    { d: new THREE.Vector3(0, 1, 0), c: 0x00b23c, t: 'Y' },   // 緑（濃く＝明背景で見やすく・2026-07-20 社長）
     { d: new THREE.Vector3(0, 0, 1), c: 0x5a8aff, t: 'Z' },   // 青
   ];
   function label(text, color) {
@@ -4838,7 +4838,16 @@ function zoomStep(factor) {
   };
   bindOrientHold('tcOrient', false);
   bindOrientHold('tcTwist',  true);
-  bindHold('tcEsc',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })), false);
+  // 取消＝完全リセット（2026-07-20 社長指示：シフト・コントロール・コマンド選択も全部クリア）
+  // Escは段階的（スピナー→描画中の点→モード→選択）なので3回叩いて確実に空へ戻し、修飾トグルも消灯する
+  bindHold('tcEsc', () => {
+    for (let i = 0; i < 3; i++) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    touchShift = false; touchCtrl = false;
+    const bs = document.getElementById('tcShift'), bc = document.getElementById('tcCtrl');
+    if (bs) bs.classList.remove('on');
+    if (bc) bc.classList.remove('on');
+    if (window.__syncTouchOrbit) window.__syncTouchOrbit();
+  }, false);
   bindHold('tcDel',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })), false);
   // Shift／Ctrl＝タッチ用の仮想モディファイア（PCのShift/Ctrl押下と同じ挙動を再現するトグル）
   const bindMod = (id, get, set, after) => {
@@ -7843,8 +7852,30 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       o.material.color.setHex(on ? onCol : (o.userData.baseColor != null ? o.userData.baseColor : fallback));
     });
   }
-  function refreshAnnHi() { for (const rec of annStore) paintAnn(rec, selAnns.has(rec)); }
-  function clearAnnHi() { for (const rec of annStore) paintAnn(rec, false); }
+  // 選択中の線分・構築線には太い半透明ハロー（青の帯）を重ねる＝色変えだけでは分かりにくい対策（2026-07-20 社長）
+  const annHiGroup = new THREE.Group();
+  modelGroup.add(annHiGroup);
+  function clearAnnHalo() {
+    while (annHiGroup.children.length) { const c = annHiGroup.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
+  }
+  function buildAnnHalo() {
+    clearAnnHalo();
+    for (const rec of annStore) {
+      if (!selAnns.has(rec) || rec.hidden) continue;
+      if (rec.type !== 'line' && rec.type !== 'xline') continue;
+      const ends = annPickEnds(rec);
+      const len = ends[0].distanceTo(ends[1]);
+      if (len < 1e-6) continue;
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, len, 10, 1, true),
+        new THREE.MeshBasicMaterial({ color: SEL_COLOR, transparent: true, opacity: 0.3, depthTest: false, side: THREE.DoubleSide }));
+      m.position.copy(ends[0]).add(ends[1]).multiplyScalar(0.5);
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), ends[1].clone().sub(ends[0]).normalize());
+      m.renderOrder = 996;
+      annHiGroup.add(m);
+    }
+  }
+  function refreshAnnHi() { for (const rec of annStore) paintAnn(rec, selAnns.has(rec)); buildAnnHalo(); }
+  function clearAnnHi() { for (const rec of annStore) paintAnn(rec, false); clearAnnHalo(); }
   // 2線分(ax,ay-bx,by)と(cx,cy-dx,dy)が交差するか（画面座標）
   function segSeg(ax, ay, bx, by, cx, cy, dx, dy) {
     const d = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
