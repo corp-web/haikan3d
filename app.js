@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-E';
+const APP_VER = 'v0720-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -100,7 +100,7 @@ function buildGrid(c1, c2) {
   grid.material.opacity = 0.6; grid.material.transparent = true;
   modelGroup.add(grid);
 }
-buildGrid(0x9a9687, 0xb8b4a6);   // グリッド＝コンクリート土間の目地に見える暖色グレー（濃線/淡線）
+buildGrid(0x848c96, 0xaeb4bd);   // グリッド＝地面と同系の青みグレー（濃線/淡線）
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
 let showGround = true;
@@ -129,7 +129,7 @@ function buildGround(fillC, rimC) {
   groundGroup.visible = showGround;
   modelGroup.add(groundGroup);
 }
-buildGround(0xc4c0b5, 0x8a8678);   // 地面＝コンクリート土間の暖色グレー（ハイトーン・空の青系と色相で分離）＋濃い縁取り
+buildGround(0xafb5be, 0x6f7784);   // 地面＝v0720-C系の青みグレー（社長の好み）。空はハイトーンのまま＝上下の明暗で分離
 function applyGround() {
   if (groundGroup) groundGroup.visible = showGround;
   try { localStorage.setItem('p3d_show_ground', showGround ? '1' : '0'); } catch (e) {}
