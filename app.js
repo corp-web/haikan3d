@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-B';
+const APP_VER = 'v0720-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -33,9 +33,18 @@ vp.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 // 統一カラーモード（2026-07-19 社長決定：ダーク/ホワイト切替を廃止し、昼夜・屋内外で共通に見やすい
 // CAD標準風の中間グレー1本に統一。UIパネルも明るい配色＝背景と調和（2026-07-20 社長要望））
-const BG_COLOR = 0x9298a1;
-scene.background = new THREE.Color(BG_COLOR);
-scene.fog = new THREE.Fog(BG_COLOR, 18, 60);
+// 背景＝縦グラデーション（上＝空側を明るく・下＝足元をやや締める。2026-07-20 社長「地上の背景が暗い」）
+scene.background = (() => {
+  const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
+  const c = cv.getContext('2d');
+  const gr = c.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0, '#cdd2d8');     // 上（空）＝明るいグレー
+  gr.addColorStop(0.55, '#a6acb5');  // 中間
+  gr.addColorStop(1, '#8f959e');     // 下（足元）
+  c.fillStyle = gr; c.fillRect(0, 0, 2, 256);
+  return new THREE.CanvasTexture(cv);
+})();
+scene.fog = new THREE.Fog(0xa6acb5, 18, 60);   // フォグは中間トーンに合わせる
 document.body.classList.add('light');   // UIは明るい配色で固定（旧ホワイトモードのUIスタイルを常時適用）
 
 // ---- カメラ ----
