@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-N';
+const APP_VER = 'v0720-O';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4840,14 +4840,55 @@ function zoomStep(factor) {
   bindOrientHold('tcTwist',  true);
   // 取消＝完全リセット（2026-07-20 社長指示：シフト・コントロール・コマンド選択も全部クリア）
   // Escは段階的（スピナー→描画中の点→モード→選択）なので3回叩いて確実に空へ戻し、修飾トグルも消灯する
-  bindHold('tcEsc', () => {
+  function tcCancelAll() {
     for (let i = 0; i < 3; i++) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     touchShift = false; touchCtrl = false;
     const bs = document.getElementById('tcShift'), bc = document.getElementById('tcCtrl');
     if (bs) bs.classList.remove('on');
     if (bc) bc.classList.remove('on');
     if (window.__syncTouchOrbit) window.__syncTouchOrbit();
-  }, false);
+  }
+  // 取消ボタン＝タップ:完全リセット／長押し(0.5秒):ボタン列を1個にたたむ（2026-07-20 社長要望）。
+  // たたみ中＝名前「操作」・タップで展開（名前は「取消」に戻る）。状態は記憶（p3d_tc_fold）。
+  {
+    const wrap = document.getElementById('touchCtrl');
+    const btn = document.getElementById('tcEsc');
+    if (wrap && btn) {
+      const lb = btn.querySelector('.lb'), ic = btn.querySelector('.ic');
+      let folded = false;
+      try { folded = localStorage.getItem('p3d_tc_fold') === '1'; } catch (e) {}
+      const applyFold = () => {
+        wrap.classList.toggle('collapsed', folded);
+        if (lb) lb.textContent = folded ? '操作' : '取消';
+        if (ic) ic.textContent = folded ? '≡' : '⎋';
+        btn.title = folded ? 'タップでボタンを展開（向き・回転・Shift・Ctrl・削除・取消）'
+                           : '取消・選択解除（長押しでボタンをたたむ）';
+        try { localStorage.setItem('p3d_tc_fold', folded ? '1' : '0'); } catch (e) {}
+      };
+      let t = null, fired = false;
+      btn.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation(); fired = false;
+        clearTimeout(t);
+        t = setTimeout(() => {
+          fired = true;
+          folded = !folded;
+          if (folded) tcCancelAll();   // たたむ時は状態も全部クリア（隠れたShift等が残らないように）
+          applyFold();
+        }, 500);
+      });
+      const up = e => {
+        clearTimeout(t);
+        if (e.type !== 'pointerup' || fired) return;
+        if (folded) { folded = false; applyFold(); }   // たたみ中のタップ＝展開のみ
+        else tcCancelAll();                            // 通常タップ＝完全リセット
+      };
+      btn.addEventListener('pointerup', up);
+      btn.addEventListener('pointercancel', up);
+      btn.addEventListener('pointerleave', () => clearTimeout(t));
+      btn.addEventListener('contextmenu', e => e.preventDefault());
+      applyFold();
+    }
+  }
   bindHold('tcDel',     () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' })), false);
   // Shift／Ctrl＝タッチ用の仮想モディファイア（PCのShift/Ctrl押下と同じ挙動を再現するトグル）
   const bindMod = (id, get, set, after) => {
@@ -7852,30 +7893,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       o.material.color.setHex(on ? onCol : (o.userData.baseColor != null ? o.userData.baseColor : fallback));
     });
   }
-  // 選択中の線分・構築線には太い半透明ハロー（青の帯）を重ねる＝色変えだけでは分かりにくい対策（2026-07-20 社長）
-  const annHiGroup = new THREE.Group();
-  modelGroup.add(annHiGroup);
-  function clearAnnHalo() {
-    while (annHiGroup.children.length) { const c = annHiGroup.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
-  }
-  function buildAnnHalo() {
-    clearAnnHalo();
-    for (const rec of annStore) {
-      if (!selAnns.has(rec) || rec.hidden) continue;
-      if (rec.type !== 'line' && rec.type !== 'xline') continue;
-      const ends = annPickEnds(rec);
-      const len = ends[0].distanceTo(ends[1]);
-      if (len < 1e-6) continue;
-      const m = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, len, 10, 1, true),
-        new THREE.MeshBasicMaterial({ color: SEL_COLOR, transparent: true, opacity: 0.3, depthTest: false, side: THREE.DoubleSide }));
-      m.position.copy(ends[0]).add(ends[1]).multiplyScalar(0.5);
-      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), ends[1].clone().sub(ends[0]).normalize());
-      m.renderOrder = 996;
-      annHiGroup.add(m);
-    }
-  }
-  function refreshAnnHi() { for (const rec of annStore) paintAnn(rec, selAnns.has(rec)); buildAnnHalo(); }
-  function clearAnnHi() { for (const rec of annStore) paintAnn(rec, false); clearAnnHalo(); }
+  // 選択表示＝従来どおり色変え（発光）。ハロー帯は社長指示で撤回（2026-07-20）
+  function refreshAnnHi() { for (const rec of annStore) paintAnn(rec, selAnns.has(rec)); }
+  function clearAnnHi() { for (const rec of annStore) paintAnn(rec, false); }
   // 2線分(ax,ay-bx,by)と(cx,cy-dx,dy)が交差するか（画面座標）
   function segSeg(ax, ay, bx, by, cx, cy, dx, dy) {
     const d = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
@@ -8856,6 +8876,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (showXpts) for (const p of xlinePts) mark(p, lN, lB);
   }
   let _lnLastT = 0, _lnLastX = 0, _lnLastY = 0, _lnLastRec = null;   // ダブルクリック検出（自由移動）
+  let _lnEmptyDown = null;   // 空きスペース押下位置＝クリック（動かさず離す）でのみ線選択を解除する用
   window.addEventListener('pointerdown', e => {
     if (drawActive() || e.button !== 0) return;
     if (drawState.dimReadjust && e.target === renderer.domElement) {   // 再調整中のクリック＝確定（このクリックは消費）
@@ -8973,9 +8994,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (info.near) { gRec = rec; gEnd = info.end; _vAxis = null; _tipAxis = null; _tipMode = false; refreshHandles(); if (typeof updateForm === 'function') updateForm(); }   // 端の近くを掴んだ＝起点を選択（大きく・ELを更新・鉛直軸再計算）
       e.stopImmediatePropagation(); return;
     }
-    // 何もない所を押した時だけ線選択を解除。部品の上を押した時は線選択を保持し、部品ハンドラに委ねる
-    // （部品と線を一緒に窓選択している場合、集団移動で線も追従させるため）。新規単独選択なら selectPart 側で線が解除される。
-    if ((lineSel || selAnns.size) && !pickPlacedAt(e.clientX, e.clientY)) deselectLine();
+    // 何もない所＝「クリック（動かさず離す）」の時だけ線選択を解除（2026-07-20 社長：部品と同じ挙動へ）。
+    // 押した瞬間に解除するとドラッグ（視点操作のつもり）で選択が飛び、次のドラッグから空間が回ってしまう。
+    if ((lineSel || selAnns.size) && !pickPlacedAt(e.clientX, e.clientY)) _lnEmptyDown = { x: e.clientX, y: e.clientY };
   }, true);
   window.addEventListener('pointermove', e => {
     if (drawActive() || !lineDrag) return;
@@ -9140,6 +9161,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
   }, true);
   window.addEventListener('pointercancel', () => {   // ジェスチャ取消＝線ドラッグの後始末（操作不能の残留防止）
+    _lnEmptyDown = null;
     if (!lineDrag) return;
     lineDrag = null;
     clearMarkers();
@@ -9147,6 +9169,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof updateForm === 'function') updateForm();
   });
   window.addEventListener('pointerup', e => {
+    // 空きスペースは「クリック」の時だけ線選択を解除（ドラッグ＝選択保持・視点はロックのまま。部品と同じ挙動）
+    if (!drawActive() && e.button === 0 && _lnEmptyDown) {
+      const wasDrag = Math.hypot(e.clientX - _lnEmptyDown.x, e.clientY - _lnEmptyDown.y) > 6;
+      _lnEmptyDown = null;
+      if (!wasDrag) deselectLine();
+    }
     if (drawActive() || e.button !== 0 || !lineDrag) return;
     const mode = lineDrag.mode, moved = lineDrag.moved, nearEnd = lineDrag.nearEnd;
     const translated = lineDrag._translated;
