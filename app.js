@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-C';
+const APP_VER = 'v0720-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -38,9 +38,9 @@ scene.background = (() => {
   const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
   const c = cv.getContext('2d');
   const gr = c.createLinearGradient(0, 0, 0, 256);
-  gr.addColorStop(0, '#cdd2d8');     // 上（空）＝明るいグレー
-  gr.addColorStop(0.55, '#a6acb5');  // 中間
-  gr.addColorStop(1, '#8f959e');     // 下（足元）
+  gr.addColorStop(0, '#d7dee8');     // 上（空）＝屋外の淡い空を思わせる青みの明るいグレー
+  gr.addColorStop(0.55, '#adb4bf');  // 中間
+  gr.addColorStop(1, '#969ca5');     // 下（足元）
   c.fillStyle = gr; c.fillRect(0, 0, 2, 256);
   return new THREE.CanvasTexture(cv);
 })();
@@ -100,7 +100,7 @@ function buildGrid(c1, c2) {
   grid.material.opacity = 0.6; grid.material.transparent = true;
   modelGroup.add(grid);
 }
-buildGrid(0x777f89, 0xa4aab3);   // 統一グレー背景用のグリッド（濃線/淡線）
+buildGrid(0x8b8779, 0xa9a597);   // グリッド＝コンクリート土間の目地に見える暖色グレー（濃線/淡線）
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
 let showGround = true;
@@ -129,7 +129,7 @@ function buildGround(fillC, rimC) {
   groundGroup.visible = showGround;
   modelGroup.add(groundGroup);
 }
-buildGround(0xafb5be, 0x6f7784);   // 統一グレー背景より一段明るいスラブ＋濃い縁取り
+buildGround(0xb6b2a7, 0x7c786a);   // 地面＝コンクリート土間の暖色グレー（空の青系と色相で分離）＋濃い縁取り
 function applyGround() {
   if (groundGroup) groundGroup.visible = showGround;
   try { localStorage.setItem('p3d_show_ground', showGround ? '1' : '0'); } catch (e) {}
