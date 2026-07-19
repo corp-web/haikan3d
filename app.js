@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-J';
+const APP_VER = 'v0720-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5940,7 +5940,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let dimKind = 'linear';   // 既定＝長さ寸法（2026-07-19 社長要望。CADのDIMLINEAR相当）
   const DIM_KIND_LABEL = { linear: '長さ', parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出' };
   // 文字の既定書式（リボン「文字」右クリックで設定）。色＝シアン／飾り＝枠なし
-  const textOpts = { color: 0x00808f, deco: 'none' };   // deco: none/box/underline/double（シアンはハイトーン背景用に濃色化・2026-07-20）
+  const textOpts = { color: 0x4a9bff, deco: 'none' };   // deco: none/box/underline/double（既定色＝線の青と統一・2026-07-20 社長）
   function styleFor(type) {
     const s = toolStyle[type] || defaultStyle(type);
     const out = { color: s.color, ltype: s.ltype, width: s.width };
@@ -6884,18 +6884,27 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 画面に正対する十字（クロス）カーソル。modelGroup は無変換なのでローカル＝ワールド。
   // 大きさはカメラ距離/ズームに比例させ、見た目をほぼ一定に保つ。
   function guideCross(p, color) {
+    // 明るい背景で見やすいよう濃色へ差し替え＋中心にブルズアイ（白地＋色玉）を重ねる（2026-07-20 社長「カーソルが見にくい」）
+    if (color === 0x49c5ff) color = 0x1256c8;        // 通常＝濃青
+    else if (color === 0x39ff8a) color = 0x0b9648;   // 吸着＝濃緑
     const cam = activeCam();
     const right = new V3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
     const up = new V3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
     const s = cam.isOrthographicCamera
-      ? (cam.top - cam.bottom) / (cam.zoom || 1) * 0.025
-      : cam.position.distanceTo(p) * 0.02;
+      ? (cam.top - cam.bottom) / (cam.zoom || 1) * 0.034
+      : cam.position.distanceTo(p) * 0.027;
     const g = new THREE.BufferGeometry().setFromPoints([
       p.clone().addScaledVector(right, -s), p.clone().addScaledVector(right, s),
       p.clone().addScaledVector(up,    -s), p.clone().addScaledVector(up,    s),
     ]);
-    const ln = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }));
+    const ln = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 1 }));
     ln.renderOrder = 999; lineGuideGroup.add(ln);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(s * 0.16, 12, 10),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 }));
+    halo.position.copy(p); halo.renderOrder = 999; lineGuideGroup.add(halo);
+    const core = new THREE.Mesh(new THREE.SphereGeometry(s * 0.09, 12, 10),
+      new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 1 }));
+    core.position.copy(p); core.renderOrder = 1000; lineGuideGroup.add(core);
   }
   // 起点 a→終点 b の補助線。成分(X→Z→Y)を段状に分け、存在する脚ごとに補助線＋斜辺を引く。
   // これで X/Z/Y/L の入力欄に対応した補助線（X脚・Z脚・Y脚）がそれぞれ出る。
@@ -9649,8 +9658,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function markDimKindActive() {
     dimKindMenu.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === dimKind));
   }
+  // リボンボタン右上の小バッジ＝現在選択中の種類を常時表示（2026-07-20 社長「どれを選択したか分からない」）
+  function setKindBadge(id, text) {
+    const b = document.getElementById(id); if (!b) return;
+    let s = b.querySelector('.kbadge');
+    if (!s) { s = document.createElement('span'); s.className = 'kbadge'; b.appendChild(s); }
+    s.textContent = text;
+  }
+  const LTYPE_SHORT = { solid: '実', dashed: '破', dotted: '点', dashdot: '鎖', dashdotdot: '二鎖' };
   function updateDimBtnTitle() {
     const b = $('cmdDim'); if (b) b.title = `寸法：${DIM_KIND_LABEL[dimKind] || '長さ'}（右クリックで 長さ/平行/角度/半径/直径/引出 を選択）`;
+    setKindBadge('cmdDim', DIM_KIND_LABEL[dimKind] || '長さ');
   }
   function closeDimKindMenu() { dimKindMenu.style.display = 'none'; }
   function openDimKindMenu(ax, atop) {
@@ -9673,7 +9691,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   updateDimBtnTitle();
 
   // ---- 文字の書式メニュー（リボン「文字」右クリック：色＋飾り） ----
-  const TEXT_COLORS = [['シアン', 0x00808f], ['白', 0xffffff], ['黒', 0x000000], ['赤', 0xff4040]];   // シアン＝ハイトーン背景で読める濃色
+  const TEXT_COLORS = [['青', 0x4a9bff], ['白', 0xffffff], ['黒', 0x000000], ['赤', 0xff4040]];   // 青＝線（点線）と同色（2026-07-20 社長）
   const TEXT_DECOS = [['none', '枠なし'], ['box', '枠あり'], ['underline', '下線'], ['double', '二重下線']];
   const textMenu = document.createElement('div');
   textMenu.id = 'textMenu';
@@ -9704,14 +9722,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (rec && rec.style) { if (rec.style.textColor != null) textOpts.color = rec.style.textColor; textOpts.deco = rec.style.textDeco || 'none'; }
     openTextMenu(x, y, true);
   };
+  function updateTextBadge() {
+    const hit = TEXT_COLORS.find(([, c]) => c === textOpts.color);
+    setKindBadge('cmdText', hit ? hit[0] : '');
+  }
   textMenu.addEventListener('click', e => {
     const cs = e.target.closest('[data-color]'); const ds = e.target.closest('[data-deco]');
     if (cs) textOpts.color = Number(cs.dataset.color);
     else if (ds) textOpts.deco = ds.dataset.deco;
     else return;
-    markTextActive();
+    markTextActive(); updateTextBadge();
     if (window.__applyTextFmtToSel) window.__applyTextFmtToSel(textOpts.color, textOpts.deco);   // 選択中の文字にも反映
   });
+  // 起動時＝現在の既定をバッジに反映（線分/円=一点鎖線・寸法=長さ・文字=青）
+  setKindBadge('cmdLine', LTYPE_SHORT[toolStyle.line.ltype] || '');
+  setKindBadge('cmdCircle', LTYPE_SHORT[toolStyle.circle.ltype] || '');
+  updateTextBadge();
 
   function maybeCloseFmtMenu() {
     let closed = false;
@@ -9722,7 +9748,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   function applyFmt(act, val) {
     const st = toolStyle[fmtToolType]; if (!st) return;
-    if (act === 'ltype') { st.ltype = val; st.color = ltypeColor(val); st.width = 0.0006; }   // 色は線種で決定・太さは極細固定
+    if (act === 'ltype') {
+      st.ltype = val; st.color = ltypeColor(val); st.width = 0.0006;   // 色は線種で決定・太さは極細固定
+      const btn = { line: 'cmdLine', circle: 'cmdCircle' }[fmtToolType];
+      if (btn) setKindBadge(btn, LTYPE_SHORT[val] || '');   // ボタンに選択中の線種を表示
+    }
     markFmtActive();
     // 選択中の同種オブジェクト（線分/円）にも反映＝再選択して書式変更
     let any = false;

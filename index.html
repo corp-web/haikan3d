@@ -230,6 +230,10 @@
     border-bottom: 1px dashed #2c3a63; padding-bottom: 3px; }
   #helpPanel h3:first-child { margin-top: 2px; }
   #helpPanel ul { margin: 3px 0; padding-left: 18px; }
+  /* リボンボタン右上の種類バッジ（選択中の寸法種別・線種・文字色を常時表示） */
+  #ribbon button { position: relative; }
+  #ribbon button .kbadge { position: absolute; top: 1px; right: 2px; font-size: 8px; line-height: 1.25;
+    padding: 0 3px; border-radius: 3px; background: #1f6fd0; color: #fff; pointer-events: none; letter-spacing: 0; }
   #helpPanel #helpSearch { width: 100%; margin: 8px 0 10px; padding: 6px 10px; box-sizing: border-box;
     background: #0f1830; border: 1px solid #36436b; border-radius: 6px; color: #dbe4f3; font-size: 12.5px; }
   #helpPanel details { border-bottom: 1px solid #24304f; }
