@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-D';
+const APP_VER = 'v0720-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -38,13 +38,13 @@ scene.background = (() => {
   const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
   const c = cv.getContext('2d');
   const gr = c.createLinearGradient(0, 0, 0, 256);
-  gr.addColorStop(0, '#d7dee8');     // 上（空）＝屋外の淡い空を思わせる青みの明るいグレー
-  gr.addColorStop(0.55, '#adb4bf');  // 中間
-  gr.addColorStop(1, '#969ca5');     // 下（足元）
+  gr.addColorStop(0, '#e1e6ed');     // 上（空）＝ハイトーン（日中屋外の見やすさ優先・2026-07-20 社長了承）
+  gr.addColorStop(0.55, '#bec4cd');  // 中間
+  gr.addColorStop(1, '#a7adb6');     // 下（足元）
   c.fillStyle = gr; c.fillRect(0, 0, 2, 256);
   return new THREE.CanvasTexture(cv);
 })();
-scene.fog = new THREE.Fog(0xa6acb5, 18, 60);   // フォグは中間トーンに合わせる
+scene.fog = new THREE.Fog(0xbec4cd, 18, 60);   // フォグは中間トーンに合わせる
 document.body.classList.add('light');   // UIは明るい配色で固定（旧ホワイトモードのUIスタイルを常時適用）
 
 // ---- カメラ ----
@@ -100,7 +100,7 @@ function buildGrid(c1, c2) {
   grid.material.opacity = 0.6; grid.material.transparent = true;
   modelGroup.add(grid);
 }
-buildGrid(0x8b8779, 0xa9a597);   // グリッド＝コンクリート土間の目地に見える暖色グレー（濃線/淡線）
+buildGrid(0x9a9687, 0xb8b4a6);   // グリッド＝コンクリート土間の目地に見える暖色グレー（濃線/淡線）
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
 let showGround = true;
@@ -129,7 +129,7 @@ function buildGround(fillC, rimC) {
   groundGroup.visible = showGround;
   modelGroup.add(groundGroup);
 }
-buildGround(0xb6b2a7, 0x7c786a);   // 地面＝コンクリート土間の暖色グレー（空の青系と色相で分離）＋濃い縁取り
+buildGround(0xc4c0b5, 0x8a8678);   // 地面＝コンクリート土間の暖色グレー（ハイトーン・空の青系と色相で分離）＋濃い縁取り
 function applyGround() {
   if (groundGroup) groundGroup.visible = showGround;
   try { localStorage.setItem('p3d_show_ground', showGround ? '1' : '0'); } catch (e) {}
@@ -5923,8 +5923,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   // 線の角度スナップ刻みは45°固定（設定不要）。太さは極細固定。
   const angleStep = 45;
-  // 線種ごとの固定色（色は線種で決まるので色選択は不要）：実線=白・破線=黒・点線=青・一点鎖線=赤
-  const LTYPE_COLOR = { solid: 0xffffff, dashed: 0x000000, dotted: 0x4a9bff, dashdot: 0xff5a5a, dashdotdot: 0x000000 };
+  // 線種ごとの固定色（色は線種で決まるので色選択は不要）：実線=濃スレート・破線=黒・点線=青・一点鎖線=赤
+  // （実線は旧・白＝ハイトーン背景で薄くなるため濃色へ。2026-07-20。保存済み図面の白線は色を保持したまま）
+  const LTYPE_COLOR = { solid: 0x2b323d, dashed: 0x000000, dotted: 0x4a9bff, dashdot: 0xff5a5a, dashdotdot: 0x000000 };
   function ltypeColor(lt) { return LTYPE_COLOR[lt] != null ? LTYPE_COLOR[lt] : 0xffffff; }
   const MENU_LTYPES = ['solid', 'dashed', 'dotted', 'dashdot'];   // メニューに出す線種（選ぶだけ）
   function defaultStyle(type) {
@@ -5939,7 +5940,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let dimKind = 'linear';   // 既定＝長さ寸法（2026-07-19 社長要望。CADのDIMLINEAR相当）
   const DIM_KIND_LABEL = { linear: '長さ', parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出' };
   // 文字の既定書式（リボン「文字」右クリックで設定）。色＝シアン／飾り＝枠なし
-  const textOpts = { color: 0x00ffff, deco: 'none' };   // deco: none/box/underline/double
+  const textOpts = { color: 0x00808f, deco: 'none' };   // deco: none/box/underline/double（シアンはハイトーン背景用に濃色化・2026-07-20）
   function styleFor(type) {
     const s = toolStyle[type] || defaultStyle(type);
     const out = { color: s.color, ltype: s.ltype, width: s.width };
@@ -9672,7 +9673,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   updateDimBtnTitle();
 
   // ---- 文字の書式メニュー（リボン「文字」右クリック：色＋飾り） ----
-  const TEXT_COLORS = [['シアン', 0x00ffff], ['白', 0xffffff], ['黒', 0x000000], ['赤', 0xff4040]];
+  const TEXT_COLORS = [['シアン', 0x00808f], ['白', 0xffffff], ['黒', 0x000000], ['赤', 0xff4040]];   // シアン＝ハイトーン背景で読める濃色
   const TEXT_DECOS = [['none', '枠なし'], ['box', '枠あり'], ['underline', '下線'], ['double', '二重下線']];
   const textMenu = document.createElement('div');
   textMenu.id = 'textMenu';
