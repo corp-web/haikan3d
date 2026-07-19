@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-S';
+const APP_VER = 'v0719-T';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -85,6 +85,39 @@ function buildGrid(c1, c2) {
   modelGroup.add(grid);
 }
 buildGrid(0x4a5a8a, 0x2a3a5c);
+// ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
+// 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
+let showGround = true;
+try { showGround = localStorage.getItem('p3d_show_ground') !== '0'; } catch (e) {}
+const GROUND_SIZE = 40;                 // 40m四方（20mグリッドより一回り広く）
+let groundGroup = null;
+function buildGround(fillC, rimC) {
+  if (groundGroup) {
+    modelGroup.remove(groundGroup);
+    groundGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  groundGroup = new THREE.Group();
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE),
+    new THREE.MeshBasicMaterial({ color: fillC, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }));
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = -0.002;             // グリッド(y=0)とのz-fight回避に2mmだけ下げる
+  groundGroup.add(mesh);
+  const h = GROUND_SIZE / 2;
+  const rim = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-h, 0, -h), new THREE.Vector3(h, 0, -h),
+      new THREE.Vector3(h, 0, h), new THREE.Vector3(-h, 0, h)]),
+    new THREE.LineBasicMaterial({ color: rimC, transparent: true, opacity: 0.8 }));
+  groundGroup.add(rim);                 // スラブの縁取り＝GLの端をくっきり見せる
+  groundGroup.visible = showGround;
+  modelGroup.add(groundGroup);
+}
+buildGround(0x2c3a5e, 0x5f77ab);
+function applyGround() {
+  if (groundGroup) groundGroup.visible = showGround;
+  try { localStorage.setItem('p3d_show_ground', showGround ? '1' : '0'); } catch (e) {}
+}
 // ---- 明暗テーマ（背景・グリッド・UI を一括切替） ----
 let lightMode = false;
 function setLightMode(on) {
@@ -93,6 +126,7 @@ function setLightMode(on) {
   scene.background = new THREE.Color(bg);
   if (typeof renderer !== 'undefined' && renderer) renderer.setClearColor(bg, 1);
   buildGrid(lightMode ? 0x8a96b4 : 0x4a5a8a, lightMode ? 0xb6c0d4 : 0x2a3a5c);
+  buildGround(lightMode ? 0xaeb9c9 : 0x2c3a5e, lightMode ? 0x7f8ca6 : 0x5f77ab);   // 地面スラブもテーマ連動
   if (gizmo && gizmo.applyTheme) gizmo.applyTheme(lightMode);
   if (window.__rebuildAllAnns) window.__rebuildAllAnns();   // 構築線・寸法線の合成方式を切替に反映（色を保つ）
   document.body.classList.toggle('light', lightMode);
@@ -5487,9 +5521,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const prevClear = renderer.getClearColor(new THREE.Color());
     const prevAlpha = renderer.getClearAlpha();
     const prevGrid = grid ? grid.visible : null;
+    const prevGround = groundGroup ? groundGroup.visible : null;
     scene.background = new THREE.Color(0xffffff);
     renderer.setClearColor(0xffffff, 1);
     if (grid) grid.visible = false;
+    if (groundGroup) groundGroup.visible = false;   // 地面スラブは図面（印刷）には出さない
     // 寸法値の背景マスクを白（紙色）で作り直す（作り直すと文字の向き・サイズが初期化されるので合わせ直す）
     if (window.__dimMaskPrint) { window.__dimMaskPrint(true); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }
 
@@ -5539,6 +5575,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     scene.background = prevBg;
     renderer.setClearColor(prevClear, prevAlpha);
     if (grid) grid.visible = prevGrid;
+    if (groundGroup) groundGroup.visible = prevGround;
     if (window.__dimMaskPrint) { window.__dimMaskPrint(false); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }   // マスクを画面用に戻す
     renderer.clear();
     renderer.render(scene, activeCam());
@@ -9267,7 +9304,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   if (_bSet && _setMenu) {
     const cbS = document.getElementById('setSnap'), cbN = document.getElementById('setNear');
     const cbO = document.getElementById('setOrigin'), cbX = document.getElementById('setXpt');
-    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; };
+    const cbG = document.getElementById('setGround');
+    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; };
     const closeSet = () => { _setMenu.style.display = 'none'; _bSet.classList.remove('active'); };
     _bSet.onclick = () => {
       const open = _setMenu.style.display !== 'block';
@@ -9284,6 +9322,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbN) cbN.addEventListener('change', () => { nearSnapOn = cbN.checked; try { localStorage.setItem('p3d_near_snap', nearSnapOn ? '1' : '0'); } catch (e) {} });
     if (cbO) cbO.addEventListener('change', () => { showOriginPts = cbO.checked; _idleSig = null; try { localStorage.setItem('p3d_show_origin', showOriginPts ? '1' : '0'); } catch (e) {} });
     if (cbX) cbX.addEventListener('change', () => { showXpts = cbX.checked; if (window.__annXptsRefresh) window.__annXptsRefresh(); try { localStorage.setItem('p3d_show_xpt', showXpts ? '1' : '0'); } catch (e) {} });
+    if (cbG) cbG.addEventListener('change', () => { showGround = cbG.checked; applyGround(); });
     document.addEventListener('pointerdown', e => {
       if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
     }, true);
