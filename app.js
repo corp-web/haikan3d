@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-T';
+const APP_VER = 'v0719-U';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4153,12 +4153,15 @@ window.addEventListener('pointermove', e => {
 // captureフェーズで controls.enabled=false にし、OrbitControls の回転開始を抑止する。
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0 || followTool || movingPart) return;
-  if (e.ctrlKey || e.metaKey || touchCtrl) return;      // Ctrl+クリックは複数選択トグル（移動ドラッグを開始しない）→ pointerup で処理
+  // Ctrl＝複数選択トグル/窓選択。ただし「移動」コマンド中に選択済み部品を掴んだ時だけは、
+  // Ctrl（タッチのCtrl点灯）を解除しなくてもそのまま集団移動できる（2026-07-19 社長要望）
+  const ctrlish = e.ctrlKey || e.metaKey || touchCtrl;
+  if (ctrlish && !moveMode) return;                     // Ctrl+クリックは複数選択トグル → pointerup で処理
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
   // パイプ端の優先掴み：選択中がパイプで、その端の近く(16px)を押したら、
   // 重なる他部品(フランジ等)より優先してパイプ端を掴む（起点が取れない問題の対策）。
-  if (selectedPart && selectedPart.userData.partType === 'pipe' && selectedParts.size <= 1) {
+  if (!ctrlish && selectedPart && selectedPart.userData.partType === 'pipe' && selectedParts.size <= 1) {
     const pe = nearestPipeEnd(selectedPart, e.clientX, e.clientY);
     if (pe) {
       pipeEndDrag = { part: selectedPart, grabbedEnd: pe, sx: e.clientX, sy: e.clientY, moved: false, origLen: selectedPart.userData.pipe.length };
@@ -4168,6 +4171,10 @@ renderer.domElement.addEventListener('pointerdown', e => {
   }
   const part = pickPlacedAt(e.clientX, e.clientY);
   if (!part) return;                       // 部品以外＝通常のオービット
+  if (ctrlish) {
+    if (!selectedParts.has(part)) return;  // 未選択の部品＝従来どおりCtrlトグル（pointerup側）へ
+    e.stopImmediatePropagation();          // 選択済みを掴んだ＝移動。窓選択(boxSel)は起動させない
+  }
   // --- ダブルクリック（同じ部品を素早く2回押下）→ 押したままドラッグで自由移動 ---
   const isDbl = (e.timeStamp - _lastDownT < 350)
              && Math.hypot(e.clientX - _lastDownX, e.clientY - _lastDownY) < 6
@@ -8657,9 +8664,27 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     if (followTool || movingPart) return;                // 部品の配置/移動中は線分操作を横取りしない（スナップ先の線を掴んで配置を止める不具合対策）
     if (e.target !== renderer.domElement) return;        // 脚入力などUIは通す
-    if (e.ctrlKey || e.metaKey || touchCtrl) return;                  // Ctrl＝部品の複数選択へ委ねる
+    const ctrlish = e.ctrlKey || e.metaKey || touchCtrl;
+    if (ctrlish && !moveMode) return;                    // Ctrl＝部品の複数選択へ委ねる
     const rect = renderer.domElement.getBoundingClientRect();
     if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
+    if (ctrlish) {   // 「移動」コマンド中のCtrl＝選択済みの線の本体を掴んだ時だけ、Ctrlのまま集団移動（2026-07-19 社長要望）
+      const selForGrip = (selectedParts && selectedParts.size) ? [...selectedParts] : [];
+      for (const sp of selForGrip) {                     // 選択部品の機点近く＝部品移動を優先（部品ハンドラへ譲る）
+        if (sp.userData && sp.userData.faceLocal && nearestConnLocal(sp, e.clientX, e.clientY)) return;
+      }
+      const rec = pickAnnAt(e.clientX, e.clientY);
+      if (!rec || !selAnns.has(rec)) return;             // それ以外＝従来のCtrlトグル/窓選択へ
+      const info = nearestEndpointInfo(rec, e.clientX, e.clientY);
+      const origin = info.pt.clone();
+      lineDrag = { mode: 'sel', free: false, noMove: !moveMode, origin, planeY: origin.y, gRec: rec, gEnd: info.end, nearEnd: info.near,
+                   grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
+                   startHit: planeHitAt(e.clientX, e.clientY, origin.y) || origin.clone(),
+                   downX: e.clientX, downY: e.clientY, moved: false,
+                   annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })),
+                   partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
+      e.stopImmediatePropagation(); return;
+    }
     if (drawState.editRec) clearDrawTemp();              // 直前の確定待ち編集を終える
     // 重なり時のアイテム起点優先：選択中アイテムの機点(起点候補)の近くを掴もうとした時は、線分より部品を優先（部品ハンドラに譲る）
     {
@@ -9250,7 +9275,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const info = selInfo();
       // 何も選択していない時はパネル自体を出さない（2026-07-19 社長要望）。選択したら再表示（トグルはONのまま）
       panel.style.display = info.kind === 'none' ? 'none' : 'flex';
-      const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid + partHeightLabel(info.p) : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0));
+      const s = info.kind + '|' + (info.kind === 'part' ? info.p.uuid + partHeightLabel(info.p) : info.kind === 'ann' ? (info.a.type + ':' + (info.a.kind || '')) : (info.n || 0) + '|' + (selectedPart ? selectedPart.uuid : ''));
       if (s === sig) {   // 選択が同じ＝値だけ追従（編集中の欄は上書きしない）
         for (const f of fields) {
           if (f.ro) { const v = String(f.get()); if (f.ro.textContent !== v) f.ro.textContent = v; }
@@ -9261,7 +9286,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
       sig = s; fields = []; body.innerHTML = '';
       if (info.kind === 'none') return;   // 選択なし＝説明も出さない（パネルは上でdisplay:none済み）
-      if (info.kind === 'multi') { sec('複数選択'); roRow('選択数', () => (selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0)) + ' 個'); note('個別の値の編集は1つだけ選択してください。まとめての移動・複製・非表示などはリボンから。'); }
+      if (info.kind === 'multi') {
+        sec('複数選択'); roRow('選択数', () => (selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0)) + ' 個');
+        if (selectedPart) {   // 起点（主選択）部品のEL＝編集で選択全体を一括上下移動（2026-07-19 社長要望）
+          edRow('EL(起点)', { get: () => mmv(heightRefModelPos(selectedPart).y), set: v => {
+            const dy = v / 1000 - heightRefModelPos(selectedPart).y;
+            if (!isFinite(dy) || Math.abs(dy) < 1e-9) return;
+            const snap = window.__partSelSnapshot ? window.__partSelSnapshot() : [];
+            if (window.__partSelApply) window.__partSelApply(snap, 0, dy, 0);
+            if (window.__annHasSel && window.__annHasSel() && window.__annMoveStart) { window.__annMoveStart(); window.__annMoveApply(0, dy, 0); window.__annMoveEnd(); }
+            _idleSig = null; updateForm();
+          }, unit: 'mm', step: 1 });
+          note('EL(起点)＝起点（主選択）部品の高さ。値を変えると選択中の全アイテムがまとめて上下します。個別の値の編集は1つだけ選択してください。');
+        } else {
+          note('個別の値の編集は1つだけ選択してください。まとめての移動・複製・非表示などはリボンから。');
+        }
+      }
       else if (info.kind === 'part') buildPart(info.p);
       else buildAnnProps(info.a);
       centerIfFresh();
