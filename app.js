@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-Y';
+const APP_VER = 'v0719-Z';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -67,12 +67,15 @@ function syncOrtho() {
   orthoCam.updateProjectionMatrix();
 }
 
-// ---- ライト ----
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-const key = new THREE.DirectionalLight(0xffffff, 0.95);
+// ---- ライト（2026-07-19 社長要望：全体を明るく・立体感を強く） ----
+scene.add(new THREE.AmbientLight(0xffffff, 0.42));
+scene.add(new THREE.HemisphereLight(0xf2f6ff, 0x39414f, 0.55));   // 空/地の自然グラデ＝面の向きで明るさが変わる
+const key = new THREE.DirectionalLight(0xffffff, 1.05);
 key.position.set(8, 12, 6); scene.add(key);
-const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
+const fill = new THREE.DirectionalLight(0x88aaff, 0.3);
 fill.position.set(-8, 4, -6); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xffffff, 0.28);           // 逆側からの輪郭光＝金属の締まり
+rim.position.set(2, -6, -9); scene.add(rim);
 
 // ---- モデル空間（配管はここに入れる） ----
 const modelGroup = new THREE.Group();
@@ -599,7 +602,7 @@ function renderAxisGizmo() {
 // ===================================================================
 // 鋳鋼フランジ風マテリアル（濃いチャコール・つや消し気味）
 const FLANGE_MAT = new THREE.MeshStandardMaterial({
-  color: 0x44494f, metalness: 0.55, roughness: 0.55,
+  color: 0x51575f, metalness: 0.55, roughness: 0.52,   // ひとまわり明るいチャコール（2026-07-19 全体の明るさ改善）
 });
 
 // ---- フランジの選択肢 ----
@@ -1784,13 +1787,50 @@ function valveEndFlange(cls, sizeA, mat, noHub) {
   if (!noHub) { const hubG = ringGeo(neckR, boreR, hub); hubG.translate(0, -t - hub / 2, 0); g.add(new THREE.Mesh(hubG, mat)); }  // ハブ（背面）
   return g;
 }
-// ハンドル車（軸=+Z）。リム＋スポーク＋ハブ。R=リム半径(m)
+// ハンドル車（軸=+Z）。リム＋4本スポーク＋ハブ＋ステムナット。R=リム半径(m)（2026-07-19 リアル化）
 function vHandwheel(R, mat) {
   const g = new THREE.Group();
-  g.add(new THREE.Mesh(new THREE.TorusGeometry(R, R * 0.13, 10, 28), mat));       // 既定でXY平面＝軸Z
-  for (let i = 0; i < 3; i++) { const sp = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.06, R * 0.06, 2 * R, 6), mat); sp.rotation.z = i * Math.PI / 3; g.add(sp); }
-  const hubm = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.18, R * 0.18, R * 0.35, 12), mat); hubm.rotation.x = Math.PI / 2; g.add(hubm);
+  g.add(new THREE.Mesh(new THREE.TorusGeometry(R, R * 0.11, 10, 32), mat));       // リム（既定でXY平面＝軸Z）
+  for (let i = 0; i < 2; i++) {                                                    // 4本スポーク（貫通円柱×2）
+    const sp = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.055, R * 0.055, 2 * R, 8), mat);
+    sp.rotation.z = i * Math.PI / 2; g.add(sp);
+  }
+  const hubm = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.17, R * 0.2, R * 0.32, 14), mat);
+  hubm.rotation.x = Math.PI / 2; g.add(hubm);                                      // ハブ（軸Z・わずかにテーパ）
+  const nut = new THREE.Mesh(new THREE.CylinderGeometry(R * 0.1, R * 0.1, R * 0.16, 6), mat);
+  nut.rotation.x = Math.PI / 2; nut.position.z = R * 0.22; g.add(nut);             // ステムナット（六角）
   return g;
+}
+// 2点間を結ぶ丸棒（ヨーク腕など）
+function vBar(p1, p2, r, mat) {
+  const d = p2.clone().sub(p1);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 10), mat);
+  m.position.copy(p1).addScaledVector(d, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+  return m;
+}
+// ゲート/グローブ弁の上部ドレスアップ（2026-07-19 社長要望：バルブのリアル化）
+// ボンネットフランジのボルト・グランド・門形ヨーク・ヨークスリーブ・ハンドル上のライジングステムを追加。
+// 座標系＝フロー軸Y・ステム軸+Z（bonZ=ボンネットフランジのZ位置・bonTop=ボンネット上端・wheelZ=ハンドル位置）
+function vDressBonnet(g, bodyR, bonR, bonZ, bonTop, wheelZ, wheelR, stemR, bodyMat, opMat) {
+  const bfT = bodyR * 0.16;
+  const nb = 6, bbr = bodyR * 0.56;                          // ボンネットボルト（6本・フランジ縁の内側）
+  for (let i = 0; i < nb; i++) {
+    const a = (i / nb) * Math.PI * 2 + Math.PI / nb;
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(bodyR * 0.055, bodyR * 0.055, bfT * 3.2, 6), opMat);
+    b.rotation.x = Math.PI / 2;
+    b.position.set(Math.cos(a) * bbr, Math.sin(a) * bbr, bonZ);
+    g.add(b);
+  }
+  const gl = new THREE.Mesh(new THREE.CylinderGeometry(bonR * 0.85, bonR * 0.95, bonR * 0.4, 16), bodyMat);
+  gl.rotation.x = Math.PI / 2; gl.position.z = bonTop + bonR * 0.12; g.add(gl);    // グランド押え
+  const yokeHub = wheelZ - wheelR * 0.32;                    // ヨークスリーブ（ハンドル直下のハブ）
+  const yh = new THREE.Mesh(new THREE.CylinderGeometry(bonR * 0.42, bonR * 0.52, wheelR * 0.4, 14), bodyMat);
+  yh.rotation.x = Math.PI / 2; yh.position.z = yokeHub; g.add(yh);
+  const V3 = THREE.Vector3;                                   // 門形ヨーク（左右2本の腕）
+  g.add(vBar(new V3(bodyR * 0.6, 0, bonZ + bfT * 0.6), new V3(bonR * 0.34, 0, yokeHub), bodyR * 0.09, bodyMat));
+  g.add(vBar(new V3(-bodyR * 0.6, 0, bonZ + bfT * 0.6), new V3(-bonR * 0.34, 0, yokeHub), bodyR * 0.09, bodyMat));
+  g.add(vCylZ(stemR * 0.85, wheelZ, wheelZ + wheelR * 0.5, opMat));                // ライジングステム（ハンドルの上に出た軸）
 }
 // +Z 方向の円柱（ステム・ボンネット等）。z0→z1、半径 r。
 function vCylZ(r, z0, z1, mat, r2) { const h = z1 - z0; const m = new THREE.Mesh(new THREE.CylinderGeometry(r2 != null ? r2 : r, r, h, 18), mat); m.rotation.x = Math.PI / 2; m.position.z = (z0 + z1) / 2; return m; }
@@ -1841,6 +1881,7 @@ function makeValve(opts) {
       const wheelZ = bonTop + bodyR * 0.45, wheelR = Math.max(bodyR * 0.85, halfL * 0.7);
       g.add(vCylZ(rPipe * 0.18, bonTop, wheelZ, opMat));                           // ステム
       const hw = vHandwheel(wheelR, opMat); hw.position.z = wheelZ; g.add(hw);
+      vDressBonnet(g, bodyR, bonR, bodyR * 0.92, bonTop, wheelZ, wheelR, rPipe * 0.18, bodyMat, opMat);   // ヨーク・グランド・ボルト（リアル化）
     }
     g.userData.faceNormal = new V3(0, 1, 0); g.userData.backNormal = new V3(0, -1, 0);
     g.userData.faceLocal = new V3(0, halfL, 0); g.userData.backLocal = new V3(0, -halfL, 0);
@@ -1853,6 +1894,11 @@ function makeValve(opts) {
     g.add(vCylZ(covR, bodyR * 0.5, covZ, bodyMat));                             // 上カバー（ボルト蓋・ハンドル無し）
     const lid = new THREE.Mesh(new THREE.CylinderGeometry(covR * 1.15, covR * 1.15, VMM(_vdn(sizeA) * 0.1 + 3), 20), bodyMat);
     lid.rotation.x = Math.PI / 2; lid.position.z = covZ; g.add(lid);
+    for (let i = 0; i < 6; i++) {                                               // 蓋のボルト（リアル化）
+      const a = (i / 6) * Math.PI * 2;
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(covR * 0.09, covR * 0.09, VMM(_vdn(sizeA) * 0.1 + 3) * 3, 6), opMat);
+      b.rotation.x = Math.PI / 2; b.position.set(Math.cos(a) * covR * 0.92, Math.sin(a) * covR * 0.92, covZ); g.add(b);
+    }
     g.userData.faceNormal = new V3(0, 1, 0); g.userData.backNormal = new V3(0, -1, 0);
     g.userData.faceLocal = new V3(0, halfL, 0); g.userData.backLocal = new V3(0, -halfL, 0);
     g.userData.gripLocal = g.userData.faceLocal;
@@ -1914,6 +1960,7 @@ function makeValve(opts) {
     const wheelZ = bonTop + bodyR * 0.5, wheelR = bodyR * 0.95;
     g.add(vCylZ(VMM(od) * 0.12, bonTop, wheelZ, opMat));
     const hw = vHandwheel(wheelR, opMat); hw.position.z = wheelZ; g.add(hw);
+    vDressBonnet(g, bodyR, bonR, bodyR * 0.62, bonTop, wheelZ, wheelR, VMM(od) * 0.12, bodyMat, opMat);   // ヨーク・グランド・ボルト（リアル化）
     g.userData.faceNormal = new V3(0, 1, 0); g.userData.backNormal = new V3(0, -1, 0);
     g.userData.faceLocal = new V3(0, hl - sC, 0); g.userData.backLocal = new V3(0, -(hl - sC), 0);   // 起点＝ソケット底
     g.userData.gripLocal = g.userData.faceLocal;
