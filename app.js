@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-W';
+const APP_VER = 'v0719-X';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -958,6 +958,10 @@ function makeFlange(opts) {
     const a = (i / nBolt) * Math.PI * 2 + Math.PI / nBolt;
     holes.push({ x: Math.cos(a) * bcR, y: Math.sin(a) * bcR, r: holeR });
   }
+  // ボルト穴の中心＝機点（起点候補・スナップ対象。フェイス側の板面上）。2026-07-19 社長要望。
+  // ※extraLocalsには入れない＝自動集計(connPointsForStats)が溶接口として誤カウントするため専用配列（boltLocals）。
+  //   plateWithHolesはrotateX(-90°)で組むため 2Dの(x,y)→ローカル(x, y=板面, -y)
+  g.userData.boltLocals = holes.map(hl => new THREE.Vector3(hl.x, thk / 2, -hl.y));
   // 中心ボア。SWは「背面から座ぐり＋奥に細い流路穴」、BLは穴なし、他は貫通。
   const isBlind = o.type === 'BL';
   const isSW = o.type === 'SW';
@@ -2821,12 +2825,14 @@ function computeConns(obj) {
 function connModelPos(obj, local) {
   return local.clone().applyQuaternion(obj.quaternion).add(obj.position);
 }
-// 部品の全機点（ローカル）を返す。faceLocal/backLocal に加え、extraLocals（ティーの枝端等）も含む。
+// 部品の全機点（ローカル）を返す。faceLocal/backLocal に加え、extraLocals（ティーの枝端等）・
+// boltLocals（フランジのボルト穴中心。起点・スナップ用＝自動集計には使わない）も含む。
 function connsOf(p) {
   const arr = [];
   if (p.userData.faceLocal) arr.push(p.userData.faceLocal);
   if (p.userData.backLocal) arr.push(p.userData.backLocal);
   if (p.userData.extraLocals) for (const e of p.userData.extraLocals) arr.push(e);
+  if (p.userData.boltLocals) for (const e of p.userData.boltLocals) arr.push(e);
   return arr;
 }
 // 起点に使う機点（grip）。ユーザーが選んだ機点 gripLocal、未選択なら faceLocal。
@@ -6656,8 +6662,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return snap;
   }
   // 頂点Vから方向dirへ、対象直線recが届く距離（＝補助線でこの距離までは直線と重なるので描かない）
-  function lineReach(rec, V, dir) {
-    const e = annPickEnds(rec);
+  function lineReach(rec, V, dir, ends) {
+    const e = ends || annPickEnds(rec);   // 部品（フランジ軸）は拾った時の両端(ends)を使う（recはObject3Dでannではない）
     return Math.max(0, e[0].clone().sub(V).dot(dir), e[1].clone().sub(V).dot(dir));
   }
   // 収集中の角度状態＋カーソルから、寸法レコードの a(=V),b(=P1),style を作る
@@ -6674,7 +6680,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const s2 = (cv.dot(u2) < 0) ? -1 : 1;
       const d1 = u1.clone().multiplyScalar(s1), d2 = u2.clone().multiplyScalar(s2);
       const P1 = V.clone().addScaledVector(d1, R), P2 = V.clone().addScaledVector(d2, R);
-      const reach = [lineReach(ang.lines[0], V, d1), lineReach(ang.lines[1], V, d2)];   // 補助線で重なりを隠す境界
+      const reach = [lineReach(ang.lines[0], V, d1, ang.ends && ang.ends[0]),
+                     lineReach(ang.lines[1], V, d2, ang.ends && ang.ends[1])];   // 補助線で重なりを隠す境界
       const st = Object.assign({}, styleFor('dim'), { dimKind: 'angle', angP2: [P2.x, P2.y, P2.z], arcR: R, angReflex: false, angReach: reach });
       return { a: V.clone(), b: P1, st, snapPt: snap || null };
     }
@@ -7033,7 +7040,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     drawState.dimAdjust = null; drawState.dimOff = 0; drawState.dimDir = null;   // 寸法線の逃げ調整状態も解除
     drawState.circDim = null;   // 半径/直径：ロック中の円も解除
     drawState.dimReadjust = null;   // 寸法の逃げ再調整も解除
-    if (drawState.angle && drawState.angle.lines) for (const ln of drawState.angle.lines) paintAnn(ln, selAnns.has(ln));   // 角度の選択ハイライト(緑)を戻す
+    if (drawState.angle && drawState.angle.lines) for (const ln of drawState.angle.lines) {   // 角度の選択ハイライト(緑)を戻す
+      if (ln && ln.isObject3D && ln.userData && ln.userData.placed) {   // 部品（フランジ軸）＝発光を選択状態へ戻す
+        if (typeof setEmissive === 'function') setEmissive(ln, (typeof selectedParts !== 'undefined' && selectedParts.has(ln)) ? SEL_COLOR : 0x000000);
+      } else paintAnn(ln, selAnns.has(ln));
+    }
     drawState.angle = null;     // 角度：収集中の点/直線も解除
     clearPreview();
     if (typeof clearLineGuide === 'function') clearLineGuide();
@@ -7385,21 +7396,34 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       drawDown = null; e.stopImmediatePropagation();
       return;
     }
-    if (drawState.mode === 'dim' && dimKind === 'angle') {   // 角度：2直線をそれぞれ選択して測る（直線オブジェクト以外は無視）
+    if (drawState.mode === 'dim' && dimKind === 'angle') {   // 角度：直線（または部品の軸）を2つ選択して測る
+      // 対象＝線分/構築線に加え、フランジ等の部品もクリック可＝背面→フェイスの軸線として扱う（2026-07-19 社長要望：
+      // 「フランジの面と線分の角度」＝フランジ軸（面の法線）と配管センターの角度を測れる）
+      const pickAngleEdge = (cx, cy) => {
+        const ln = pickAnnLineAt(cx, cy);
+        if (ln) return { obj: ln, rec: ln, ends: annPickEnds(ln) };
+        const part = (typeof pickPlacedAt === 'function') ? pickPlacedAt(cx, cy) : null;
+        if (part && part.userData.faceLocal && part.userData.backLocal) {
+          const A = connModelPos(part, part.userData.backLocal), B = connModelPos(part, part.userData.faceLocal);
+          if (A.distanceTo(B) > 1e-6) return { obj: part, part, ends: [A, B] };
+        }
+        return null;
+      };
+      const markEdge = ed => { if (ed.rec) paintAnn(ed.rec, true, ANG_PICK_COLOR); else if (typeof setEmissive === 'function') setEmissive(ed.part, ANG_PICK_COLOR); };
       const ang = drawState.angle;
       const placing = ang && ang.V;
       if (placing) {                                    // 確定クリック（円弧位置で確定）
         const r = angleDimFrom(ang, e.clientX, e.clientY);
         if (r) addAnnotation('dim', r.a, r.b, r.st);
         cancelDraw();                                   // ツールを抜ける（clearDrawTempでプレビュー消去・緑ハイライト復元・状態解除）
-      } else if (!ang) {                                // 1本目：直線をクリックで選択（緑ハイライト）。空間クリックは何もしない
-        const ln = pickAnnLineAt(e.clientX, e.clientY);
-        if (ln) { drawState.angle = { mode: 'obj', lines: [ln] }; paintAnn(ln, true, ANG_PICK_COLOR); }
-      } else {                                          // 2本目の直線 → 交点を頂点に・各直線の向きを保持
-        const ln = pickAnnLineAt(e.clientX, e.clientY);
-        if (ln && ln !== ang.lines[0]) {
-          ang.lines.push(ln); paintAnn(ln, true, ANG_PICK_COLOR);
-          const e0 = annPickEnds(ang.lines[0]), e1 = annPickEnds(ang.lines[1]);
+      } else if (!ang) {                                // 1本目：直線か部品をクリックで選択（緑ハイライト）。空間クリックは何もしない
+        const ed = pickAngleEdge(e.clientX, e.clientY);
+        if (ed) { drawState.angle = { mode: 'obj', lines: [ed.obj], ends: [ed.ends] }; markEdge(ed); }
+      } else {                                          // 2本目 → 交点（最近接点）を頂点に・各軸の向きを保持
+        const ed = pickAngleEdge(e.clientX, e.clientY);
+        if (ed && ed.obj !== ang.lines[0]) {
+          ang.lines.push(ed.obj); ang.ends.push(ed.ends); markEdge(ed);
+          const e0 = ang.ends[0], e1 = ang.ends[1];
           ang.V = lineLineClosest(e0[0], e0[1], e1[0], e1[1]);
           ang.u1 = e0[1].clone().sub(e0[0]).normalize();
           ang.u2 = e1[1].clone().sub(e1[0]).normalize();
