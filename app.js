@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-U';
+const APP_VER = 'v0719-V';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -144,6 +144,31 @@ window.addEventListener('keydown', e => {
   const k = (e.key || '').toLowerCase();
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); if (window.__undo) window.__undo(); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); if (window.__redo) window.__redo(); }
+}, true);
+
+// ---- 入力欄のフォーカス＝タッチ端末では「全選択」をしない（2026-07-19 社長報告） ----
+// select() で全選択すると iPad はカット/コピー/ペーストのメニュー（コールアウト）が出て邪魔になる。
+// タッチ端末＝カーソルを末尾に置き、最初の1文字入力で全置換（＝全選択と同じ使い勝手でメニューなし）。
+// PC（マウス）＝従来どおり全選択。
+const IS_TOUCH_DEV = (navigator.maxTouchPoints || 0) > 0;
+function focusSelectAll(inp) {
+  if (!inp) return;
+  inp.focus();
+  if (!IS_TOUCH_DEV) { try { inp.select(); } catch (e) {} return; }
+  const n = String(inp.value || '').length;
+  try { inp.setSelectionRange(n, n); } catch (e) {}   // type=number は非対応ブラウザあり＝失敗しても末尾フォーカスで続行
+  inp.dataset.replaceNext = '1';                       // 次の文字入力で全置換
+}
+window.addEventListener('beforeinput', e => {
+  const t = e.target;
+  if (t && t.dataset && t.dataset.replaceNext === '1') {
+    delete t.dataset.replaceNext;
+    if (/^insert/.test(e.inputType || '')) t.value = '';   // 最初の入力＝古い値を置き換え（削除系はそのまま）
+  }
+}, true);
+window.addEventListener('pointerdown', e => {   // 欄をタップしてカーソルを置き直した＝置換モード解除
+  const t = e.target;
+  if (t && t.dataset && t.dataset.replaceNext) delete t.dataset.replaceNext;
 }, true);
 
 // 作図／鏡モード中のカーソル：CAD風の十字＋中央ピックボックス（黒縁＋白で明暗どちらの背景でも視認）
@@ -4412,7 +4437,7 @@ let _xlineChainClose = false;
 function focusElInputSoon() {
   setTimeout(() => {
     if (hForm) hForm.style.display = 'flex';
-    if (hYInput) { hYInput.focus(); hYInput.select(); }
+    if (hYInput) focusSelectAll(hYInput);
   }, 60);
 }
 function nudgeApply(v) {
@@ -4456,7 +4481,7 @@ function startDimRollSpin(rec) {
   rotAInput.value = window.__dimRollSpinStartDeg ? window.__dimRollSpinStartDeg().toFixed(1) : '0';
   positionRotForm(0, 0);
   rotForm.style.display = 'flex';
-  rotAInput.focus(); rotAInput.select();
+  focusSelectAll(rotAInput);
   if (typeof updateForm === 'function') updateForm();
 }
 // スライド寸法の角度スピナー（右クリック切替の直後に呼ばれる）
@@ -4467,7 +4492,7 @@ function startDimSkewSpin(rec) {
   rotAInput.value = window.__dimSkewSpinStartDeg ? window.__dimSkewSpinStartDeg().toFixed(1) : '0';
   positionRotForm(0, 0);
   rotForm.style.display = 'flex';
-  rotAInput.focus(); rotAInput.select();
+  focusSelectAll(rotAInput);
   if (typeof updateForm === 'function') updateForm();
 }
 // 寸法線スピナーの連鎖対象。next='dir'（配置直後：立面なら方位スピナーへ）／'el'（再選択：EL調整へ）
@@ -4486,7 +4511,7 @@ function startDimOffSpin(rec, next, noKbd) {
   rotAInput.value = window.__dimOffSpinStartMm ? String(window.__dimOffSpinStartMm()) : '0';
   positionRotForm(0, 0);
   rotForm.style.display = 'flex';
-  if (!_spinNoKbd) { rotAInput.focus(); rotAInput.select(); }   // タッチ再選択時はキーボードを出さない
+  if (!_spinNoKbd) focusSelectAll(rotAInput);   // タッチ再選択時はキーボードを出さない
   if (typeof updateForm === 'function') updateForm();
 }
 // 立面寸法線の逃げ方位スピナー（逃げ量スピナーの後に呼ばれる）
@@ -4497,7 +4522,7 @@ function startDimDirSpin(rec) {
   rotAInput.value = window.__dimDirSpinStartDeg ? window.__dimDirSpinStartDeg().toFixed(1) : '0';
   positionRotForm(0, 0);
   rotForm.style.display = 'flex';
-  if (!_spinNoKbd) { rotAInput.focus(); rotAInput.select(); }   // 逃げ量からの連鎖がタッチなら方位もキーボードレス
+  if (!_spinNoKbd) focusSelectAll(rotAInput);   // 逃げ量からの連鎖がタッチなら方位もキーボードレス
   if (typeof updateForm === 'function') updateForm();
 }
 function positionRotForm(cx, cy) {
@@ -4534,7 +4559,7 @@ function startRotSpin(shift, cx, cy, noKbd) {
   rotAInput.value = _nudgeMode === 'heading' ? (window.__annHeadingSpinStartDeg ? window.__annHeadingSpinStartDeg().toFixed(1) : '0') : '0';
   positionRotForm(cx, cy);
   rotForm.style.display = 'flex';
-  if (!_spinNoKbd) { rotAInput.focus(); rotAInput.select(); }
+  if (!_spinNoKbd) focusSelectAll(rotAInput);
   if (typeof updateForm === 'function') updateForm();   // スピナー表示中はEL入力を隠す
 }
 function endRotSpin(commit) {
@@ -8333,7 +8358,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__focusDimValueInput = () => {
     setTimeout(() => {
       if (window.__positionDimValueForm) window.__positionDimValueForm();
-      if (dimValForm.style.display !== 'none') { dimValInput.focus(); dimValInput.select(); }
+      if (dimValForm.style.display !== 'none') focusSelectAll(dimValInput);
     }, 30);
   };
   // 毎フレーム：選択中の寸法線の本体中点脇に「値」フォームを追従（スピナー表示中・未選択は隠す）
