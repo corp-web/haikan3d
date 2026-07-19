@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-Z';
+const APP_VER = 'v0720-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -31,8 +31,11 @@ vp.appendChild(renderer.domElement);
 
 // ---- シーン ----
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x141c33);
-scene.fog = new THREE.Fog(0x141c33, 18, 60);
+// 統一カラーモード（2026-07-19 社長決定：ダーク/ホワイト切替を廃止し、昼夜・屋内外で共通に見やすい
+// CAD標準風の中間グレー1本に統一。UIパネルは従来のダーク調のまま）
+const BG_COLOR = 0x878d95;
+scene.background = new THREE.Color(BG_COLOR);
+scene.fog = new THREE.Fog(BG_COLOR, 18, 60);
 
 // ---- カメラ ----
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -87,7 +90,7 @@ function buildGrid(c1, c2) {
   grid.material.opacity = 0.6; grid.material.transparent = true;
   modelGroup.add(grid);
 }
-buildGrid(0x4a5a8a, 0x2a3a5c);
+buildGrid(0x6d747e, 0x9aa1aa);   // 統一グレー背景用のグリッド（濃線/淡線）
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
 let showGround = true;
@@ -116,26 +119,12 @@ function buildGround(fillC, rimC) {
   groundGroup.visible = showGround;
   modelGroup.add(groundGroup);
 }
-buildGround(0x2c3a5e, 0x5f77ab);
+buildGround(0xa4abb5, 0x666e7c);   // 統一グレー背景より一段明るいスラブ＋濃い縁取り
 function applyGround() {
   if (groundGroup) groundGroup.visible = showGround;
   try { localStorage.setItem('p3d_show_ground', showGround ? '1' : '0'); } catch (e) {}
 }
-// ---- 明暗テーマ（背景・グリッド・UI を一括切替） ----
-let lightMode = false;
-function setLightMode(on) {
-  lightMode = !!on;
-  const bg = lightMode ? 0xd2dbe8 : 0x141c33;   // 白モードは少し青みグレー＝白線も見やすく
-  scene.background = new THREE.Color(bg);
-  if (typeof renderer !== 'undefined' && renderer) renderer.setClearColor(bg, 1);
-  buildGrid(lightMode ? 0x8a96b4 : 0x4a5a8a, lightMode ? 0xb6c0d4 : 0x2a3a5c);
-  buildGround(lightMode ? 0xaeb9c9 : 0x2c3a5e, lightMode ? 0x7f8ca6 : 0x5f77ab);   // 地面スラブもテーマ連動
-  if (gizmo && gizmo.applyTheme) gizmo.applyTheme(lightMode);
-  if (window.__rebuildAllAnns) window.__rebuildAllAnns();   // 構築線・寸法線の合成方式を切替に反映（色を保つ）
-  document.body.classList.toggle('light', lightMode);
-  const b = document.getElementById('cmdTheme');
-  if (b) b.title = lightMode ? '背景をダークに戻す' : '背景をホワイトに切替';
-}
+// ---- 明暗テーマは廃止（2026-07-19 社長決定）＝上の統一グレーに一本化。UIは従来のダーク調固定 ----
 // 座標軸は原点ではなく画面左下隅に小さく描く（axisGizmo・下部で構築/描画）
 
 // ---- アンドゥ／リドゥ：操作後に状態スナップショットを取る（capture最先頭で登録し、setTimeoutで操作完了後に実行）----
@@ -288,6 +277,7 @@ const gizmo = {};
     edges.material.color.setHex(gizPal.edge);
     for (const d of dirPlanes) { if (d.mesh.material.map) d.mesh.material.map.dispose(); d.mesh.material.map = dirTexture(d.text); d.mesh.material.needsUpdate = true; }
   };
+  gizmo.applyTheme(true);   // 統一グレー背景＝明るい背景用のキューブ配色（2026-07-19）
 })();
 
 // ===================================================================
@@ -5995,9 +5985,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 白モードは加算合成だと色が白く飛ぶので通常合成＋不透明寄りにして本来の色を保つ。
     // ※寸法線・構築線は solid=true で常に通常合成＝両モード同色。
     // solid=true（構築線）はモードに依らず常に通常合成・同一不透明度＝ダーク／ホワイトで同じ色・同じ見え方。
-    const light = (typeof lightMode !== 'undefined') && lightMode;
-    const useNormal = solid || light;
-    const op = (light && !solid) ? Math.min(1, opacity * 1.8) : opacity;
+    // 統一グレー背景（2026-07-19）＝加算合成は色が飛ぶため常に通常合成・光暈は不透明度を上げて発色を保つ
+    const useNormal = true;
+    const op = solid ? opacity : Math.min(1, opacity * 1.8);
     const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, depthTest: false, blending: useNormal ? THREE.NormalBlending : THREE.AdditiveBlending });
     const m = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len, 8, 1, true), mat);
     m.position.copy(A).add(B).multiplyScalar(0.5);
@@ -6076,7 +6066,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 背景マスク：数字の背面に不透明の下地を敷き、線や他の値が突き抜けて読めなくなるのを防ぐ
     // （寸法値のみ。文字注釈は noMask）。色＝画面の背景色、印刷スナップショット中は白。
     if (!(opt && opt.noMask)) {
-      c.fillStyle = _dimMaskPrint ? '#ffffff' : (lightMode ? '#d2dbe8' : '#141c33');
+      c.fillStyle = _dimMaskPrint ? '#ffffff' : '#878d95';   // 統一グレー背景と同色のマスク
       c.fillRect(0, 0, cv.width, cv.height);
     }
     if (deco === 'box') { c.strokeStyle = col; c.lineWidth = 3; c.strokeRect(1.5, 1.5, cv.width - 3, cv.height - 3); }
@@ -9514,7 +9504,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdCircle').onclick = () => setDrawMode('circle');
   $('cmdDim').onclick = () => setDrawMode('dim');
   $('cmdText').onclick = () => setDrawMode('text');
-  $('cmdTheme').onclick = () => setLightMode(!lightMode);
+  // 明暗ボタンは廃止（2026-07-19 社長決定＝統一グレーに一本化）
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
   $('cmdGroup').onclick = groupSelection;
