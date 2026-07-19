@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0719-N';
+const APP_VER = 'v0719-O';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2161,7 +2161,8 @@ function onOptChange(srcId) {
 function buildPipeOptions() {
   fillSelect('optPipeSize', FLANGE_SIZES, pipeOpts.sizeA);
   fillSelect('optPipeSch', PIPE_SCHEDULES, pipeOpts.sch);
-  const len = document.getElementById('optPipeLen'); if (len) len.value = pipeOpts.length;
+  // 長さは小数第一位まで・.0は省略（2026-07-19 社長要望。端ドラッグ伸縮後の選択でfloat誤差の長い端数が出ていた）
+  const len = document.getElementById('optPipeLen'); if (len) len.value = +(+pipeOpts.length).toFixed(1);
 }
 function onPipeOptChange() {
   const v = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
@@ -4308,6 +4309,7 @@ window.addEventListener('pointercancel', () => {
   if (dirDrag && !dirDrag.locked) cancelDirDrag();
   if (movingPart && movingByDrag) dropMovingPart();
   if (boxSel) { boxSel = null; selBoxEl.style.display = 'none'; }
+  touchSelOnly = false;              // 「選択のみタッチ」も残さない（pointerupが来ないと次のタップが1回空振りする）
   controls.enabled = true;
 });
 // Esc=移動取消/追従解除/選択解除、Delete・Backspace=選択部品の削除
@@ -6390,6 +6392,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function cancelDraw() {
     drawState.mode = null;
     if (typeof clearDrawTemp === 'function') clearDrawTemp();
+    if (window.__resetDrawPointers) window.__resetDrawPointers();   // タッチ本数カウンタも必ずリセット（残留＝フリーズ）
     renderer.domElement.style.cursor = '';
     updateDrawButtons();
   }
@@ -6398,6 +6401,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const turningOff = (drawState.mode === mode);
     drawState.mode = null;
     if (typeof clearDrawTemp === 'function') clearDrawTemp();
+    if (window.__resetDrawPointers) window.__resetDrawPointers();   // 開始/終了とも本数カウンタを白紙に（残留＝フリーズ）
     if (!turningOff) {
       stopFollow();
       if (typeof moveMode !== 'undefined' && moveMode) setMoveMode(false);   // 作図を始めたら「移動」コマンドは解除（排他）
@@ -7059,6 +7063,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let drawMulti = false;            // 2本指以上＝視点操作中（その間は点を打たない）
   const TAP_MOVE = 10;              // 離すまでの移動が この距離(px)以内なら「タップ」＝確定。超えたら位置決めのみ
   let drawParked = null;            // 直近にドラッグして離した位置(client座標)。タップ確定はこの位置で打つ（タップ座標に引っ張られない）
+  // 本数カウンタの残留＝1本指でも「2本指」誤判定→stopImmediatePropagationで作図も視点も遮断＝フリーズ
+  // （文字/角度/半径の確定などpointerdown内でcancelDraw()するとpointerupが作図モード外になり減算されずに残る）。
+  // コマンドの開始/終了で必ずリセットする（2026-07-19 社長報告「コマンドが使えない・画面が固まる」の根本対策）
+  window.__resetDrawPointers = () => { drawPointers.clear(); drawMulti = false; drawDown = null; drawParked = null; };
   // ---- 寸法線の「逃げ」（補助線の長さ）調整 ----
   // 2点目確定後、カーソル移動で寸法線を起点から離す距離を決め、3回目のクリックで確定する。
   function startDimAdjust() {
@@ -7315,9 +7323,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     e.stopImmediatePropagation();
   }, true);
   window.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'mouse') drawPointers.delete(e.pointerId);   // 本数は作図モード外でも必ず減らす（残留＝2本指誤判定でフリーズ）
     if (!drawActive() || e.button !== 0) return;
     if (e.pointerType !== 'mouse') {                    // タッチ/ペン：離れた本数を反映
-      drawPointers.delete(e.pointerId);
       if (drawMulti) {                                  // 2本指（視点操作）の指離し＝点は打たない
         if (drawPointers.size === 0) drawMulti = false; // 全部離れたら通常へ戻す
         drawDown = null; e.stopImmediatePropagation(); return;
@@ -8808,6 +8816,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (btn) btn.classList.toggle('active', open);
       try { localStorage.setItem('p3d_props_open', open ? '1' : '0'); } catch (e) {}
       if (open) { sig = null; render(); }
+      // 位置を動かしたことが無ければ画面中央に出す（2026-07-19 社長要望。ドラッグ後は従来どおりその位置を記憶）
+      if (open) {
+        let saved = null; try { saved = localStorage.getItem('p3d_props_pos'); } catch (e) {}
+        if (!saved) {
+          const w = panel.offsetWidth || 248, h = panel.offsetHeight || 320;
+          applyPos((window.innerWidth - w) / 2, (window.innerHeight - h) / 2);
+        }
+      }
     }
     if (btn) btn.onclick = () => setOpen(!open);
     const closeBtn = document.getElementById('ppClose');
@@ -9391,13 +9407,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const body = document.getElementById('ilBodyWrap');
   const caret = document.getElementById('ilCaret');
   if (!head || !body) return;
-  let collapsed = false;
-  head.addEventListener('click', () => {
-    collapsed = !collapsed;
+  let collapsed = true;   // 既定＝たたむ（2026-07-19 社長要望。開閉は記憶）
+  const applyIl = () => {
     body.style.display = collapsed ? 'none' : '';
     if (caret) caret.textContent = collapsed ? '▸' : '▾';
     head.title = collapsed ? 'クリックで展開' : 'クリックで折りたたみ';
-  });
+    try { localStorage.setItem('p3d_il_open', collapsed ? '0' : '1'); } catch (e) {}
+  };
+  head.addEventListener('click', () => { collapsed = !collapsed; applyIl(); });
+  try { collapsed = localStorage.getItem('p3d_il_open') !== '1'; } catch (e) {}
+  applyIl();
   // 図面仕様パネル（アイテムリストの横）の開閉
   const specHead = document.getElementById('specHead');
   const specBody = document.getElementById('specBodyWrap');
