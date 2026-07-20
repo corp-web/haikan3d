@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-H';
+const APP_VER = 'v0721-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4522,6 +4522,48 @@ function meshHit(pa, pb, limitMs) {
   for (const p of pts) c.add(p);
   return c.multiplyScalar(1 / pts.length);
 }
+// ---- 重なっている「体積」そのものを赤く光らせる（2026-07-21 社長の意図） ----
+// 重なり得る範囲を細かい格子で刻み、両方の部品の内側にある点だけを集めて小さな立方体で埋める。
+// ＝干渉している部分の形がそのまま赤く出る。点(マーカー)ではなく実際に食い込んでいる量が見える。
+function pointInPart(part, pt, rc, dir) {
+  rc.set(pt, dir);
+  rc.far = Infinity;
+  const hits = rc.intersectObject(part, true);
+  let n = 0;                                   // 同じ位置の重複ヒットは1回と数える（稜線を貫いた時の誤判定対策）
+  let last = -1;
+  for (const h of hits) { if (h.distance - last > 1e-6) n++; last = h.distance; }
+  return (n % 2) === 1;                        // 奇数回貫く＝内側
+}
+function overlapVolume(pa, pb, maxPts) {
+  const bxA = new THREE.Box3().setFromObject(pa), bxB = new THREE.Box3().setFromObject(pb);
+  const zone = bxA.clone().intersect(bxB);
+  if (zone.isEmpty()) return null;
+  const size = zone.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const N = 18;                                             // 1辺あたりの最大分割数（重い図面でも止まらない）
+  const step = Math.max(0.0025, maxDim / N);
+  const nx = Math.min(N, Math.max(1, Math.ceil(size.x / step)));
+  const ny = Math.min(N, Math.max(1, Math.ceil(size.y / step)));
+  const nz = Math.min(N, Math.max(1, Math.ceil(size.z / step)));
+  const sx = size.x / nx, sy = size.y / ny, sz = size.z / nz;
+  const restore = [];                                       // 内外判定には裏面も拾う必要がある
+  for (const p of [pa, pb]) p.traverse(o => { if (o.isMesh && o.material && o.material.side !== THREE.DoubleSide) { restore.push([o.material, o.material.side]); o.material.side = THREE.DoubleSide; } });
+  const rc = new THREE.Raycaster();
+  const dir = new THREE.Vector3(0.5231, 0.6117, 0.5934).normalize();   // 軸に平行でない向き＝稜線を踏みにくい
+  const pts = [];
+  const pt = new THREE.Vector3();
+  for (let i = 0; i <= nx && pts.length < maxPts; i++)
+    for (let j = 0; j <= ny && pts.length < maxPts; j++)
+      for (let k = 0; k <= nz && pts.length < maxPts; k++) {
+        pt.set(zone.min.x + i * sx, zone.min.y + j * sy, zone.min.z + k * sz);
+        if (!pointInPart(pa, pt, rc, dir)) continue;
+        if (!pointInPart(pb, pt, rc, dir)) continue;
+        pts.push(pt.clone());
+      }
+  for (const [m, s] of restore) m.side = s;
+  if (!pts.length) return null;
+  return { pts, cell: Math.max(sx, sy, sz) };
+}
 // 円筒で正確に表せる部品か（軸対称で出っ張りが無い）
 function isCylPart(p) { return ['pipe', 'gasket', 'flange'].includes(p.userData.partType); }
 // 線分どうしの最短距離と、その最近点の中点（＝当たっている位置）
@@ -4581,24 +4623,36 @@ function runClashCheck() {
         if (cl.dist < ax.r + bx.r - GAP) at = cl.mid;
       }
       if (!at) continue;
-      const size = (ax && bx) ? Math.min(ax.r, bx.r) : 0.012;
-      hits.push({ at, size, a: visParts[i], b: visParts[j] });
+      const vol = overlapVolume(visParts[i], visParts[j], 2600);   // 重なっている体積そのものを拾う
+      hits.push({ at, vol, a: visParts[i], b: visParts[j] });
     }
   }
   const pairs = hits.length;
-  for (const h of hits) {                                        // 当たっている位置に小さな赤い点を出す（球の網目＝手鞠に見えたため廃止）
-    const r = Math.min(Math.max(h.size * 0.5, 0.004), 0.02);
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 12),
-      new THREE.MeshBasicMaterial({ color: 0xff2020, transparent: true, opacity: 0.9, depthTest: false }));
-    ball.position.copy(h.at); ball.renderOrder = 997;
-    grp.add(ball);
+  // 重なっている分だけを赤く光らせる（社長の意図：干渉している体積そのものを見せる）
+  const redMat = new THREE.MeshBasicMaterial({ color: 0xff2020, transparent: true, opacity: 0.55, depthTest: false });
+  for (const h of hits) {
+    const toLocal = v => modelGroup.worldToLocal(v.clone());
+    if (h.vol && h.vol.pts.length) {
+      const cell = h.vol.cell * 1.15;                            // 少し重ねて塊に見せる
+      const geo = new THREE.BoxGeometry(cell, cell, cell);
+      const inst = new THREE.InstancedMesh(geo, redMat, h.vol.pts.length);
+      const m4 = new THREE.Matrix4();
+      h.vol.pts.forEach((p, idx) => { m4.makeTranslation(0, 0, 0).setPosition(toLocal(p)); inst.setMatrixAt(idx, m4); });
+      inst.instanceMatrix.needsUpdate = true;
+      inst.renderOrder = 997; inst.frustumCulled = false;
+      grp.add(inst);
+    } else {                                                     // 体積を拾えないほど薄い干渉＝位置だけ示す
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.004, 14, 10), redMat);
+      ball.position.copy(toLocal(h.at)); ball.renderOrder = 997;
+      grp.add(ball);
+    }
   }
   if (!pairs) { if (window.__toast) window.__toast('干渉は見つかりませんでした'); return; }
   _clashGroup = grp;
   modelGroup.add(grp);
   if (window.__toast) {
     const names = hits.slice(0, 2).map(h => `${partColumns(h.a).kind}×${partColumns(h.b).kind}`).join('・');
-    window.__toast(`干渉${pairs}箇所：${names}${pairs > 2 ? ' ほか' : ''}（赤い点／クリックで解除）`);
+    window.__toast(`干渉${pairs}箇所：${names}${pairs > 2 ? ' ほか' : ''}（重なっている分を赤表示／クリックで解除）`);
   }
 }
 
