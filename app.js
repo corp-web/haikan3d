@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-P';
+const APP_VER = 'v0720-Q';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6203,7 +6203,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const px = Math.hypot((w1.x - w0.x) * rect.width, (w1.y - w0.y) * rect.height) / 2;
     if (!(px > 1e-6) || !dt.fsFrac) return 1;
     const digitPx = px * dt.fsFrac;
-    if (useOrtho) return (DIM_TEXT_PAPER_MM * PX_PER_M / 1000) / digitPx;
+    if (useOrtho) {
+      const kPaper = (DIM_TEXT_PAPER_MM * PX_PER_M / 1000) / digitPx;
+      if (_dimMaskPrint) return kPaper;                       // 印刷は紙上mm固定のまま
+      return Math.max(kPaper, DIM_TEXT_MIN_PX / digitPx);     // 画面では最小px保証＝キューブで尺度表示にしても値が小さくなり過ぎない（2026-07-20 社長）
+    }
     return digitPx < DIM_TEXT_MIN_PX ? DIM_TEXT_MIN_PX / digitPx : 1;
   }
   // 毎フレーム：寸法文字を「画面上で寸法線と平行・線の上側」に合わせる（常に読める向き）
@@ -7440,6 +7444,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
   }
   function commitDimWithOffset() {                      // 3回目クリック＝逃げを確定して寸法線を作る
+    clearMarkers();                                     // 矢印整列吸着の緑マーカーを消す
     const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
     const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff || 0, dimDir: drawState.dimDir || null });
     if (dimKind === 'linear' && st.dimDir) Object.assign(st, linearFixFields(a, b, st.dimDir));   // 長さ寸法＝軸固定で起票
@@ -7764,6 +7769,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       clearPreview();
       const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff, dimDir: drawState.dimDir });
       if (dimKind === 'linear' && drawState.dimDir) Object.assign(st, linearFixFields(a, b, drawState.dimDir));   // 長さ寸法＝プレビューも軸固定
+      // 作成時の逃げ調整でも、他の寸法線の矢印と整列する逃げ量へ吸着（2026-07-20 社長要望。再選択時と同じ動き）
+      if (st.dimDir) {
+        const snap = dimOffArrowSnap({ a, b, style: st }, drawState.dimOff || 0);
+        clearMarkers();
+        if (snap) {
+          drawState.dimOff = snap.off; st.dimOff = snap.off;
+          addMarker(snap.pt, 0x39ff8a, markerRadiusFor(null, true));   // 吸着中＝相手の矢印を緑で強調
+        }
+      }
       drawState.preview = buildAnn('dim', a, b, st);
       drawState.preview.traverse(o => { if (o.material) o.material.opacity = 0.6; });
       annGroup.add(drawState.preview);
