@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-R';
+const APP_VER = 'v0720-S';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2587,9 +2587,11 @@ try { showXpts = localStorage.getItem('p3d_show_xpt') !== '0'; } catch (e) {}
 // フランジのボルト穴の起点＝既定OFF（2026-07-20 社長。ONにすると起点候補・スナップ対象に）
 let showBoltPts = false;
 try { showBoltPts = localStorage.getItem('p3d_show_boltpt') === '1'; } catch (e) {}
-// 四半円点（部品外径のN/E/S/Wリム点）＝既定ON（2026-07-20 社長）
-let showQuadPts = true;
-try { showQuadPts = localStorage.getItem('p3d_show_quad') !== '0'; } catch (e) {}
+// 四半円点（部品外径のN/E/S/Wリム点）＝既定OFF（2026-07-20 社長・同日改訂）
+let showQuadPts = false;
+try { showQuadPts = localStorage.getItem('p3d_show_quad') === '1'; } catch (e) {}
+const BOLT_PT_COLOR = 0xff4040;   // フランジ穴の起点＝赤（2026-07-20 社長）
+const QUAD_PT_COLOR = 0x22c55e;   // 四半円点＝緑（2026-07-20 社長）
 
 // 複数選択中に primary を掴んだとき、一緒に動かす他メンバーの開始位置を記録する。
 // primary が選択集合に入っていて2件以上なら集団移動、そうでなければ空（=単体移動）。
@@ -2815,12 +2817,12 @@ function drawSelectedConns(part) {
   for (const local of connsOf(part)) {
     const isGrip = local === grip;
     const isBolt = bl && bl.includes(local);
-    // ボルト穴＝交点と同じ黄色（2026-07-20 社長）。起点=緑・他の機点=水色
-    addMarker(connModelPos(part, local), isGrip ? 0x39ff8a : (isBolt ? 0xffd84d : 0x7fd1ff), markerRadiusFor(part, isGrip));
+    // ボルト穴＝赤（2026-07-20 社長）。起点=明緑・他の機点=水色
+    addMarker(connModelPos(part, local), isGrip ? 0x39ff8a : (isBolt ? BOLT_PT_COLOR : 0x7fd1ff), markerRadiusFor(part, isGrip));
   }
-  if (showQuadPts) {   // 四半円点＝小さめの水色で表示（スナップ対象）
+  if (showQuadPts) {   // 四半円点＝緑・小さめで表示（スナップ対象）
     const rQ = markerRadiusFor(part, false) * 0.75;
-    for (const q of quadLocalsOf(part)) addMarker(connModelPos(part, q), 0x7fd1ff, rQ);
+    for (const q of quadLocalsOf(part)) addMarker(connModelPos(part, q), QUAD_PT_COLOR, rQ);
   }
 }
 function updateIdleMarkers() {
@@ -3043,10 +3045,15 @@ function showInteractionMarkers(movingObj, snapPoint) {
   for (const p of placedParts) {
     if (p === movingObj || !p.userData.faceLocal || p.userData.hidden) continue;
     const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true);
-    for (const local of snapLocalsOf(p)) {
+    for (const local of connsOf(p)) {
       const mpos = connModelPos(p, local);
       const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
       addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN);
+    }
+    if (showQuadPts) for (const q of quadLocalsOf(p)) {   // 四半円点＝緑・小さめ
+      const mpos = connModelPos(p, q);
+      const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
+      addMarker(mpos, isSnap ? 0x39ff8a : QUAD_PT_COLOR, isSnap ? rB : rN * 0.75);
     }
   }
   if (snapPoint) addMarker(snapPoint, 0x39ff8a, markerRadiusFor(movingObj, true));   // 線上への近接吸着など、候補点に無い吸着位置も緑で示す
@@ -6936,13 +6943,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function showDrawSnapMarkers(snapPoint) {
     clearMarkers();
     if (snapPoint) addMarker(snapPoint, 0x39ff8a, markerRadiusFor(null, true));   // 線上への近接吸着も緑で示す
-    const mark = (mpos, part) => {
+    const mark = (mpos, part, col) => {
       const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
-      addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, markerRadiusFor(part, isSnap));
+      addMarker(mpos, isSnap ? 0x39ff8a : (col || 0x7fd1ff), markerRadiusFor(part, isSnap));
     };
     for (const p of placedParts) {
       if (!p.userData.faceLocal || p.userData.hidden) continue;
-      for (const local of snapLocalsOf(p)) mark(connModelPos(p, local), p);
+      for (const local of connsOf(p)) mark(connModelPos(p, local), p);
+      if (showQuadPts) for (const q of quadLocalsOf(p)) mark(connModelPos(p, q), p, QUAD_PT_COLOR);   // 四半円点＝緑
     }
     for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, null); }
     if (showXpts) for (const p of xlinePts) mark(p, null);
@@ -8969,8 +8977,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     clearMarkers();
     addMarker(gripPt, 0xff8a3c, markerRadiusFor(null, false));
     if (snapPoint) addMarker(snapPoint, 0x39ff8a, markerRadiusFor(null, true));   // 線上への近接吸着も緑で示す
-    const mark = (pt, rN, rB) => { const isSnap = snapPoint && pt.distanceTo(snapPoint) < 1e-6; addMarker(pt, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN); };
-    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true); for (const local of snapLocalsOf(p)) mark(connModelPos(p, local), rN, rB); }
+    const mark = (pt, rN, rB, col) => { const isSnap = snapPoint && pt.distanceTo(snapPoint) < 1e-6; addMarker(pt, isSnap ? 0x39ff8a : (col || 0x7fd1ff), isSnap ? rB : rN); };
+    for (const p of placedParts) {
+      if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue;
+      const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true);
+      for (const local of connsOf(p)) mark(connModelPos(p, local), rN, rB);
+      if (showQuadPts) for (const q of quadLocalsOf(p)) mark(connModelPos(p, q), rN * 0.75, rB, QUAD_PT_COLOR);   // 四半円点＝緑
+    }
     const lN = markerRadiusFor(null, false), lB = markerRadiusFor(null, true);
     for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, lN, lB); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
     if (showXpts) for (const p of xlinePts) mark(p, lN, lB);
