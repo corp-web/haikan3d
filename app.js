@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-G';
+const APP_VER = 'v0721-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4429,6 +4429,101 @@ function axisOf(p, obb) {
   const rz = Math.max(Math.abs(lb.min.z), Math.abs(lb.max.z)) * Math.abs(sc.z);
   return { a, b, r: Math.max(rx, rz) };
 }
+// ---- 実形状どうしの交差判定（2026-07-21 社長指摘：近似では当たっていない物まで拾う） ----
+// 部品の三角形をワールド座標で取り出し、格子で絞ってから三角形どうしの交差を調べる。
+// 近似（箱・円筒）と違い「実際に面が突き抜けているか」を見るので誤検出が原理的に起きない。
+function trisOf(p) {
+  const out = [];
+  p.updateMatrixWorld(true);
+  p.traverse(o => {
+    if (!o.isMesh || !o.geometry || !o.geometry.attributes || !o.geometry.attributes.position) return;
+    const pos = o.geometry.attributes.position, idx = o.geometry.index, m = o.matrixWorld;
+    const n = idx ? idx.count : pos.count;
+    for (let i = 0; i + 2 < n; i += 3) {
+      const i0 = idx ? idx.getX(i) : i, i1 = idx ? idx.getX(i + 1) : i + 1, i2 = idx ? idx.getX(i + 2) : i + 2;
+      const a = new THREE.Vector3().fromBufferAttribute(pos, i0).applyMatrix4(m);
+      const b = new THREE.Vector3().fromBufferAttribute(pos, i1).applyMatrix4(m);
+      const c = new THREE.Vector3().fromBufferAttribute(pos, i2).applyMatrix4(m);
+      out.push([a, b, c]);
+    }
+  });
+  return out;
+}
+// 線分と三角形の交差（Möller–Trumbore）。交点を返す／無ければ null
+function segTri(p0, p1, t) {
+  const dir = new THREE.Vector3().subVectors(p1, p0);
+  const e1 = new THREE.Vector3().subVectors(t[1], t[0]);
+  const e2 = new THREE.Vector3().subVectors(t[2], t[0]);
+  const pv = new THREE.Vector3().crossVectors(dir, e2);
+  const det = e1.dot(pv);
+  if (Math.abs(det) < 1e-12) return null;
+  const inv = 1 / det;
+  const tv = new THREE.Vector3().subVectors(p0, t[0]);
+  const u = tv.dot(pv) * inv;
+  if (u < 0 || u > 1) return null;
+  const qv = new THREE.Vector3().crossVectors(tv, e1);
+  const v = dir.dot(qv) * inv;
+  if (v < 0 || u + v > 1) return null;
+  const s = e2.dot(qv) * inv;
+  if (s < 0 || s > 1) return null;                       // 線分の外
+  return p0.clone().addScaledVector(dir, s);
+}
+function triBox(t) {
+  return new THREE.Box3().setFromPoints(t);
+}
+// 2部品の実形状が交差していれば、その代表点（交点の平均）を返す。していなければ null
+function meshHit(pa, pb, limitMs) {
+  const A = trisOf(pa), B = trisOf(pb);
+  if (!A.length || !B.length) return null;
+  const bxA = new THREE.Box3().setFromObject(pa), bxB = new THREE.Box3().setFromObject(pb);
+  const zone = bxA.clone().intersect(bxB).expandByScalar(0.001);      // 重なり得る範囲だけを見る
+  if (zone.isEmpty()) return null;
+  const bt = B.map(t => triBox(t)).map((b, i) => (b.intersectsBox(zone) ? { b, t: B[i] } : null)).filter(Boolean);
+  if (!bt.length) return null;
+  // Bの三角形を格子に入れる（20mm）。斜め配管でも候補が一気に減る
+  const CELL = 0.02;
+  const grid = new Map();
+  const key = (x, y, z) => x + ',' + y + ',' + z;
+  for (const it of bt) {
+    const lo = it.b.min, hi = it.b.max;
+    for (let x = Math.floor(lo.x / CELL); x <= Math.floor(hi.x / CELL); x++)
+      for (let y = Math.floor(lo.y / CELL); y <= Math.floor(hi.y / CELL); y++)
+        for (let z = Math.floor(lo.z / CELL); z <= Math.floor(hi.z / CELL); z++) {
+          const k = key(x, y, z);
+          let arr = grid.get(k); if (!arr) { arr = []; grid.set(k, arr); }
+          arr.push(it.t);
+        }
+  }
+  const pts = [];
+  const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+  for (const ta of A) {
+    const ba = triBox(ta);
+    if (!ba.intersectsBox(zone)) continue;
+    const seen = new Set();
+    const lo = ba.min, hi = ba.max;
+    for (let x = Math.floor(lo.x / CELL); x <= Math.floor(hi.x / CELL); x++)
+      for (let y = Math.floor(lo.y / CELL); y <= Math.floor(hi.y / CELL); y++)
+        for (let z = Math.floor(lo.z / CELL); z <= Math.floor(hi.z / CELL); z++) {
+          const arr = grid.get(key(x, y, z));
+          if (!arr) continue;
+          for (const tb of arr) {
+            if (seen.has(tb)) continue;
+            seen.add(tb);
+            let hit = segTri(ta[0], ta[1], tb) || segTri(ta[1], ta[2], tb) || segTri(ta[2], ta[0], tb)
+                   || segTri(tb[0], tb[1], ta) || segTri(tb[1], tb[2], ta) || segTri(tb[2], tb[0], ta);
+            if (hit) pts.push(hit);
+          }
+        }
+    if (pts.length >= 24) break;                                       // 代表点が十分集まったら打ち切り
+    if (limitMs && t0 && (performance.now() - t0) > limitMs) break;     // 重い図面でも固まらないように
+  }
+  if (!pts.length) return null;
+  const c = new THREE.Vector3();
+  for (const p of pts) c.add(p);
+  return c.multiplyScalar(1 / pts.length);
+}
+// 円筒で正確に表せる部品か（軸対称で出っ張りが無い）
+function isCylPart(p) { return ['pipe', 'gasket', 'flange'].includes(p.userData.partType); }
 // 線分どうしの最短距離と、その最近点の中点（＝当たっている位置）
 function segSegClosest(p1, q1, p2, q2) {
   const d1 = new THREE.Vector3().subVectors(q1, p1), d2 = new THREE.Vector3().subVectors(q2, p2);
@@ -4476,34 +4571,35 @@ function runClashCheck() {
       const A = obbs[i], B = obbs[j];
       if (!A || !B) continue;
       if (!obbOverlap(A, B, GAP)) continue;                      // 実体の箱が重ならない＝干渉なし
+      // 本判定＝実際の形状（三角形）が突き抜けているかを見る。近似ではないので誤検出しない
       const ax = axes[i], bx = axes[j];
-      let at = null, size = 0.02;
-      if (ax && bx) {                                            // 両方とも軸物＝管どうしの距離で本判定
+      let at = meshHit(visParts[i], visParts[j], 250);
+      // 同軸で丸ごと重なっている場合は面が交差せず（面どうしが一致する）検出できないので、
+      // 円筒で正確に表せる部品（管・フランジ・ガスケット）に限って芯間距離でも判定する
+      if (!at && ax && bx && isCylPart(visParts[i]) && isCylPart(visParts[j])) {
         const cl = segSegClosest(ax.a, ax.b, bx.a, bx.b);
-        if (cl.dist > ax.r + bx.r - GAP) continue;               // 芯間距離が半径の和より大きい＝当たっていない
-        at = cl.mid; size = Math.min(ax.r, bx.r);
-      } else {
-        at = A.c.clone().add(B.c).multiplyScalar(0.5);           // 軸を持たない部品＝箱の中間を当たり位置とする
-        size = Math.min(Math.min(...A.e), Math.min(...B.e));
+        if (cl.dist < ax.r + bx.r - GAP) at = cl.mid;
       }
-      hits.push({ at, size });
+      if (!at) continue;
+      const size = (ax && bx) ? Math.min(ax.r, bx.r) : 0.012;
+      hits.push({ at, size, a: visParts[i], b: visParts[j] });
     }
   }
   const pairs = hits.length;
-  for (const h of hits) {                                        // 当たっている位置に赤い球を出す（箱ではない）
-    const r = Math.min(Math.max(h.size * 0.9, 0.004), 0.05);
-    const geo = new THREE.SphereGeometry(r, 20, 14);
-    const ball = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.45, depthTest: false }));
-    ball.position.copy(h.at); ball.renderOrder = 996;
-    const ring = new THREE.Mesh(new THREE.SphereGeometry(r * 1.06, 20, 14),
-      new THREE.MeshBasicMaterial({ color: 0xff3030, wireframe: true, transparent: true, opacity: 0.85, depthTest: false }));
-    ring.position.copy(h.at); ring.renderOrder = 997;
-    grp.add(ball); grp.add(ring);
+  for (const h of hits) {                                        // 当たっている位置に小さな赤い点を出す（球の網目＝手鞠に見えたため廃止）
+    const r = Math.min(Math.max(h.size * 0.5, 0.004), 0.02);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 12),
+      new THREE.MeshBasicMaterial({ color: 0xff2020, transparent: true, opacity: 0.9, depthTest: false }));
+    ball.position.copy(h.at); ball.renderOrder = 997;
+    grp.add(ball);
   }
   if (!pairs) { if (window.__toast) window.__toast('干渉は見つかりませんでした'); return; }
   _clashGroup = grp;
   modelGroup.add(grp);
-  if (window.__toast) window.__toast('干渉の疑い：' + pairs + '箇所を赤表示（クリックで解除・参考値）');
+  if (window.__toast) {
+    const names = hits.slice(0, 2).map(h => `${partColumns(h.a).kind}×${partColumns(h.b).kind}`).join('・');
+    window.__toast(`干渉${pairs}箇所：${names}${pairs > 2 ? ' ほか' : ''}（赤い点／クリックで解除）`);
+  }
 }
 
 // カーソル下の配置済み部品（ルート）を返す。無ければ null。
