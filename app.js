@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-F';
+const APP_VER = 'v0721-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4372,6 +4372,85 @@ function clearClash() {
   _clashGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
   _clashGroup = null;
 }
+// ---- 干渉判定の下ごしらえ（2026-07-21 社長指摘：当たっていないのに四角く赤くなる） ----
+// 原因＝画面軸に沿った外接箱(AABB)で判定していたため、斜めの配管ほど箱が実体より大きく、
+// 離れていても箱が重なって「干渉」と出ていた。部品の向きに沿った箱(OBB)＋軸線どうしの距離で判定する。
+function localBoxOf(p) {                       // 部品座標系での境界箱（回転の影響を受けない実寸）
+  const box = new THREE.Box3(), bb = new THREE.Box3(), m = new THREE.Matrix4();
+  p.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(p.matrixWorld).invert();
+  p.traverse(o => {
+    if (!o.isMesh || !o.geometry) return;
+    if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+    bb.copy(o.geometry.boundingBox);
+    m.multiplyMatrices(inv, o.matrixWorld);
+    bb.applyMatrix4(m);
+    box.union(bb);
+  });
+  return box;
+}
+function obbOf(p) {                            // 向き付き境界箱：中心・3軸・半径3方向
+  const lb = localBoxOf(p);
+  if (lb.isEmpty()) return null;
+  const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), sc = new THREE.Vector3();
+  p.matrixWorld.decompose(pos, quat, sc);
+  const c = lb.getCenter(new THREE.Vector3()).applyMatrix4(p.matrixWorld);
+  const half = lb.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+  const u = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)].map(v => v.applyQuaternion(quat).normalize());
+  return { c, u, e: [half.x * Math.abs(sc.x), half.y * Math.abs(sc.y), half.z * Math.abs(sc.z)], lb, sc };
+}
+function obbOverlap(A, B, gap) {               // 分離軸判定（15軸）。gap＝この隙間までは当たりとしない
+  const EPS = 1e-6;
+  const R = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], Ab = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { R[i][j] = A.u[i].dot(B.u[j]); Ab[i][j] = Math.abs(R[i][j]) + EPS; }
+  const d = new THREE.Vector3().subVectors(B.c, A.c);
+  const t = [d.dot(A.u[0]), d.dot(A.u[1]), d.dot(A.u[2])];
+  const ae = A.e.map(v => Math.max(v - gap, 0)), be = B.e.map(v => Math.max(v - gap, 0));
+  for (let i = 0; i < 3; i++)
+    if (Math.abs(t[i]) > ae[i] + be[0] * Ab[i][0] + be[1] * Ab[i][1] + be[2] * Ab[i][2]) return false;
+  for (let j = 0; j < 3; j++)
+    if (Math.abs(t[0] * R[0][j] + t[1] * R[1][j] + t[2] * R[2][j]) > be[j] + ae[0] * Ab[0][j] + ae[1] * Ab[1][j] + ae[2] * Ab[2][j]) return false;
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    const i1 = (i + 1) % 3, i2 = (i + 2) % 3, j1 = (j + 1) % 3, j2 = (j + 2) % 3;
+    const ra = ae[i1] * Ab[i2][j] + ae[i2] * Ab[i1][j];
+    const rb = be[j1] * Ab[i][j2] + be[j2] * Ab[i][j1];
+    if (Math.abs(t[i2] * R[i1][j] - t[i1] * R[i2][j]) > ra + rb) return false;
+  }
+  return true;
+}
+// 部品の軸線（背面→フェイス）と、軸まわりの外半径。配管部品は軸対称なのでこれで実体に近い判定ができる
+function axisOf(p, obb) {
+  const u = p.userData;
+  if (!u.faceLocal || !u.backLocal || !obb) return null;
+  const a = connModelPos(p, u.backLocal), b = connModelPos(p, u.faceLocal);
+  if (a.distanceTo(b) < 1e-6) return null;
+  const lb = obb.lb, sc = obb.sc;
+  const rx = Math.max(Math.abs(lb.min.x), Math.abs(lb.max.x)) * Math.abs(sc.x);
+  const rz = Math.max(Math.abs(lb.min.z), Math.abs(lb.max.z)) * Math.abs(sc.z);
+  return { a, b, r: Math.max(rx, rz) };
+}
+// 線分どうしの最短距離と、その最近点の中点（＝当たっている位置）
+function segSegClosest(p1, q1, p2, q2) {
+  const d1 = new THREE.Vector3().subVectors(q1, p1), d2 = new THREE.Vector3().subVectors(q2, p2);
+  const r = new THREE.Vector3().subVectors(p1, p2);
+  const a = d1.dot(d1), e = d2.dot(d2), f = d2.dot(r);
+  let s, t;
+  if (a < 1e-12 && e < 1e-12) { s = t = 0; }
+  else if (a < 1e-12) { s = 0; t = Math.min(Math.max(f / e, 0), 1); }
+  else {
+    const c = d1.dot(r);
+    if (e < 1e-12) { t = 0; s = Math.min(Math.max(-c / a, 0), 1); }
+    else {
+      const b = d1.dot(d2), den = a * e - b * b;
+      s = den > 1e-12 ? Math.min(Math.max((b * f - c * e) / den, 0), 1) : 0;
+      t = (b * s + f) / e;
+      if (t < 0) { t = 0; s = Math.min(Math.max(-c / a, 0), 1); }
+      else if (t > 1) { t = 1; s = Math.min(Math.max((b - c) / a, 0), 1); }
+    }
+  }
+  const c1 = p1.clone().addScaledVector(d1, s), c2 = p2.clone().addScaledVector(d2, t);
+  return { dist: c1.distanceTo(c2), mid: c1.clone().add(c2).multiplyScalar(0.5) };
+}
 function runClashCheck() {
   clearClash();
   const visParts = placedParts.filter(p => !p.userData.hidden);   // 非表示は検査対象外（赤表示しても見えない）
@@ -4384,30 +4463,47 @@ function runClashCheck() {
     if (pts[i].idx !== pts[j].idx && pts[i].pos.distanceTo(pts[j].pos) < 0.0015)
       connKey.add(Math.min(pts[i].idx, pts[j].idx) + '_' + Math.max(pts[i].idx, pts[j].idx));
   }
-  const boxes = visParts.map(p => new THREE.Box3().setFromObject(p).expandByScalar(-0.002));
-  // 当たっている部分（外接箱どうしの重なり領域）だけを赤の半透明ボックスで示す（2026-07-20 社長：全体を赤くしない）
+  // 部品の向きに沿った箱(OBB)で粗く判定し、軸のある部品どうしは軸線間の距離で本判定する。
+  // これで斜め配管が「離れているのに当たり」と出ることがなくなる（2026-07-21 社長指摘）
+  const GAP = 0.002;                 // 2mm 以内の接近は「接している」とみなさない（意図した突き合わせ対策）
+  const obbs = visParts.map(p => obbOf(p));
+  const axes = visParts.map((p, i) => axisOf(p, obbs[i]));
   const grp = new THREE.Group();
-  let pairs = 0;
+  const hits = [];
   for (let i = 0; i < visParts.length; i++) {
     for (let j = i + 1; j < visParts.length; j++) {
       if (connKey.has(i + '_' + j)) continue;
-      if (!boxes[i].intersectsBox(boxes[j])) continue;
-      pairs++;
-      const ib = boxes[i].clone().intersect(boxes[j]).expandByScalar(0.003);   // 検出時の2mm縮小を戻し少し余裕
-      const size = ib.getSize(new THREE.Vector3()), ctr = ib.getCenter(new THREE.Vector3());
-      const geo = new THREE.BoxGeometry(Math.max(size.x, 0.004), Math.max(size.y, 0.004), Math.max(size.z, 0.004));
-      const box = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.38, depthTest: false }));
-      box.position.copy(ctr); box.renderOrder = 996;
-      const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
-        new THREE.LineBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.9, depthTest: false }));
-      edge.position.copy(ctr); edge.renderOrder = 997;
-      grp.add(box); grp.add(edge);
+      const A = obbs[i], B = obbs[j];
+      if (!A || !B) continue;
+      if (!obbOverlap(A, B, GAP)) continue;                      // 実体の箱が重ならない＝干渉なし
+      const ax = axes[i], bx = axes[j];
+      let at = null, size = 0.02;
+      if (ax && bx) {                                            // 両方とも軸物＝管どうしの距離で本判定
+        const cl = segSegClosest(ax.a, ax.b, bx.a, bx.b);
+        if (cl.dist > ax.r + bx.r - GAP) continue;               // 芯間距離が半径の和より大きい＝当たっていない
+        at = cl.mid; size = Math.min(ax.r, bx.r);
+      } else {
+        at = A.c.clone().add(B.c).multiplyScalar(0.5);           // 軸を持たない部品＝箱の中間を当たり位置とする
+        size = Math.min(Math.min(...A.e), Math.min(...B.e));
+      }
+      hits.push({ at, size });
     }
+  }
+  const pairs = hits.length;
+  for (const h of hits) {                                        // 当たっている位置に赤い球を出す（箱ではない）
+    const r = Math.min(Math.max(h.size * 0.9, 0.004), 0.05);
+    const geo = new THREE.SphereGeometry(r, 20, 14);
+    const ball = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.45, depthTest: false }));
+    ball.position.copy(h.at); ball.renderOrder = 996;
+    const ring = new THREE.Mesh(new THREE.SphereGeometry(r * 1.06, 20, 14),
+      new THREE.MeshBasicMaterial({ color: 0xff3030, wireframe: true, transparent: true, opacity: 0.85, depthTest: false }));
+    ring.position.copy(h.at); ring.renderOrder = 997;
+    grp.add(ball); grp.add(ring);
   }
   if (!pairs) { if (window.__toast) window.__toast('干渉は見つかりませんでした'); return; }
   _clashGroup = grp;
   modelGroup.add(grp);
-  if (window.__toast) window.__toast('干渉の疑い：' + pairs + '箇所の当たり部分を赤表示（クリックで解除・参考値）');
+  if (window.__toast) window.__toast('干渉の疑い：' + pairs + '箇所を赤表示（クリックで解除・参考値）');
 }
 
 // カーソル下の配置済み部品（ルート）を返す。無ければ null。
