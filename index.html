@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0721B — SKT-HD ♦</title>
+<title>配管3D v0721C — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（2026-07-20 社長要望）：アイソメのエルボ＋フランジ＋寸法。iOSはapple-touch-iconを使う -->
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-<meta name="apple-mobile-web-app-title" content="配管3D v0721B">
+<meta name="apple-mobile-web-app-title" content="配管3D v0721C">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -436,8 +436,13 @@
   /* 右上のアイコンボタン（SVG線色を濃く） */
   body.light #homeBtn svg, body.light #zoomBtn svg { stroke: #46506a; }
   body.light .rollBtn svg { fill: #46506a; }
-  /* 高さ・角度・脚の入力欄 */
+  /* 高さ・角度・脚の入力欄（枠もアイテムパレットと同じ明色に：2026-07-21 社長要望） */
+  body.light #hForm, body.light #rotForm, body.light .legBox {
+    background: rgba(248,250,253,.97); border-color: #7fa8e8; color: #33405c;
+    box-shadow: 0 4px 14px rgba(20,40,80,.20); }
   body.light #hForm input, body.light #rotForm input, body.light .legBox input { background: #fff; color: #2a3550; border-color: #c4ccda; }
+  body.light #rotBtns button { background: #eef2f8; color: #4a5a74; border-color: #c4ccda; }
+  body.light #rotBtns button:hover { border-color: #2f7bff; color: #1f3a68; }
 </style>
 </head>
 <body class="light">
