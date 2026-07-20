@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-A';
+const APP_VER = 'v0721-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1781,10 +1781,13 @@ function valveEndFlange(cls, sizeA, mat, noHub) {
   const holes = [];
   for (let i = 0; i < nB; i++) { const a = (i / nB) * Math.PI * 2 + Math.PI / nB; holes.push({ x: Math.cos(a) * bcR, y: Math.sin(a) * bcR, r: holeR }); }
   holes.push({ x: 0, y: 0, r: boreR });
-  const plate = plateWithHoles(R, t, holes); plate.translate(0, -t / 2, 0);                       // 前面 y=0／本体側 -Y
+  // グループ原点 y=0 ＝ レイズドフェイスの「面」＝ガスケット当たり面。
+  // バルブの面間寸法（JIS/ASMEの face-to-face）はガスケット面どうしの距離なので、機点(±halfL)に
+  // RFの面が来るようRFぶん内側へ寄せる。（2026-07-21 社長指摘：RFがガスケット・相手フランジと重なっていた）
+  const plate = plateWithHoles(R, t, holes); plate.translate(0, -t / 2 - rfH, 0);                 // 板：RF面より内側
   g.add(new THREE.Mesh(plate, mat));
-  const rf = ringGeo(RF, boreR, rfH); rf.translate(0, rfH / 2, 0); g.add(new THREE.Mesh(rf, mat)); // レイズドフェイス
-  if (!noHub) { const hubG = ringGeo(neckR, boreR, hub); hubG.translate(0, -t - hub / 2, 0); g.add(new THREE.Mesh(hubG, mat)); }  // ハブ（背面）
+  const rf = ringGeo(RF, boreR, rfH); rf.translate(0, -rfH / 2, 0); g.add(new THREE.Mesh(rf, mat)); // レイズドフェイス（面が y=0）
+  if (!noHub) { const hubG = ringGeo(neckR, boreR, hub); hubG.translate(0, -t - rfH - hub / 2, 0); g.add(new THREE.Mesh(hubG, mat)); }  // ハブ（背面）
   return g;
 }
 // ハンドル車（軸=+Z）。リム＋4本スポーク＋ハブ＋ステムナット。R=リム半径(m)（2026-07-19 リアル化）
@@ -3020,6 +3023,27 @@ function gasketSideOf(p, local) {
     return ['swgate', 'swglobe'].includes(k) ? null : 'valve';   // ねじ込み/SW形はガスケット継手ではない
   }
   return null;
+}
+// ガスケットの厚みを作り替える（プロパティからの変更・2026-07-21 社長要望）。
+// 背面(=位置の基準)は動かさずフェイス側へ厚みが伸びる＝相手のフランジは動かさない。
+function rebuildGasket(p, t) {
+  const u = p.userData;
+  if (!u || u.partType !== 'gasket' || !u.gasket) return;
+  const nt = parseFloat(t);
+  if (!isFinite(nt) || nt <= 0) return;
+  const oldFace = u.faceLocal, oldBack = u.backLocal, oldGrip = u.gripLocal;
+  const ng = makeGasket(Object.assign({}, u.gasket, { t: nt }));
+  while (p.children.length) {                       // 見た目を作り替え（位置・姿勢はそのまま）
+    const c = p.children.pop();
+    c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  for (const c of [...ng.children]) p.add(c);
+  u.gasket = ng.userData.gasket;
+  u.faceLocal = ng.userData.faceLocal;
+  u.backLocal = ng.userData.backLocal;
+  if (oldGrip) u.gripLocal = (oldGrip === oldBack) ? u.backLocal : u.faceLocal;   // 起点の指し先を新しい機点へ付け替え
+  _idleSig = null;
+  refreshItemList();
 }
 function autoInsertGasket(part) {
   if (!autoGasket || !part || !part.userData || part.userData.hidden) return null;
@@ -9775,6 +9799,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (u.partType === 'pipe' && u.pipe) {
         sec('パイプ');
         edRow('長さ', { get: () => Math.round(u.pipe.length), set: v => { if (v >= 1) rebuildPipe(p, v, 'face'); updateForm(); }, unit: 'mm', step: 1 });
+      }
+      if (u.partType === 'gasket' && u.gasket) {
+        sec('ガスケット');
+        edRow('厚み', { get: () => u.gasket.t, set: v => { if (v > 0) rebuildGasket(p, v); updateForm(); }, unit: 'mm', step: 0.5 });
       }
       if (u.faceLocal) {
         sec('向き（フェイス面）');
