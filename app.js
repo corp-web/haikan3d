@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-J';
+const APP_VER = 'v0721-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3776,6 +3776,7 @@ function positionHeightForm() {
   // 例外＝方向ドラッグの距離入力（移動コマンドの操作中だけ従来どおり表示）
   if (!dirActive()) { hForm.style.display = 'none'; return; }
   if (window.__mirrorActive && window.__mirrorActive()) { hForm.style.display = 'none'; return; }   // 鏡モード中は入力フォームを出さない
+  if (window.__rotateActive && window.__rotateActive()) { hForm.style.display = 'none'; return; }   // 回転モード中も同様
   if (rotForm && rotForm.style.display === 'flex') { hForm.style.display = 'none'; return; }   // 角度スピナー中はEL非表示
   // 寸法線（単独選択）の「値」フォームは専用のテキスト入力（__positionDimValueForm）が担う
   if (!selectedPart && selectedParts.size === 0 && window.__dimValueSel && window.__dimValueSel()) { hForm.style.display = 'none'; return; }
@@ -5636,6 +5637,166 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return new THREE.Matrix4().makeTranslation(p.x, p.y, p.z).multiply(m)
       .multiply(new THREE.Matrix4().makeTranslation(-p.x, -p.y, -p.z));
   }
+  // ===== 回転コマンド（2026-07-21 社長要望：書いた方角を間違えたときに向きを直す） =====
+  // 操作は鏡と同じ流れ：①回転の中心をタップ（機点・端点・交点へ吸着）②角度を決めてタップで確定。
+  // 角度はカーソル方向の45°刻み（Shift＝5°刻み）、または画面の入力欄に数値を入れてEnter。
+  // 鏡と違い複製はせず、選択中のアイテムそのものを回す（＝方角の直し）。軸は鉛直(Y)＝方位角の修正。
+  let rotateMode = null;   // { parts, anns, p1, ang }
+  const rotBox = document.createElement('div');
+  rotBox.id = 'rotCmdBox';
+  rotBox.style.cssText = 'position:fixed;z-index:90;display:none;align-items:center;gap:6px;padding:5px 8px;font:12px Meiryo,sans-serif;' +
+    'color:#33405c;background:rgba(248,250,253,.97);border:1px solid #7fa8e8;border-radius:8px;box-shadow:0 4px 14px rgba(20,40,80,.20);white-space:nowrap';
+  rotBox.innerHTML = '<span>角度</span><input id="rotCmdA" type="number" step="5" style="width:62px;background:#fff;color:#2a3550;border:1px solid #c4ccda;border-radius:5px;padding:3px 5px;font-size:12px"><span>°</span>';
+  document.body.appendChild(rotBox);
+  const rotCmdA = rotBox.querySelector('#rotCmdA');
+  function rotYMatrix(p, deg) {
+    const m = new THREE.Matrix4().makeRotationY(deg * Math.PI / 180);
+    return new THREE.Matrix4().makeTranslation(p.x, p.y, p.z).multiply(m)
+      .multiply(new THREE.Matrix4().makeTranslation(-p.x, -p.y, -p.z));
+  }
+  function endRotateMode() {
+    rotateMode = null; clearMirrorGuide(); rotBox.style.display = 'none';
+    renderer.domElement.style.cursor = '';
+  }
+  window.__rotateActive = () => !!rotateMode;
+  window.__rotateCancel = endRotateMode;
+  function rotateCmd() {
+    if (rotateMode) { endRotateMode(); return; }           // もう一度押す＝取消
+    const parts = [...selectedParts], anns = [...selAnns];
+    if (!parts.length && !anns.length) { if (window.__toast) window.__toast('回転：先にアイテムを選んでください'); return; }
+    rotateMode = { parts, anns, p1: null, ang: 0 };
+    renderer.domElement.style.cursor = DRAW_CURSOR;
+  }
+  function rotAngleFrom(cx, cy, shift) {
+    const p1 = rotateMode.p1;
+    const hit = planeHitAt(cx, cy, p1.y);
+    if (!hit) return null;
+    const vx = hit.x - p1.x, vz = hit.z - p1.z;
+    if (Math.hypot(vx, vz) < 1e-6) return null;
+    let deg = -Math.atan2(vz, vx) * 180 / Math.PI - rotateMode.base;   // 起点方向からの相対角
+    const step = shift ? 5 : 45;
+    deg = Math.round(deg / step) * step;
+    while (deg > 180) deg -= 360;
+    while (deg <= -180) deg += 360;
+    return deg;
+  }
+  function buildRotatePreview(deg) {
+    clearMirrorGuide();
+    const M = rotYMatrix(rotateMode.p1, deg);
+    for (const s of rotateMode.parts) {
+      s.updateMatrixWorld(true);
+      const g = s.clone(true);
+      const m = new THREE.Matrix4().multiplyMatrices(M, s.matrix);
+      const pos = new V3(), quat = new THREE.Quaternion(), scl = new V3();
+      m.decompose(pos, quat, scl);
+      g.position.copy(pos); g.quaternion.copy(quat); g.scale.copy(scl);
+      g.traverse(o => {
+        if (o.isMesh && o.material) {
+          o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45;
+          o.material.depthWrite = false;
+          if (o.material.color) o.material.color.lerp(new THREE.Color(0x4d8fff), 0.5);
+        }
+      });
+      mirrorGuide.add(g);
+    }
+    for (const r of rotateMode.anns) {
+      const a2 = r.a.clone().applyMatrix4(M), b2 = r.b.clone().applyMatrix4(M);
+      const st = Object.assign({}, r.style);
+      if (st.dimDir) { const d2 = new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z).transformDirection(M); st.dimDir = { x: d2.x, y: d2.y, z: d2.z }; }
+      if (st.angP2) { const p2 = new V3(st.angP2[0], st.angP2[1], st.angP2[2]).applyMatrix4(M); st.angP2 = [p2.x, p2.y, p2.z]; }
+      const g = buildAnn(r.type, a2, b2, st);
+      g.traverse(o => { if (o.material) { o.material.transparent = true; o.material.opacity = Math.min(o.material.opacity != null ? o.material.opacity : 1, 0.45); } });
+      mirrorGuide.add(g);
+    }
+    const dot = new THREE.Mesh(new THREE.SphereGeometry(0.004, 12, 10), new THREE.MeshBasicMaterial({ color: 0xff8a3c, depthTest: false, transparent: true }));
+    dot.position.copy(rotateMode.p1); dot.renderOrder = 998;
+    mirrorGuide.add(dot);
+  }
+  function showRotBox() {
+    const rect = renderer.domElement.getBoundingClientRect();
+    const ndc = modelGroup.localToWorld(rotateMode.p1.clone()).project(activeCam());
+    const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+    rotBox.style.display = 'flex';
+    rotBox.style.left = Math.round(Math.min(Math.max(sx + 16, rect.left + 8), rect.right - 150)) + 'px';
+    rotBox.style.top = Math.round(Math.min(Math.max(sy - 44, rect.top + 8), rect.bottom - 44)) + 'px';
+  }
+  function execRotate(deg) {
+    if (!rotateMode) return;
+    const M = rotYMatrix(rotateMode.p1, deg);
+    for (const s of rotateMode.parts) {
+      s.updateMatrixWorld(true);
+      const m = new THREE.Matrix4().multiplyMatrices(M, s.matrix);
+      const pos = new V3(), quat = new THREE.Quaternion(), scl = new V3();
+      m.decompose(pos, quat, scl);
+      s.position.copy(pos); s.quaternion.copy(quat); s.scale.copy(scl);
+      s.userData.orient = 0; s.userData.roll = 0;      // 送り角の基準は作り直す（見た目の姿勢が正）
+    }
+    for (const r of rotateMode.anns) {
+      r.a.applyMatrix4(M); r.b.applyMatrix4(M);
+      if (r.style && r.style.dimDir) {
+        const d2 = new V3(r.style.dimDir.x, r.style.dimDir.y, r.style.dimDir.z).transformDirection(M);
+        r.style.dimDir = { x: d2.x, y: d2.y, z: d2.z };
+      }
+      if (r.style && r.style.angP2) {
+        const p2 = new V3(r.style.angP2[0], r.style.angP2[1], r.style.angP2[2]).applyMatrix4(M);
+        r.style.angP2 = [p2.x, p2.y, p2.z];
+      }
+      rebuildAnn(r);
+    }
+    updateXlinePts();
+    if (typeof refreshItemList === 'function') refreshItemList();
+    if (typeof updateForm === 'function') updateForm();
+    if (typeof _idleSig !== 'undefined') _idleSig = null;
+    refreshHandles(); refreshAnnHi();
+    if (window.__recordHistory) window.__recordHistory();
+    if (window.__toast) window.__toast(`${deg > 0 ? '＋' : ''}${deg}° 回転しました`);
+    endRotateMode();
+  }
+  rotCmdA.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); const v = parseFloat(rotCmdA.value); if (isFinite(v)) execRotate(v); }
+    if (e.key === 'Escape') { e.preventDefault(); endRotateMode(); }
+  });
+  rotCmdA.addEventListener('input', () => {
+    const v = parseFloat(rotCmdA.value);
+    if (rotateMode && rotateMode.p1 && isFinite(v)) { rotateMode.ang = v; buildRotatePreview(v); }
+  });
+  ['pointerdown', 'click'].forEach(ev => rotBox.addEventListener(ev, e => e.stopPropagation()));
+  // 回転モード中のポインタ操作（他のハンドラより先に捕捉）
+  window.addEventListener('pointerdown', e => {
+    if (!rotateMode || e.button !== 0) return;
+    if (e.target !== renderer.domElement) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    if (!rotateMode.p1) {                                  // ①回転の中心
+      let p = drawSnapPoint(e.clientX, e.clientY);
+      if (!p) { const t = resolveTarget(e.clientX, e.clientY, null, 0); p = t ? t.point.clone() : null; }
+      if (!p) return;
+      rotateMode.p1 = p;
+      const hit = planeHitAt(e.clientX, e.clientY, p.y);
+      rotateMode.base = hit ? -Math.atan2(hit.z - p.z, hit.x - p.x) * 180 / Math.PI : 0;   // この向きを0°とする
+      rotateMode.ang = 0;
+      rotCmdA.value = '0';
+      buildRotatePreview(0);
+      showRotBox();
+      if (window.__toast) window.__toast('回転：角度を決めてタップ（45°刻み・Shiftで5°／数値入力も可）');
+    } else {                                               // ②角度を確定
+      const deg = rotAngleFrom(e.clientX, e.clientY, e.shiftKey || touchShift);
+      execRotate(deg == null ? (parseFloat(rotCmdA.value) || 0) : deg);
+    }
+  }, true);
+  window.addEventListener('pointermove', e => {
+    if (!rotateMode || !rotateMode.p1) return;
+    if (document.activeElement === rotCmdA) return;        // 数値入力中はカーソルで上書きしない
+    const deg = rotAngleFrom(e.clientX, e.clientY, e.shiftKey || touchShift);
+    if (deg == null || deg === rotateMode.ang) return;
+    rotateMode.ang = deg; rotCmdA.value = String(deg);
+    buildRotatePreview(deg);
+    showRotBox();
+  }, true);
+  window.addEventListener('keydown', e => {
+    if (!rotateMode) return;
+    if (e.key === 'Escape') { e.stopImmediatePropagation(); endRotateMode(); }
+  }, true);
   function mirror() {
     if (mirrorMode) { endMirrorMode(); return; }          // もう一度押す＝取消
     const parts = [...selectedParts], anns = [...selAnns];
@@ -10333,6 +10494,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 明暗ボタンは廃止（2026-07-19 社長決定＝統一グレーに一本化）
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
+  { const b = $('cmdRotate'); if (b) b.onclick = rotateCmd; }   // 回転コマンド（2026-07-21 社長要望）
   $('cmdGroup').onclick = groupSelection;
   $('cmdUngroup').onclick = ungroupSelection;
   $('cmdUndo').onclick = () => { if (window.__undo) window.__undo(); };
