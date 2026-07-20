@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-D';
+const APP_VER = 'v0721-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6061,9 +6061,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     _printOutlineU.value = w;
     return _printOutlineMat;
   }
-  // 画面1px相当のワールド長さ（外形線の太さを紙の上で一定に保つ）
-  function pixelWorldSize() {
-    const cam = activeCam(), h = renderer.domElement.clientHeight || 800;
+  // 画面1px相当のワールド長さ（外形線の太さを紙の上で一定に保つ）。
+  // 印刷は高解像度で描くので、実際の描画バッファの高さを渡すこと（線が太く・鉛筆書きのようになるのを防ぐ）
+  function pixelWorldSize(hPx) {
+    const cam = activeCam(), h = hPx || renderer.domElement.clientHeight || 800;
     if (cam.isOrthographicCamera) return (cam.top - cam.bottom) / (cam.zoom || 1) / h;
     const tgt = (typeof controls !== 'undefined' && controls.target) ? controls.target : new THREE.Vector3();
     const dist = cam.position.distanceTo(tgt);
@@ -6071,6 +6072,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // 印刷用：白背景・グリッド非表示・線画化して撮る（参考の手書き図面に寄せる）
   function snapshotForPrint() {
+    // 印刷は紙に引き伸ばされるので、画面解像度のまま撮ると線がぼやけて鉛筆書きのように見える。
+    // 一時的に高解像度（3倍）で描画してから撮る（2026-07-21 社長指摘）
+    const prevPR = renderer.getPixelRatio();
+    renderer.setPixelRatio(3);
     const prevBg = scene.background;
     const prevClear = renderer.getClearColor(new THREE.Color());
     const prevAlpha = renderer.getClearAlpha();
@@ -6085,7 +6090,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
     // 各部品メッシュ：陰影なしの淡い面に差し替え＋黒い稜線(EdgesGeometry)を重ねる。
     const { fill, edge } = _printMats();
-    const outline = printOutlineMat(pixelWorldSize() * 2.2);   // 外形線＝約2.2px相当（細すぎると側面が途切れる）
+    const outline = printOutlineMat(pixelWorldSize() * 1.6);   // 外形線の太さ。塗り面と干渉しない程度の実寸が必要なので画面px基準で決める（描画解像度では決めない）
     const matBackup = [];   // [mesh, 元material]
     const overlays = [];    // [親mesh, 追加したobject, 破棄するgeometry|null]
     // 先に対象メッシュを集める（走査中に子メッシュを足すと再帰してしまうため）
@@ -6139,6 +6144,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (grid) grid.visible = prevGrid;
     if (groundGroup) groundGroup.visible = prevGround;
     if (window.__dimMaskPrint) { window.__dimMaskPrint(false); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }   // マスクを画面用に戻す
+    renderer.setPixelRatio(prevPR);   // 画面用の解像度へ戻す
     renderer.clear();
     renderer.render(scene, activeCam());
     return url;
@@ -6274,7 +6280,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   html,body{height:100%;background:#fff;}
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
-  .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
+  /* 図面は外枠の内側に収める＝構築線など長い線が枠から飛び出さない（2026-07-21 社長指摘） */
+  .dwg{position:absolute;inset:7.6mm;overflow:hidden;}
+  .dwg>img{width:100%;height:100%;object-fit:contain;display:block;}
   .frame{position:absolute;inset:7mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
   .north{position:absolute;left:10mm;top:9mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
@@ -6297,7 +6305,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   @media print{@page{size:A3 landscape;margin:0;}}
 </style></head><body>
   <div class="pg">
-    <img src="${img}">
+    <div class="dwg"><img src="${img}"></div>
     ${axisSvg}
     <div class="panel">
       ${ilCollapsed ? '' : `<div class="hd">アイテムリスト</div>
