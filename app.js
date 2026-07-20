@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-L';
+const APP_VER = 'v0721-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6581,6 +6581,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const prevAlpha = renderer.getClearAlpha();
     const prevGrid = grid ? grid.visible : null;
     const prevGround = groundGroup ? groundGroup.visible : null;
+    // 選択中の起点・機点マーカーやカーソルの補助表示は図面に出さない（2026-07-21）
+    const hideForPrint = [];
+    for (const g of [markerGroup, xptGroup, lineGuideGroup]) if (g && g.visible) { g.visible = false; hideForPrint.push(g); }
     scene.background = new THREE.Color(0xffffff);
     renderer.setClearColor(0xffffff, 1);
     if (grid) grid.visible = false;
@@ -6638,6 +6641,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.setClearColor(prevClear, prevAlpha);
     if (grid) grid.visible = prevGrid;
     if (groundGroup) groundGroup.visible = prevGround;
+    for (const g of hideForPrint) g.visible = true;
     if (window.__dimMaskPrint) { window.__dimMaskPrint(false); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }   // マスクを画面用に戻す
     renderer.setPixelRatio(prevPR);   // 画面用の解像度へ戻す
     renderer.clear();
@@ -6729,8 +6733,89 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return `<svg class="north" viewBox="0 0 80 80"><line x1="29" y1="42" x2="51" y2="42" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,62 43.2,42 36.8,42" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/><polygon points="40,22 43.2,42 36.8,42" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#333">N</text></svg>`;
     }
   }
+  // ===== 詳細図（部分拡大）＝2026-07-21 社長要望 =====
+  // 込み入った所を選んで登録すると、印刷の左上に「詳細A」として拡大図を載せ、本図には丸印とAを付ける。
+  // ルートが長くて実寸では細部が読めない問題への、製図の定番の対処。モデルは何も変えない。
+  const detailAreas = [];   // [{ id, parts:[], anns:[] }]
+  const DETAIL_IDS = ['A', 'B', 'C'];
+  window.__detailCount = () => detailAreas.length;
+  window.__detailClear = () => { detailAreas.length = 0; };
+  window.__addDetailArea = () => addDetailArea();
+  function detailBox(d) {                       // 登録した対象の現在の範囲（編集に追従）
+    const box = new THREE.Box3();
+    for (const p of d.parts) if (placedParts.includes(p) && !p.userData.hidden) box.expandByObject(p);
+    for (const r of d.anns) if (annStore.includes(r) && !r.hidden) { box.expandByPoint(r.a); box.expandByPoint(r.b); }
+    return box.isEmpty() ? null : box;
+  }
+  function addDetailArea() {
+    const parts = [...selectedParts], anns = [...selAnns];
+    if (!parts.length && !anns.length) {          // 選択なしで押す＝登録の全解除
+      if (!detailAreas.length) { if (window.__toast) window.__toast('詳細図：拡大したいアイテムを選んでから押してください'); return; }
+      detailAreas.length = 0;
+      if (window.__toast) window.__toast('詳細図の登録をすべて解除しました');
+      return;
+    }
+    if (detailAreas.length >= DETAIL_IDS.length) {
+      if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです（選択なしで押すと解除）`);
+      return;
+    }
+    const id = DETAIL_IDS[detailAreas.length];
+    detailAreas.push({ id, parts, anns });
+    if (window.__toast) window.__toast(`詳細${id} を登録しました（印刷に拡大図が付きます）`);
+  }
+  // 指定範囲が画面いっぱいに入るようカメラを寄せて印刷用スナップを撮り、元の視点へ戻す。
+  // 向き（見る方角）は本図と同じにする＝拡大しても同じ姿勢で読める
+  function snapshotDetail(box, margin) {
+    const cam = activeCam();
+    const savePos = cam.position.clone(), saveZoom = cam.zoom, saveTarget = controls.target.clone();
+    const c = box.getCenter(new THREE.Vector3());
+    const sph = box.getBoundingSphere(new THREE.Sphere());
+    const r = Math.max(sph.radius, 0.01) * (margin || 1.25);
+    const dir = savePos.clone().sub(saveTarget).normalize();
+    if (cam.isOrthographicCamera) {
+      const h = (cam.top - cam.bottom) / 2, w = (cam.right - cam.left) / 2;
+      cam.zoom = Math.min(h, w) / r;
+      cam.position.copy(c).addScaledVector(dir, Math.max(savePos.distanceTo(saveTarget), r * 4));
+    } else {
+      const vFov = cam.fov * Math.PI / 180;
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * cam.aspect);
+      const dist = r / Math.sin(Math.min(vFov, hFov) / 2);
+      cam.position.copy(c).addScaledVector(dir, dist);
+    }
+    controls.target.copy(c);
+    cam.updateProjectionMatrix(); cam.lookAt(c);
+    const url = snapshotForPrint();
+    cam.position.copy(savePos); cam.zoom = saveZoom; controls.target.copy(saveTarget);
+    cam.updateProjectionMatrix(); cam.lookAt(saveTarget);
+    renderer.clear(); renderer.render(scene, activeCam());
+    return url;
+  }
   function printSheet() {
     const img = snapshotForPrint();   // 白地・グリッドなしの線画
+    // ---- 詳細図（部分拡大）：登録があれば拡大画像と、本図に付ける丸印の位置を用意する ----
+    const DW = 420, DH = 297, INSET = 7.6;                     // A3横(mm)と図面枠の内側
+    const cw = DW - INSET * 2, ch = DH - INSET * 2;
+    const cvW = renderer.domElement.clientWidth, cvH = renderer.domElement.clientHeight;
+    const ca = cvW / cvH, co = cw / ch;                        // 画像と枠の縦横比（object-fit:contain の余白を計算）
+    const iw = ca > co ? cw : ch * ca, ih = ca > co ? cw / ca : ch;
+    const ox = INSET + (cw - iw) / 2, oy = INSET + (ch - ih) / 2;
+    const details = [];
+    for (const d of detailAreas) {
+      const box = detailBox(d);
+      if (!box) continue;
+      const url = snapshotDetail(box, 1.15);
+      const cam = activeCam();
+      const c = box.getCenter(new THREE.Vector3());
+      const nd = modelGroup.localToWorld(c.clone()).project(cam);
+      const u = nd.x * 0.5 + 0.5, v = -nd.y * 0.5 + 0.5;
+      // 丸印の大きさ＝対象の見かけの大きさ（画面上の半径を紙のmmへ）
+      const sph = box.getBoundingSphere(new THREE.Sphere());
+      const e = modelGroup.localToWorld(c.clone().add(new THREE.Vector3(sph.radius, 0, 0))).project(cam);
+      const rmm = Math.max(Math.hypot((e.x - nd.x) * 0.5 * iw, (e.y - nd.y) * 0.5 * ih), 4);
+      details.push({ id: d.id, url,
+        mx: ox + u * iw, my: oy + v * ih, mr: Math.min(rmm * 1.25, 40),
+        inView: nd.z < 1 && u > -0.05 && u < 1.05 && v > -0.05 && v < 1.05 });
+    }
     const axisSvg = buildAxisGlyph();   // 3D方位コンパス（現在の向き）
     const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
       name = esc($('dwgName').value), no = esc($('dwgNo').value);
@@ -6780,6 +6865,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .dwg>img{width:100%;height:100%;object-fit:contain;display:block;}
   .frame{position:absolute;inset:7mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
   .north{position:absolute;left:10mm;top:9mm;width:24mm;height:24mm;}
+  /* 詳細図（部分拡大）：左上に積む。本図には丸印＋記号を重ねる（2026-07-21 社長要望） */
+  .detail{position:absolute;width:86mm;background:#fff;border:0.3mm solid #111;border-radius:1mm;overflow:hidden;}
+  .detail .dttl{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:0.8mm;border-bottom:0.2mm solid #111;}
+  .detail img{display:block;width:100%;height:52mm;object-fit:contain;}
+  .dmark{position:absolute;border:0.4mm solid #111;border-radius:50%;pointer-events:none;}
+  .dmarkt{position:absolute;font-size:4mm;font-weight:700;color:#111;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
   .panel{position:absolute;right:9mm;bottom:9mm;width:124mm;max-height:calc(100% - 19mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
   .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:1mm;letter-spacing:.5mm;border-bottom:0.12mm solid #111;}
@@ -6801,6 +6892,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 </style></head><body>
   <div class="pg">
     <div class="dwg"><img src="${img}"></div>
+    ${details.map(d => d.inView ? `<div class="dmark" style="left:${(d.mx - d.mr).toFixed(1)}mm;top:${(d.my - d.mr).toFixed(1)}mm;width:${(d.mr * 2).toFixed(1)}mm;height:${(d.mr * 2).toFixed(1)}mm"></div>
+    <div class="dmarkt" style="left:${(d.mx + d.mr + 1).toFixed(1)}mm;top:${(d.my - d.mr - 1).toFixed(1)}mm">${d.id}</div>` : '').join('')}
+    ${details.map((d, i) => `<div class="detail" style="left:${INSET + 2}mm;top:${36 + i * 62}mm">
+      <div class="dttl">詳細 ${d.id}（拡大）</div><img src="${d.url}">
+    </div>`).join('')}
     ${axisSvg}
     <div class="panel">
       ${ilCollapsed ? '' : `<div class="hd">アイテムリスト</div>
@@ -10532,6 +10628,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
   { const b = $('cmdRotate'); if (b) b.onclick = rotateCmd; }   // 回転コマンド（2026-07-21 社長要望）
+  { const b = $('cmdDetail'); if (b) b.onclick = () => { if (window.__addDetailArea) window.__addDetailArea(); }; }   // 詳細図（部分拡大）
   $('cmdGroup').onclick = groupSelection;
   $('cmdUngroup').onclick = ungroupSelection;
   $('cmdUndo').onclick = () => { if (window.__undo) window.__undo(); };
