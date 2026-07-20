@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-E';
+const APP_VER = 'v0721-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6040,26 +6040,82 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     return { fill: _printFillMat, edge: _printEdgeMat };
   }
-  // 外形（シルエット）線用マテリアル：裏面だけを法線方向へ少し膨らませて描く＝丸い面の輪郭が出る。
-  // パイプなどの円筒は稜線(EdgesGeometry)が無いため、これが無いと印刷で外面が分からない（2026-07-21 社長要望）
-  let _printOutlineMat = null, _printOutlineU = null;
-  function printOutlineMat(w) {
-    if (!_printOutlineMat) {
-      _printOutlineU = { value: w };
-      // 塗り面(fill)は稜線と干渉しないよう polygonOffset で少し奥へずらしている。
-      // 外形線はそれよりさらに奥へずらす＝面の上には出ず、シルエットの外側だけに見える
-      const m = new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.BackSide,
-        polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4 });
-      m.onBeforeCompile = sh => {
-        sh.uniforms.uOutline = _printOutlineU;
-        sh.vertexShader = 'uniform float uOutline;\n' + sh.vertexShader.replace(
-          '#include <begin_vertex>',
-          '#include <begin_vertex>\n\ttransformed += normalize(normal) * uOutline;');
-      };
-      _printOutlineMat = m;
+  // ===== 外形（シルエット）線：深度バッファから輪郭を抽出する =====
+  // 部品を深度テクスチャへ描き、隣の画素と深度差が大きい所＝物の縁を1画素の黒線で描く。
+  // 面を膨らませる方式（インバーテッドハル）は見る角度で太さが変わり途切れるため採用しない（2026-07-21 社長指摘）
+  let _edgeRT = null, _edgeScene = null, _edgeCam = null, _edgeQuad = null;
+  function ensureEdgePass(w, h) {
+    if (!_edgeRT) {
+      _edgeRT = new THREE.WebGLRenderTarget(w, h, {
+        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+        format: THREE.RGBAFormat, stencilBuffer: false, depthBuffer: true,
+      });
+      _edgeRT.depthTexture = new THREE.DepthTexture(w, h);
+      _edgeRT.depthTexture.type = THREE.UnsignedIntType;      // 深度の精度を確保
+      _edgeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      _edgeScene = new THREE.Scene();
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          tDepth: { value: _edgeRT.depthTexture },
+          texel: { value: new THREE.Vector2(1 / w, 1 / h) },
+          cnear: { value: 0.1 }, cfar: { value: 100 },
+          isOrtho: { value: 0 }, rel: { value: 0.012 }, spread: { value: 1.0 },
+        },
+        vertexShader: 'varying vec2 vUv;\nvoid main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: [
+          'uniform sampler2D tDepth; uniform vec2 texel; uniform float cnear, cfar, isOrtho, rel, spread;',
+          'varying vec2 vUv;',
+          'float lin(vec2 uv){',
+          '  float z = texture2D(tDepth, uv).x;',
+          '  if (isOrtho > 0.5) return cnear + z * (cfar - cnear);',        // 平行投影は線形
+          '  float ndc = z * 2.0 - 1.0;',
+          '  return (2.0 * cnear * cfar) / (cfar + cnear - ndc * (cfar - cnear));',
+          '}',
+          'void main(){',
+          '  vec2 t = texel * spread;',
+          '  float c = lin(vUv);',
+          '  float l = lin(vUv - vec2(t.x, 0.0));',
+          '  float r = lin(vUv + vec2(t.x, 0.0));',
+          '  float u = lin(vUv + vec2(0.0, t.y));',
+          '  float d = lin(vUv - vec2(0.0, t.y));',
+          '  float m = max(max(abs(c - l), abs(c - r)), max(abs(c - u), abs(c - d)));',
+          '  if (m / max(c, 1e-4) < rel) discard;',                          // 深度差が小さい＝縁ではない
+          '  gl_FragColor = vec4(0.06, 0.06, 0.06, 1.0);',
+          '}',
+        ].join('\n'),
+        transparent: true, depthTest: false, depthWrite: false,
+      });
+      _edgeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+      _edgeQuad.frustumCulled = false;
+      _edgeScene.add(_edgeQuad);
+    } else if (_edgeRT.width !== w || _edgeRT.height !== h) {
+      _edgeRT.setSize(w, h);
+      _edgeQuad.material.uniforms.texel.value.set(1 / w, 1 / h);
     }
-    _printOutlineU.value = w;
-    return _printOutlineMat;
+    return _edgeQuad.material;
+  }
+  // 部品だけを深度へ描いて輪郭線を canvas に重ねる
+  function drawSilhouette(cam) {
+    const w = renderer.domElement.width, h = renderer.domElement.height;
+    let mat;
+    try { mat = ensureEdgePass(w, h); } catch (e) { return false; }   // 深度テクスチャ非対応なら輪郭線なしで続行
+    const hidden = [];
+    for (const g of [annGroup, markerGroup, grid, groundGroup]) {     // 部品の縁だけを拾う
+      if (g && g.visible) { g.visible = false; hidden.push(g); }
+    }
+    const prevTarget = renderer.getRenderTarget();
+    renderer.setRenderTarget(_edgeRT);
+    renderer.clear();
+    renderer.render(scene, cam);
+    renderer.setRenderTarget(prevTarget);
+    for (const g of hidden) g.visible = true;
+    mat.uniforms.cnear.value = cam.near; mat.uniforms.cfar.value = cam.far;
+    mat.uniforms.isOrtho.value = cam.isOrthographicCamera ? 1 : 0;
+    const prevAuto = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.render(_edgeScene, _edgeCam);
+    renderer.autoClear = prevAuto;
+    return true;
   }
   // 画面1px相当のワールド長さ（外形線の太さを紙の上で一定に保つ）。
   // 印刷は高解像度で描くので、実際の描画バッファの高さを渡すこと（線が太く・鉛筆書きのようになるのを防ぐ）
@@ -6090,7 +6146,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
     // 各部品メッシュ：陰影なしの淡い面に差し替え＋黒い稜線(EdgesGeometry)を重ねる。
     const { fill, edge } = _printMats();
-    const outline = printOutlineMat(pixelWorldSize() * 1.6);   // 外形線の太さ。塗り面と干渉しない程度の実寸が必要なので画面px基準で決める（描画解像度では決めない）
     const matBackup = [];   // [mesh, 元material]
     const overlays = [];    // [親mesh, 追加したobject, 破棄するgeometry|null]
     // 先に対象メッシュを集める（走査中に子メッシュを足すと再帰してしまうため）
@@ -6106,11 +6161,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         o.add(ls);
         overlays.push([o, ls, eg]);
       } catch (e) { /* geometry によっては失敗：面だけで続行 */ }
-      // 外形（シルエット）線：円筒などの滑らかな面でも外面が分かるように（2026-07-21 社長要望）
-      const hull = new THREE.Mesh(o.geometry, outline);
-      hull.renderOrder = 1;
-      o.add(hull);
-      overlays.push([o, hull, null]);
     }
 
     // 注釈（寸法線・補助線・矢印・線分・構築線）は加算合成の発光色だと白地で飛ぶ。
@@ -6133,6 +6183,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.setScissorTest(false);
     renderer.clear();
     renderer.render(scene, activeCam());
+    drawSilhouette(activeCam());        // 部品の外形（シルエット）を1画素の細線で重ねる
     const url = renderer.domElement.toDataURL('image/png');
 
     // 後始末：注釈の色/合成/不透明度を戻す → 稜線を外して元のマテリアルへ戻す
