@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-C';
+const APP_VER = 'v0721-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6030,6 +6030,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.render(scene, activeCam());
     return renderer.domElement.toDataURL('image/png');
   }
+  const PRINT_XLINE_COLOR = 0x9aa4b4;   // 印刷での構築線＝薄いグレー（実線・寸法と区別・2026-07-21 社長要望）
   // 印刷用の線画マテリアル（白地に黒い輪郭線・陰影なし・隠線は消える）
   let _printFillMat = null, _printEdgeMat = null;
   function _printMats() {
@@ -6038,6 +6039,35 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       _printEdgeMat = new THREE.LineBasicMaterial({ color: 0x111111 });
     }
     return { fill: _printFillMat, edge: _printEdgeMat };
+  }
+  // 外形（シルエット）線用マテリアル：裏面だけを法線方向へ少し膨らませて描く＝丸い面の輪郭が出る。
+  // パイプなどの円筒は稜線(EdgesGeometry)が無いため、これが無いと印刷で外面が分からない（2026-07-21 社長要望）
+  let _printOutlineMat = null, _printOutlineU = null;
+  function printOutlineMat(w) {
+    if (!_printOutlineMat) {
+      _printOutlineU = { value: w };
+      // 塗り面(fill)は稜線と干渉しないよう polygonOffset で少し奥へずらしている。
+      // 外形線はそれよりさらに奥へずらす＝面の上には出ず、シルエットの外側だけに見える
+      const m = new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.BackSide,
+        polygonOffset: true, polygonOffsetFactor: 4, polygonOffsetUnits: 4 });
+      m.onBeforeCompile = sh => {
+        sh.uniforms.uOutline = _printOutlineU;
+        sh.vertexShader = 'uniform float uOutline;\n' + sh.vertexShader.replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\n\ttransformed += normalize(normal) * uOutline;');
+      };
+      _printOutlineMat = m;
+    }
+    _printOutlineU.value = w;
+    return _printOutlineMat;
+  }
+  // 画面1px相当のワールド長さ（外形線の太さを紙の上で一定に保つ）
+  function pixelWorldSize() {
+    const cam = activeCam(), h = renderer.domElement.clientHeight || 800;
+    if (cam.isOrthographicCamera) return (cam.top - cam.bottom) / (cam.zoom || 1) / h;
+    const tgt = (typeof controls !== 'undefined' && controls.target) ? controls.target : new THREE.Vector3();
+    const dist = cam.position.distanceTo(tgt);
+    return 2 * Math.tan(cam.fov * Math.PI / 360) * dist / h;
   }
   // 印刷用：白背景・グリッド非表示・線画化して撮る（参考の手書き図面に寄せる）
   function snapshotForPrint() {
@@ -6055,32 +6085,40 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
     // 各部品メッシュ：陰影なしの淡い面に差し替え＋黒い稜線(EdgesGeometry)を重ねる。
     const { fill, edge } = _printMats();
+    const outline = printOutlineMat(pixelWorldSize() * 2.2);   // 外形線＝約2.2px相当（細すぎると側面が途切れる）
     const matBackup = [];   // [mesh, 元material]
-    const overlays = [];    // [mesh, lineSegments, edgesGeometry]
-    for (const p of placedParts) {
-      p.traverse(o => {
-        if (o.isMesh && o.geometry) {
-          matBackup.push([o, o.material]);
-          o.material = fill;
-          try {
-            const eg = new THREE.EdgesGeometry(o.geometry, 24);   // 24°超の稜線のみ＝清書きの輪郭
-            const ls = new THREE.LineSegments(eg, edge);
-            ls.renderOrder = 2;
-            o.add(ls);
-            overlays.push([o, ls, eg]);
-          } catch (e) { /* geometry によっては失敗：面だけで続行 */ }
-        }
-      });
+    const overlays = [];    // [親mesh, 追加したobject, 破棄するgeometry|null]
+    // 先に対象メッシュを集める（走査中に子メッシュを足すと再帰してしまうため）
+    const printMeshes = [];
+    for (const p of placedParts) p.traverse(o => { if (o.isMesh && o.geometry) printMeshes.push(o); });
+    for (const o of printMeshes) {
+      matBackup.push([o, o.material]);
+      o.material = fill;
+      try {
+        const eg = new THREE.EdgesGeometry(o.geometry, 24);   // 24°超の稜線のみ＝清書きの輪郭
+        const ls = new THREE.LineSegments(eg, edge);
+        ls.renderOrder = 2;
+        o.add(ls);
+        overlays.push([o, ls, eg]);
+      } catch (e) { /* geometry によっては失敗：面だけで続行 */ }
+      // 外形（シルエット）線：円筒などの滑らかな面でも外面が分かるように（2026-07-21 社長要望）
+      const hull = new THREE.Mesh(o.geometry, outline);
+      hull.renderOrder = 1;
+      o.add(hull);
+      overlays.push([o, hull, null]);
     }
 
     // 注釈（寸法線・補助線・矢印・線分・構築線）は加算合成の発光色だと白地で飛ぶ。
     // 印刷は黒の通常合成で確実に見えるようにする（文字スプライトは対象外＝色そのまま）。
+    // 構築線は「作図の補助」なので、印刷では薄いグレーにして実線・寸法と区別する（2026-07-21 社長要望）
+    const xlineObjs = new Set();
+    if (window.__annXlineObjs) for (const o of window.__annXlineObjs()) o.traverse(c => xlineObjs.add(c));
     const annBackup = [];
     annGroup.traverse(o => {
       const m = o.material;
       if ((o.isMesh || o.isLine || o.isLineSegments) && m && m.color) {
         annBackup.push([m, m.color.getHex(), m.blending, m.opacity]);
-        m.color.setHex(0x1a1a1a);
+        m.color.setHex(xlineObjs.has(o) ? PRINT_XLINE_COLOR : 0x1a1a1a);
         m.blending = THREE.NormalBlending;
         m.needsUpdate = true;   // 光暈の不透明度は上げない（細い線のまま黒で出す）
       }
@@ -6094,7 +6132,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
     // 後始末：注釈の色/合成/不透明度を戻す → 稜線を外して元のマテリアルへ戻す
     for (const [m, c, b, op] of annBackup) { m.color.setHex(c); m.blending = b; m.opacity = op; m.needsUpdate = true; }
-    for (const [o, ls, eg] of overlays) { o.remove(ls); eg.dispose(); }
+    for (const [o, ob, eg] of overlays) { o.remove(ob); if (eg) eg.dispose(); }   // hullは元ジオメトリの使い回しなのでdisposeしない
     for (const [o, m] of matBackup) o.material = m;
     scene.background = prevBg;
     renderer.setClearColor(prevClear, prevAlpha);
@@ -6105,6 +6143,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.render(scene, activeCam());
     return url;
   }
+  window.__printSnapForTest = () => snapshotForPrint();   // 印刷イメージの検証用フック
   async function exportPng() {
     const url = snapshot();
     let nm = ($('dwgNo').value || '配管図').trim().replace(/[\\/:*?"<>|]/g, '_') || '配管図';
@@ -6236,10 +6275,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
   .pg>img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
-  .frame{position:absolute;inset:5mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
-  .north{position:absolute;left:8mm;top:6mm;width:24mm;height:24mm;}
+  .frame{position:absolute;inset:7mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
+  .north{position:absolute;left:10mm;top:9mm;width:24mm;height:24mm;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
-  .panel{position:absolute;right:5mm;bottom:5mm;width:124mm;max-height:calc(100% - 11mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
+  .panel{position:absolute;right:9mm;bottom:9mm;width:124mm;max-height:calc(100% - 19mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
   .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:1mm;letter-spacing:.5mm;border-bottom:0.12mm solid #111;}
   .panel .sc{overflow:hidden;border-bottom:0.12mm solid #111;}
   .panel table{width:100%;border-collapse:collapse;font-size:2.7mm;}
@@ -6254,7 +6293,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   table.kv{width:100%;border-collapse:collapse;font-size:2.6mm;table-layout:fixed;}
   table.kv td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   table.kv td.k{background:#f4f4f4;color:#333;width:22mm;}
-  @media print{@page{size:A3 landscape;margin:8mm;}}
+  /* 余白は目一杯（margin:0）。ブラウザが余白に入れるURL・日付・ページ番号もこれで出なくなる */
+  @media print{@page{size:A3 landscape;margin:0;}}
 </style></head><body>
   <div class="pg">
     <img src="${img}">
@@ -8387,6 +8427,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (hadX) updateXlinePts();
     return n;
   };
+  window.__annXlineObjs = () => annStore.filter(r => r.type === 'xline' && !r.hidden && r.obj).map(r => r.obj);   // 印刷で構築線だけ色を変える
   window.__annXptsRefresh = updateXlinePts;   // ファイル読込で構築線を隠した時の交点更新用
   // 直近に作った注釈を選択（e2e検証用）
   window.__annSelectLast = () => { const r = annStore[annStore.length - 1]; if (r) selectLine(r); return !!r; };
