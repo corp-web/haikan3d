@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-U';
+const APP_VER = 'v0720-V';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5520,6 +5520,36 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1500);
   }
+  // 保存先を最初に選ばせて書き出す共通処理（2026-07-20 社長「どこに保存か最初に確認して」）：
+  // ① iPad等のタッチ機＝共有シート（「ファイルに保存」で保存先フォルダを選択。画像なら「画像を保存」で写真アプリへ・LINE等へも送れる）
+  // ② PCのChrome/Edge＝保存ダイアログでフォルダとファイル名を指定
+  // ③ どちらも使えない環境＝従来どおりダウンロード
+  // 戻り値：'shared'|'picker'|'download'＝書き出した／null＝ユーザーがキャンセル
+  async function saveWithLocationChoice(name, data, mime) {
+    const blob = data instanceof Blob ? data : new Blob([data], { type: mime || 'application/octet-stream' });
+    if (IS_TOUCH_DEV || window.__forceShare) {
+      try {
+        const file = new File([blob], name, { type: blob.type });
+        if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+          await navigator.share({ files: [file] });
+          return 'shared';
+        }
+      } catch (err) { if (err && err.name === 'AbortError') return null; }   // キャンセル＝中止。他エラーは次の手段へ
+    }
+    if (window.showSaveFilePicker) {
+      try {
+        const h = await window.showSaveFilePicker({ suggestedName: name });
+        const w = await h.createWritable(); await w.write(blob); await w.close();
+        return 'picker';
+      } catch (err) { if (err && err.name === 'AbortError') return null; }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    return 'download';
+  }
   // 画面上部に短く出す通知（上書き保存は画面変化が無いので完了を明示する）
   let _toastEl = null, _toastTimer = null;
   function toast(msg) {
@@ -5549,9 +5579,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         _saveTarget = { handle: h, name: h.name };
         toast('保存しました：' + h.name);
         return;
-      } catch (err) { if (err && err.name === 'AbortError') return; }   // キャンセル＝中止。他エラーはダウンロードへ
+      } catch (err) { if (err && err.name === 'AbortError') return; }   // キャンセル＝中止。他エラーは保存先選択へ
     }
-    downloadBlob(name, text);
+    // iPad等＝共有シートで保存先を選ぶ（「ファイルに保存」→フォルダ選択）。キャンセルなら何もしない
+    const r = await saveWithLocationChoice(name, text, 'application/json');
+    if (r === null) return;
     _saveTarget = { handle: null, name };
     toast('保存しました：' + name);
   }
@@ -5563,10 +5595,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         await writeHandle(_saveTarget.handle, text);
         toast('上書き保存しました：' + _saveTarget.name);
         return;
-      } catch (err) { if (err && err.name === 'AbortError') return; }   // 権限拒否等はダウンロードで続行
+      } catch (err) { if (err && err.name === 'AbortError') return; }   // 権限拒否等は保存先選択で続行
     }
-    // iPad等：真の上書きはできないので同名でダウンロード（「ファイル」側で置き換えできる）
-    downloadBlob(_saveTarget.name, text);
+    // iPad等：真の上書きはできないので同名で保存先を選んで書き出す（「ファイル」側で置き換えできる）
+    const r = await saveWithLocationChoice(_saveTarget.name, text, 'application/json');
+    if (r === null) return;
     toast('保存しました：' + _saveTarget.name);
   }
   window.__toast = toast;   // トップレベルの機能（干渉チェック等）からも通知を出せるように
@@ -5869,10 +5902,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.render(scene, activeCam());
     return url;
   }
-  function exportPng() {
+  async function exportPng() {
     const url = snapshot();
     let nm = ($('dwgNo').value || '配管図').trim().replace(/[\\/:*?"<>|]/g, '_') || '配管図';
-    const a = document.createElement('a'); a.href = url; a.download = nm + '.png'; a.click();
+    const blob = await (await fetch(url)).blob();
+    // 保存先を最初に選ぶ（iPad＝共有シート：「画像を保存」で写真アプリ・「ファイルに保存」でフォルダ選択）
+    const r = await saveWithLocationChoice(nm + '.png', blob, 'image/png');
+    if (r) toast('画像を書き出しました：' + nm + '.png');
   }
   // 配置部品を同仕様でまとめ、部品表の行データを返す（アイテムリストと同じ集計）
   function partsRows() {
@@ -5903,8 +5939,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     lines.push('');
     lines.push(esc('※ガスケット・ボルト・溶接口・パイプ合計は機点の接続から自動集計した参考値'));
     const name = (($('dwgNo').value || $('dwgName').value || '部品表').trim() || '部品表').replace(/[\\/:*?"<>|]/g, '_') + '.csv';
-    downloadBlob(name, '\ufeff' + lines.join('\r\n'), 'text/csv');   // BOM付き＝Excelで文字化けしない
-    toast('部品表CSVを書き出しました：' + name);
+    // 保存先を最初に選ぶ（BOM付きUTF-8＝Excelで文字化けしない）
+    saveWithLocationChoice(name, '\ufeff' + lines.join('\r\n'), 'text/csv')
+      .then(r => { if (r) toast('部品表CSVを書き出しました：' + name); });
   }
   function esc(s) { return String(s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
   const PRINT_COMPANY = '志基テクノ株式会社';
