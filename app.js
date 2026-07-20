@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-Q';
+const APP_VER = 'v0720-R';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2584,6 +2584,12 @@ let showOriginPts = true;
 try { showOriginPts = localStorage.getItem('p3d_show_origin') !== '0'; } catch (e) {}
 let showXpts = true;
 try { showXpts = localStorage.getItem('p3d_show_xpt') !== '0'; } catch (e) {}
+// フランジのボルト穴の起点＝既定OFF（2026-07-20 社長。ONにすると起点候補・スナップ対象に）
+let showBoltPts = false;
+try { showBoltPts = localStorage.getItem('p3d_show_boltpt') === '1'; } catch (e) {}
+// 四半円点（部品外径のN/E/S/Wリム点）＝既定ON（2026-07-20 社長）
+let showQuadPts = true;
+try { showQuadPts = localStorage.getItem('p3d_show_quad') !== '0'; } catch (e) {}
 
 // 複数選択中に primary を掴んだとき、一緒に動かす他メンバーの開始位置を記録する。
 // primary が選択集合に入っていて2件以上なら集団移動、そうでなければ空（=単体移動）。
@@ -2805,9 +2811,16 @@ let _idleSig = null;
 function drawSelectedConns(part) {
   clearMarkers();
   const grip = gripLocalOf(part);
+  const bl = part.userData.boltLocals;
   for (const local of connsOf(part)) {
     const isGrip = local === grip;
-    addMarker(connModelPos(part, local), isGrip ? 0x39ff8a : 0x7fd1ff, markerRadiusFor(part, isGrip));
+    const isBolt = bl && bl.includes(local);
+    // ボルト穴＝交点と同じ黄色（2026-07-20 社長）。起点=緑・他の機点=水色
+    addMarker(connModelPos(part, local), isGrip ? 0x39ff8a : (isBolt ? 0xffd84d : 0x7fd1ff), markerRadiusFor(part, isGrip));
+  }
+  if (showQuadPts) {   // 四半円点＝小さめの水色で表示（スナップ対象）
+    const rQ = markerRadiusFor(part, false) * 0.75;
+    for (const q of quadLocalsOf(part)) addMarker(connModelPos(part, q), 0x7fd1ff, rQ);
   }
 }
 function updateIdleMarkers() {
@@ -2821,7 +2834,7 @@ function updateIdleMarkers() {
   } else if (selectedPart && selectedParts.size <= 1 && selectedPart.userData.faceLocal && !dirActive()) {
     // 非パイプの選択中アイテム：全機点を表示し grip を強調
     const gk = connModelPos(selectedPart, gripLocalOf(selectedPart));
-    sig = `conn|${selectedPart.uuid}|${gk.x.toFixed(3)},${gk.y.toFixed(3)},${gk.z.toFixed(3)}|${connsOf(selectedPart).length}`;
+    sig = `conn|${selectedPart.uuid}|${gk.x.toFixed(3)},${gk.y.toFixed(3)},${gk.z.toFixed(3)}|${connsOf(selectedPart).length}|${showQuadPts ? 1 : 0}${showBoltPts ? 1 : 0}`;
   }
   if (sig === _idleSig) return;       // 状態変化なし→何もしない
   if (!sig) clearMarkers();
@@ -2859,8 +2872,8 @@ function partBoreRadius(part) {
 // 機点マーカーの半径(m)：部品の口径に比例（大きい部品でも分かりやすく）。最小・最大でクランプ。big=起点/吸着の強調用。
 function markerRadiusFor(part, big) {
   const ro = partBoreRadius(part);
-  const base = Math.min(Math.max(ro * 0.11, 0.0022), 0.022);
-  return big ? base * 1.7 : base;
+  const base = Math.min(Math.max(ro * 0.09, 0.0018), 0.018);   // ひと回り小さく（2026-07-20 社長）
+  return big ? base * 1.6 : base;
 }
 
 // 部品の機点（接続点）をローカル座標で確定する。
@@ -2884,7 +2897,55 @@ function connsOf(p) {
   if (p.userData.faceLocal) arr.push(p.userData.faceLocal);
   if (p.userData.backLocal) arr.push(p.userData.backLocal);
   if (p.userData.extraLocals) for (const e of p.userData.extraLocals) arr.push(e);
-  if (p.userData.boltLocals) for (const e of p.userData.boltLocals) arr.push(e);
+  if (showBoltPts && p.userData.boltLocals) for (const e of p.userData.boltLocals) arr.push(e);   // 設定ON時のみ（既定OFF）
+  return arr;
+}
+// 四半円点（部品の外径リムの4点）＝作図・寸法用のスナップ点（2026-07-20 社長要望）。
+// フランジ＝フェイス側の板外周／パイプ＝両端＋中間の管外周／その他継手＝各端面の管外径の外周。
+// 機点(connsOf)には含めない＝起点(grip)や回転基準・自動集計には影響しない。設定「四半円点」でON/OFF（既定ON）。
+function quadLocalsOf(p) {
+  const u = p.userData, t = u.partType;
+  if (!u.faceLocal || t === 'gasket' || t === 'valve') return [];
+  const out = [];
+  const ring = (center, nrm, R) => {
+    const n = nrm.clone().normalize();
+    const a = Math.abs(n.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const u1 = new THREE.Vector3().crossVectors(a, n).normalize();
+    const u2 = new THREE.Vector3().crossVectors(n, u1).normalize();
+    out.push(center.clone().addScaledVector(u1, R), center.clone().addScaledVector(u1, -R),
+             center.clone().addScaledVector(u2, R), center.clone().addScaledVector(u2, -R));
+  };
+  const odR = s => ((FLG_BORE[s] || 60) / 2) / 1000;   // 管外径の半径(m)
+  const spec = u.pipe || u.elbow || u.tee || u.reducer || u.cap || u.sw || u.flange || {};
+  const RA = odR(spec.sizeA || '50A');
+  if (t === 'flange') {                                 // フェイス側の板外周（外径D）
+    const fd = flangeDim((u.flange && u.flange.cls) || 'JIS 10K', (u.flange && u.flange.sizeA) || '50A');
+    ring(new THREE.Vector3(0, (fd.t / 2) / 1000, 0), new THREE.Vector3(0, 1, 0), (fd.D / 2) / 1000);
+    return out;
+  }
+  if (t === 'pipe') {                                   // 両端＋中間の管外周
+    const L2 = ((u.pipe && u.pipe.length) || 100) / 2000;
+    const n = new THREE.Vector3(0, 1, 0);
+    ring(new THREE.Vector3(0, L2, 0), n, RA);
+    ring(new THREE.Vector3(0, -L2, 0), n, RA);
+    ring(new THREE.Vector3(0, 0, 0), n, RA);
+    return out;
+  }
+  // その他の継手：各端面（face/back/枝端）に管外径のリム
+  const RB = odR((u.tee && u.tee.sizeB) || (u.sw && u.sw.sizeB) || (u.reducer && u.reducer.sizeB) || spec.sizeA || '50A');
+  const nOf = (loc, key) => (u[key] ? u[key].clone() : (loc.lengthSq() > 1e-12 ? loc.clone() : new THREE.Vector3(0, 1, 0)));
+  ring(u.faceLocal, nOf(u.faceLocal, 'faceNormal'), RA);
+  if (u.backLocal) ring(u.backLocal, nOf(u.backLocal, 'backNormal'), (t === 'reducer') ? RB : RA);
+  if (u.extraLocals) for (const e of u.extraLocals) {
+    if (u.cornerLocal && e === u.cornerLocal) continue;   // 工作点（中心）にはリム不要
+    if (e.lengthSq() > 1e-9) ring(e, e.clone(), RB);
+  }
+  return out;
+}
+// スナップ・マーカー表示に使う点＝機点＋（設定ONなら）四半円点。起点(grip)選定や回転基準には使わない
+function snapLocalsOf(p) {
+  const arr = connsOf(p);
+  if (showQuadPts) for (const q of quadLocalsOf(p)) arr.push(q);
   return arr;
 }
 // 起点に使う機点（grip）。ユーザーが選んだ機点 gripLocal、未選択なら faceLocal。
@@ -2933,7 +2994,7 @@ function resolveSnap(clientX, clientY, exclude, noNear) {
   let best = null, bestD = SNAP_PX;
   for (const p of placedParts) {
     if (p === exclude || !p.userData.faceLocal || p.userData.hidden) continue;
-    for (const local of connsOf(p)) {
+    for (const local of snapLocalsOf(p)) {
       const mpos = connModelPos(p, local);
       const ndc = modelGroup.localToWorld(mpos.clone()).project(cam);
       if (ndc.z >= 1) continue;                         // カメラ背後は除外
@@ -2982,7 +3043,7 @@ function showInteractionMarkers(movingObj, snapPoint) {
   for (const p of placedParts) {
     if (p === movingObj || !p.userData.faceLocal || p.userData.hidden) continue;
     const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true);
-    for (const local of connsOf(p)) {
+    for (const local of snapLocalsOf(p)) {
       const mpos = connModelPos(p, local);
       const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
       addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN);
@@ -3458,7 +3519,7 @@ function nearestDirSnap(startOrigin, dir, clientX, clientY, exParts) {
   };
   for (const p of placedParts) {
     if ((exParts && exParts.has(p)) || !p.userData.faceLocal || p.userData.hidden) continue;
-    for (const local of connsOf(p)) consider(connModelPos(p, local));
+    for (const local of snapLocalsOf(p)) consider(connModelPos(p, local));
   }
   if (window.__annSnapPoints) for (const mpos of window.__annSnapPoints()) consider(mpos);   // 線分・寸法線の端点（追従中の線は除外済）
   return best;
@@ -6850,7 +6911,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     };
     for (const p of placedParts) {
       if (!p.userData.faceLocal || p.userData.hidden) continue;
-      for (const local of connsOf(p)) test(connModelPos(p, local));
+      for (const local of snapLocalsOf(p)) test(connModelPos(p, local));
     }
     for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）
     if (showXpts) for (const p of xlinePts) test(p);   // 線どうしの交点（CADの交点スナップ。設定でOFF可）
@@ -6881,7 +6942,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     };
     for (const p of placedParts) {
       if (!p.userData.faceLocal || p.userData.hidden) continue;
-      for (const local of connsOf(p)) mark(connModelPos(p, local), p);
+      for (const local of snapLocalsOf(p)) mark(connModelPos(p, local), p);
     }
     for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, null); }
     if (showXpts) for (const p of xlinePts) mark(p, null);
@@ -8897,7 +8958,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const d = Math.hypot(sx - cx, sy - cy);
       if (d < bestD) { bestD = d; best = mpos.clone(); }
     };
-    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; for (const local of connsOf(p)) test(connModelPos(p, local)); }
+    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; for (const local of snapLocalsOf(p)) test(connModelPos(p, local)); }
     for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
     if (showXpts) for (const pt of xlinePts) test(pt);   // 線どうしの交点へも吸着（設定でOFF可）
     if (!best && nearSnapOn) best = nearestOnLine(cx, cy, NEAR_SNAP_PX, r => exAnns.has(r) || r === drawState.editRec || (annMoveSnap && selAnns.has(r)));   // 近接＝線上へ
@@ -8909,7 +8970,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     addMarker(gripPt, 0xff8a3c, markerRadiusFor(null, false));
     if (snapPoint) addMarker(snapPoint, 0x39ff8a, markerRadiusFor(null, true));   // 線上への近接吸着も緑で示す
     const mark = (pt, rN, rB) => { const isSnap = snapPoint && pt.distanceTo(snapPoint) < 1e-6; addMarker(pt, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN); };
-    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true); for (const local of connsOf(p)) mark(connModelPos(p, local), rN, rB); }
+    for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true); for (const local of snapLocalsOf(p)) mark(connModelPos(p, local), rN, rB); }
     const lN = markerRadiusFor(null, false), lB = markerRadiusFor(null, true);
     for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, lN, lB); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
     if (showXpts) for (const p of xlinePts) mark(p, lN, lB);
@@ -9608,7 +9669,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const cbS = document.getElementById('setSnap'), cbN = document.getElementById('setNear');
     const cbO = document.getElementById('setOrigin'), cbX = document.getElementById('setXpt');
     const cbG = document.getElementById('setGround');
-    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; };
+    const cbB = document.getElementById('setBolt'), cbQ = document.getElementById('setQuad');
+    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; if (cbB) cbB.checked = showBoltPts; if (cbQ) cbQ.checked = showQuadPts; };
     const closeSet = () => { _setMenu.style.display = 'none'; _bSet.classList.remove('active'); };
     _bSet.onclick = () => {
       const open = _setMenu.style.display !== 'block';
@@ -9626,6 +9688,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbO) cbO.addEventListener('change', () => { showOriginPts = cbO.checked; _idleSig = null; try { localStorage.setItem('p3d_show_origin', showOriginPts ? '1' : '0'); } catch (e) {} });
     if (cbX) cbX.addEventListener('change', () => { showXpts = cbX.checked; if (window.__annXptsRefresh) window.__annXptsRefresh(); try { localStorage.setItem('p3d_show_xpt', showXpts ? '1' : '0'); } catch (e) {} });
     if (cbG) cbG.addEventListener('change', () => { showGround = cbG.checked; applyGround(); });
+    if (cbB) cbB.addEventListener('change', () => { showBoltPts = cbB.checked; _idleSig = null; try { localStorage.setItem('p3d_show_boltpt', showBoltPts ? '1' : '0'); } catch (e) {} });
+    if (cbQ) cbQ.addEventListener('change', () => { showQuadPts = cbQ.checked; _idleSig = null; try { localStorage.setItem('p3d_show_quad', showQuadPts ? '1' : '0'); } catch (e) {} });
     document.addEventListener('pointerdown', e => {
       if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
     }, true);
