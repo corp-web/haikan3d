@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0720Y — SKT-HD ♦</title>
+<title>配管3D v0720Z — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（2026-07-20 社長要望）：アイソメのエルボ＋フランジ＋寸法。iOSはapple-touch-iconを使う -->
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-<meta name="apple-mobile-web-app-title" content="配管3D v0720Y">
+<meta name="apple-mobile-web-app-title" content="配管3D v0720Z">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -351,10 +351,16 @@
   body.light #saveMenu button { background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #saveMenu button:hover { background: rgba(31,111,208,.10); border-color: #aebcd6; }
 
+  /* 下端（取消ボタン）を固定点にした縦並び。折りたたみは取消の位置へ畳み、そこから開く（2026-07-20 社長要望）
+     gapではなくmargin-bottomで間隔を作る＝たたむ時に間隔もアニメーションできる */
   #touchCtrl { position: fixed; left: 12px; bottom: 58px; z-index: 28; display: none;
-    flex-direction: column; gap: 9px; }
+    flex-direction: column; gap: 0; }
+  #touchCtrl button { margin-bottom: 9px; }
+  #touchCtrl button:last-child { margin-bottom: 0; }
   body.tc-on #touchCtrl { display: flex; }
-  #touchCtrl button { flex: none; overflow: hidden; transition: width .4s cubic-bezier(.25,.9,.3,1), opacity .32s ease, border-width .4s ease;
+  #touchCtrl button { flex: none; overflow: hidden;
+    transition: height .42s cubic-bezier(.25,.9,.3,1), margin-bottom .42s cubic-bezier(.25,.9,.3,1),
+                transform .42s cubic-bezier(.25,.9,.3,1), opacity .3s ease, border-width .42s ease;
     width: 54px; height: 54px; border-radius: 50%; border: 1px solid #3c4f7e;
     background: rgba(20,28,51,.92); color: #dbe4f3; cursor: pointer; user-select: none;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -366,8 +372,10 @@
   #touchCtrl button.on .lb { color: #fff; }
   #touchCtrl button .ic { font-size: 21px; line-height: 1; }
   #touchCtrl button .lb { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: #aebfe0; }
-  /* 取消長押しでボタン列を1個に集約。幅と不透明度でゆっくり開閉（2026-07-20 社長要望） */
-  #touchCtrl.collapsed button:not(#tcEsc) { width: 0; opacity: 0; border-width: 0; pointer-events: none; }
+  /* 取消長押しでボタン列を1個に集約＝取消ボタン（最下段・位置は不動）へ吸い込まれるように畳む */
+  #touchCtrl.collapsed button:not(#tcEsc) {
+    height: 0; margin-bottom: 0; opacity: 0; border-width: 0; pointer-events: none;
+    transform: translateY(26px) scale(.55); }
   #touchCtrl .tc-zoom { font-size: 26px; font-weight: 700; }
 
   /* ===== ホワイトモード（body.light）：主要UIを明色に ===== */

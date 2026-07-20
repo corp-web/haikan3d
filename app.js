@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-Y';
+const APP_VER = 'v0720-Z';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
