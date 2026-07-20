@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-T';
+const APP_VER = 'v0720-U';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2820,9 +2820,13 @@ function drawSelectedConns(part) {
 }
 function updateIdleMarkers() {
   if (followTool || movingPart || dirDrag || pipeEndDrag) { _idleSig = null; return; }
-  if (!showOriginPts) { if (_idleSig !== 'off') { clearMarkers(); _idleSig = 'off'; } return; }   // 設定＝起点表示OFF
+  // 設定「起点」はスナップのON/OFFであり表示は制御しない（2026-07-20 社長）。選択中アイテムの点は常に表示する
   let sig = null;
-  if (pipeSelected() && selectedPart.userData.faceLocal) {
+  if (selectedParts.size > 1 && selectedPart && selectedPart.userData.faceLocal) {
+    // 複数選択：EL基準（基準アイテムの起点）がどこかオブジェクト上で分かるよう橙で強調（2026-07-20 社長）
+    const o = originModelPos(selectedPart);
+    sig = `multi|${selectedPart.uuid}|${selectedParts.size}|${o.x.toFixed(3)},${o.y.toFixed(3)},${o.z.toFixed(3)}`;
+  } else if (pipeSelected() && selectedPart.userData.faceLocal) {
     const f = connModelPos(selectedPart, selectedPart.userData.faceLocal);
     const b = connModelPos(selectedPart, selectedPart.userData.backLocal);
     sig = `pipe|${pipeEndSel}|${f.x.toFixed(3)},${f.y.toFixed(3)},${f.z.toFixed(3)}|${b.x.toFixed(3)},${b.y.toFixed(3)},${b.z.toFixed(3)}`;
@@ -2833,6 +2837,7 @@ function updateIdleMarkers() {
   }
   if (sig === _idleSig) return;       // 状態変化なし→何もしない
   if (!sig) clearMarkers();
+  else if (sig.startsWith('multi|')) { clearMarkers(); addMarker(originModelPos(selectedPart), 0xff8a3c, markerRadiusFor(selectedPart, true)); }   // EL基準＝橙・大
   else if (sig.startsWith('pipe|')) drawPipeEnds(selectedPart);
   else drawSelectedConns(selectedPart);
   _idleSig = sig;
@@ -2937,13 +2942,15 @@ function quadLocalsOf(p) {
   }
   return out;
 }
-// スナップ・マーカー表示に使う点＝機点＋（設定ONなら）四半円点。起点(grip)選定や回転基準には使わない
+// スナップに使う点。設定は表示ではなくスナップ対象のON/OFF（2026-07-20 社長）：
+// 起点(showOriginPts)=機点／ボルト穴(showBoltPts・connsOf側で制御)／四半円点(showQuadPts)。起点(grip)選定や回転基準には使わない
 function snapLocalsOf(p) {
-  const arr = connsOf(p);
+  const arr = [];
+  for (const l of connsOf(p)) { if (isBoltLocal(p, l) || showOriginPts) arr.push(l); }
   if (showQuadPts) for (const q of quadLocalsOf(p)) arr.push(q);
   return arr;
 }
-// スナップ点の種類判定：フランジ穴('bolt')／四半円点('quad')／その他(null)。表示シンボルの切替用
+// スナップ点の種類判定：フランジ穴('bolt')／四半円点('quad')／構築線・線分の交点('xpt')／その他(null)。表示シンボルの切替用
 function snapPtKind(pt) {
   for (const p of placedParts) {
     if (!p.userData.faceLocal || p.userData.hidden) continue;
@@ -2954,35 +2961,44 @@ function snapPtKind(pt) {
       for (const q of quadLocalsOf(p)) if (connModelPos(p, q).distanceTo(pt) < 1e-6) return 'quad';
     }
   }
+  if (showXpts && window.__xpts) {
+    for (const x of window.__xpts()) if (x.distanceTo(pt) < 1e-6) return 'xpt';
+  }
   return null;
 }
-// 赤の細線シンボル（画面正対）：quad=ダイヤの切り抜き◇／bolt=クロス＋（2026-07-20 社長仕様）
+// 赤の細線シンボル（画面正対・面ジオメトリ＝WebGLでも太さが出る）：quad=ダイヤの切り抜き◇／bolt=クロス＋（2026-07-20 社長仕様）
 function addSnapGlyph(pt, kind, grp) {
   const cam = activeCam();
-  const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
-  const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
   const s = cam.isOrthographicCamera
     ? (cam.top - cam.bottom) / (cam.zoom || 1) * 0.013
     : cam.position.distanceTo(modelGroup.localToWorld(pt.clone())) * 0.011;
-  const pts = [];
-  if (kind === 'quad') {                                  // ◇（4辺の細線）
-    const a = pt.clone().addScaledVector(up, s), b = pt.clone().addScaledVector(right, s);
-    const c = pt.clone().addScaledVector(up, -s), d = pt.clone().addScaledVector(right, -s);
-    pts.push(a, b, b, c, c, d, d, a);
-  } else {                                                // ＋（縦横の細線・小さめ）
-    const t = s * 0.8;
-    pts.push(pt.clone().addScaledVector(right, -t), pt.clone().addScaledVector(right, t),
-             pt.clone().addScaledVector(up, -t), pt.clone().addScaledVector(up, t));
+  const t = s * 0.22;                                     // 線の太さ（2026-07-20 社長「もう少し太く」）
+  const sh = new THREE.Shape();
+  if (kind === 'quad') {                                  // ◇の帯（外形ダイヤ−内形ダイヤの切り抜き）
+    sh.moveTo(0, s); sh.lineTo(s, 0); sh.lineTo(0, -s); sh.lineTo(-s, 0); sh.closePath();
+    const si = s - t * Math.SQRT2;
+    const hole = new THREE.Path();
+    hole.moveTo(0, si); hole.lineTo(-si, 0); hole.lineTo(0, -si); hole.lineTo(si, 0); hole.closePath();
+    sh.holes.push(hole);
+  } else {                                                // ＋（十字ポリゴン・小さめ）
+    const a = s * 0.85, w = t / 2;
+    sh.moveTo(-w, w); sh.lineTo(-w, a); sh.lineTo(w, a); sh.lineTo(w, w);
+    sh.lineTo(a, w); sh.lineTo(a, -w); sh.lineTo(w, -w); sh.lineTo(w, -a);
+    sh.lineTo(-w, -a); sh.lineTo(-w, -w); sh.lineTo(-a, -w); sh.lineTo(-a, w); sh.closePath();
   }
-  const g = new THREE.BufferGeometry().setFromPoints(pts);
-  const ln = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: SNAP_GLYPH_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
-  ln.renderOrder = 999;
-  (grp || markerGroup).add(ln);
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(sh),
+    new THREE.MeshBasicMaterial({ color: SNAP_GLYPH_COLOR, depthTest: false, transparent: true, opacity: 0.95, side: THREE.DoubleSide }));
+  m.position.copy(pt);
+  m.quaternion.copy(cam.quaternion);                      // 画面正対
+  m.renderOrder = 999;
+  m.userData.glyph = kind;
+  (grp || markerGroup).add(m);
 }
-// 吸着点の標準表示：四半円点/フランジ穴なら赤シンボル・それ以外は従来の緑玉
+// 吸着点の標準表示：四半円点/フランジ穴=赤シンボル・交点=黄点・それ以外=緑玉
 function addSnapMarker(pt, r) {
   const kind = snapPtKind(pt);
-  if (kind) addSnapGlyph(pt, kind);
+  if (kind === 'xpt') addMarker(pt, 0xffd84d, r);
+  else if (kind) addSnapGlyph(pt, kind);
   else addMarker(pt, 0x39ff8a, r);
 }
 // この機点はフランジ穴か（常時マーカーには出さない＝スナップ接近時のみシンボル表示）
@@ -3075,29 +3091,11 @@ function resolveTarget(clientX, clientY, exclude, planeY = 0, noNear = false) {
   modelGroup.worldToLocal(hit);
   return { point: hit, snapped: false };
 }
-// 起点マーカー＋他部品の全機点マーカーを描く（snapPoint と一致する機点は緑・大）
+// 移動中の起点（橙）と、スナップで近づいた点だけを表示する（2026-07-20 社長：候補点の常時表示は廃止）
 function showInteractionMarkers(movingObj, snapPoint) {
   clearMarkers();
   addMarker(originModelPos(movingObj), 0xff8a3c, markerRadiusFor(movingObj, false));    // 起点（橙）
-  for (const p of placedParts) {
-    if (p === movingObj || !p.userData.faceLocal || p.userData.hidden) continue;
-    const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true);
-    for (const local of connsOf(p)) {
-      if (isBoltLocal(p, local)) continue;   // フランジ穴は常時表示しない（吸着時のみ＋シンボル）
-      const mpos = connModelPos(p, local);
-      const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
-      addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN);
-    }
-  }
-  if (snapPoint) addSnapMarker(snapPoint, markerRadiusFor(movingObj, true));   // 吸着位置＝緑（四半円点=赤◇・フランジ穴=赤＋）
-  // 線分・寸法線の端点もアイテムの機点と同じ水色マーカーで示す（スナップ中は緑・大）
-  if (window.__annSnapPoints) {
-    const rN = markerRadiusFor(null, false), rB = markerRadiusFor(null, true);
-    for (const mpos of window.__annSnapPoints()) {
-      const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
-      addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN);
-    }
-  }
+  if (snapPoint) addSnapMarker(snapPoint, markerRadiusFor(movingObj, true));   // 吸着点＝緑（四半円点=赤◇・ボルト穴=赤＋・交点=黄）
 }
 
 // 向きは「方向(dir)」と「ひねり(roll)」の2系統に分離する。
@@ -4261,11 +4259,12 @@ function refreshItemList() {
 // ===== 干渉チェック（参考・2026-07-14 社長要望） =====
 // 部品ごとのAABB（外接箱・2mm縮小）同士の重なりで「干渉の疑い」を検出して赤表示する。
 // 機点が一致している（＝意図して接続した）ペアは干渉と見なさない。次のクリック（選択変更）で表示解除。
-let _clashSet = null;
+let _clashGroup = null;
 function clearClash() {
-  if (!_clashSet) return;
-  for (const p of _clashSet) if (placedParts.includes(p)) setEmissive(p, selectedParts.has(p) ? SEL_COLOR : 0x000000);
-  _clashSet = null;
+  if (!_clashGroup) return;
+  modelGroup.remove(_clashGroup);
+  _clashGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  _clashGroup = null;
 }
 function runClashCheck() {
   clearClash();
@@ -4280,17 +4279,29 @@ function runClashCheck() {
       connKey.add(Math.min(pts[i].idx, pts[j].idx) + '_' + Math.max(pts[i].idx, pts[j].idx));
   }
   const boxes = visParts.map(p => new THREE.Box3().setFromObject(p).expandByScalar(-0.002));
-  const bad = new Set(); let pairs = 0;
+  // 当たっている部分（外接箱どうしの重なり領域）だけを赤の半透明ボックスで示す（2026-07-20 社長：全体を赤くしない）
+  const grp = new THREE.Group();
+  let pairs = 0;
   for (let i = 0; i < visParts.length; i++) {
     for (let j = i + 1; j < visParts.length; j++) {
       if (connKey.has(i + '_' + j)) continue;
-      if (boxes[i].intersectsBox(boxes[j])) { bad.add(visParts[i]); bad.add(visParts[j]); pairs++; }
+      if (!boxes[i].intersectsBox(boxes[j])) continue;
+      pairs++;
+      const ib = boxes[i].clone().intersect(boxes[j]).expandByScalar(0.003);   // 検出時の2mm縮小を戻し少し余裕
+      const size = ib.getSize(new THREE.Vector3()), ctr = ib.getCenter(new THREE.Vector3());
+      const geo = new THREE.BoxGeometry(Math.max(size.x, 0.004), Math.max(size.y, 0.004), Math.max(size.z, 0.004));
+      const box = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.38, depthTest: false }));
+      box.position.copy(ctr); box.renderOrder = 996;
+      const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.9, depthTest: false }));
+      edge.position.copy(ctr); edge.renderOrder = 997;
+      grp.add(box); grp.add(edge);
     }
   }
   if (!pairs) { if (window.__toast) window.__toast('干渉は見つかりませんでした'); return; }
-  _clashSet = bad;
-  for (const p of bad) setEmissive(p, 0xff3030);
-  if (window.__toast) window.__toast('干渉の疑い：' + pairs + '組を赤表示（クリックで解除・参考値）');
+  _clashGroup = grp;
+  modelGroup.add(grp);
+  if (window.__toast) window.__toast('干渉の疑い：' + pairs + '箇所の当たり部分を赤表示（クリックで解除・参考値）');
 }
 
 // カーソル下の配置済み部品（ルート）を返す。無ければ null。
@@ -6705,15 +6716,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return out;
   }
   function updateXlinePts() {
+    // 交点の常時表示は廃止（2026-07-20 社長：設定「交点」はスナップのON/OFF。点はスナップ接近時のみ黄で表示）
     while (xptGroup.children.length) { const c = xptGroup.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
     xlinePts = xlineIntersections();
-    xptGroup.visible = showXpts;                        // 設定＝交点表示OFFなら点を出さない
-    for (const p of xlinePts) {
-      const m = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 12, 10),
-        new THREE.MeshBasicMaterial({ color: XPT_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
-      m.position.copy(p); m.renderOrder = 998; xptGroup.add(m);
-    }
   }
+  window.__xpts = () => xlinePts;                       // snapPtKind（交点判定）用
 
   // ---- 描画モードの状態 ----
   //  first=起点 / cur=現在の終点 / vert=Y方向(Shift) / locked=確定待ち(脚入力編集中) / editRec=確定済みで編集中の注釈
@@ -6953,7 +6960,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!p.userData.faceLocal || p.userData.hidden) continue;
       for (const local of snapLocalsOf(p)) test(connModelPos(p, local));
     }
-    for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）
+    if (showOriginPts) for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点／寸法=両端（構築線は交点のみ）。設定「起点」でOFF可
     if (showXpts) for (const p of xlinePts) test(p);   // 線どうしの交点（CADの交点スナップ。設定でOFF可）
     if (!best && nearSnapOn) {
       // 2点目の位置決め中＝起点からの「垂線の足（直角点）」を最優先（直角がぴったり出る）。無ければ一般の線上へ
@@ -6970,22 +6977,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     return best;
   }
-  // 作図中（1点目・2点目の位置決め）も、部品配置と同じ機点マーカーを表示する（2026-07-12 社長要望）。
-  // 対象は drawSnapPoint と同じ吸着候補（部品の機点＋線分/円の端点・中点／寸法の両端／構築線の交点）。
-  // snapPoint＝現在吸着中の点（緑・大きく強調）。マーカーの消去は clearDrawTemp（確定・取消・ツール終了）で行う。
+  // 作図中はスナップで近づいた点だけを表示する（2026-07-20 社長：候補点の常時表示は廃止）。
+  // snapPoint＝現在吸着中の点。マーカーの消去は clearDrawTemp（確定・取消・ツール終了）で行う。
   function showDrawSnapMarkers(snapPoint) {
     clearMarkers();
-    if (snapPoint) addSnapMarker(snapPoint, markerRadiusFor(null, true));   // 吸着位置＝緑（四半円点=赤◇・フランジ穴=赤＋）
-    const mark = (mpos, part) => {
-      const isSnap = snapPoint && mpos.distanceTo(snapPoint) < 1e-6;
-      addMarker(mpos, isSnap ? 0x39ff8a : 0x7fd1ff, markerRadiusFor(part, isSnap));
-    };
-    for (const p of placedParts) {
-      if (!p.userData.faceLocal || p.userData.hidden) continue;
-      for (const local of connsOf(p)) { if (!isBoltLocal(p, local)) mark(connModelPos(p, local), p); }   // フランジ穴・四半円点は常時表示しない
-    }
-    for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, null); }
-    if (showXpts) for (const p of xlinePts) mark(p, null);
+    if (snapPoint) addSnapMarker(snapPoint, markerRadiusFor(null, true));   // 吸着点＝緑（四半円点=赤◇・ボルト穴=赤＋・交点=黄）
   }
   // 起点 P1 から水平面上の点に角度刻み angleStep を適用（0=自由）
   function applyAngleSnap(P1, pt) {
@@ -7061,10 +7057,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 }));
     m.position.copy(p); m.renderOrder = 999; lineGuideGroup.add(m);
   }
-  // 吸着印：四半円点=赤の細線◇・フランジ穴=赤の細線＋・その他=緑ドット（2026-07-20 社長）
+  // 吸着印：四半円点=赤◇・ボルト穴=赤＋・交点=黄点・その他=緑ドット（2026-07-20 社長）
   function snapDot(p) {
     const k = snapPtKind(p);
-    if (k) addSnapGlyph(p, k, lineGuideGroup);
+    if (k === 'xpt') guideDot(p, 0xffd84d, 0.0045);
+    else if (k) addSnapGlyph(p, k, lineGuideGroup);
     else guideDot(p, 0x39ff8a, 0.0042);
   }
   // 画面に正対する十字（クロス）カーソル。modelGroup は無変換なのでローカル＝ワールド。
@@ -7603,7 +7600,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         clearPreview();
         if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, drawState.cur, drawState.vert, drawState.snapped);
         else clearLineGuide();
-        if (e.pointerType !== 'mouse') guideCross(drawState.first, drawState.snapped ? 0x39ff8a : 0x49c5ff);   // 1点目確定後もカーソル（十字）を残す
+        guideCross(drawState.first, drawState.snapped ? 0x39ff8a : 0x49c5ff);   // 1点目確定後もカーソル（十字）を残す（マウスでも表示）
       }
     } else {                                             // タップ2回目＝終点を確定
       const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';
@@ -7894,8 +7891,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       clearLineGuide();
       const r = pickFirstPoint(e.clientX, e.clientY);
       showDrawSnapMarkers(r.snapped ? r.p : null);       // 部品配置と同じ機点マーカー（吸着中は緑）
-      if (r.p && e.pointerType !== 'mouse') guideCross(r.p, r.snapped ? 0x39ff8a : 0x49c5ff);   // タッチ/ペン＝十字カーソル（吸着＝緑）
-      else if (r.p && r.snapped) snapDot(r.p);                                // マウスは従来どおり吸着印
+      if (r.p) guideCross(r.p, r.snapped ? 0x39ff8a : 0x49c5ff);   // 十字カーソル＝マウスでも常時表示（2026-07-20 社長「カーソルは表示して」）
+      if (r.p && r.snapped) snapDot(r.p);                          // 吸着印（四半円点=赤◇・穴=赤＋・交点=黄）
       return;
     }
     const sh = (e.shiftKey || touchShift) && drawState.mode !== 'xline' && drawState.mode !== 'circle';   // 円はShift勾配なし（常に水平）
@@ -7912,7 +7909,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     annGroup.add(drawState.preview);
     if (drawState.mode !== 'circle') drawTriangle3D(drawState.first, r.p, drawState.vert, drawState.snapped);   // 円は脚三角形を出さない
     else clearLineGuide();
-    if (e.pointerType !== 'mouse') guideCross(r.p, drawState.snapped ? 0x39ff8a : 0x49c5ff);   // タッチ/ペン＝2点目も十字カーソル（離した所に残る）
+    guideCross(r.p, drawState.snapped ? 0x39ff8a : 0x49c5ff);   // 2点目も十字カーソル（マウスでも表示・離した所に残る）
   }, true);
   window.addEventListener('contextmenu', e => {
     if (!drawActive()) return;
@@ -7943,7 +7940,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ===================================================================
   //  描画後の線分：再選択 / 移動 / 端点ドラッグで長さ変更（描画モード外で動作）
   // ===================================================================
-  window.__annSnapPoints = () => { const a = []; for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; if (annMoveSnap && selAnns.has(r)) continue; for (const sp of annSnapPoints(r)) a.push(sp); } if (showXpts) for (const p of xlinePts) a.push(p); return a; };   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
+  window.__annSnapPoints = () => { const a = []; if (showOriginPts) for (const r of annStore) { if (r === drawState.editRec || r.hidden) continue; if (annMoveSnap && selAnns.has(r)) continue; for (const sp of annSnapPoints(r)) a.push(sp); } if (showXpts) for (const p of xlinePts) a.push(p); return a; };   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）。設定「起点」「交点」でOFF可
   const lineSelGroup = new THREE.Group();   // 選択中の線の端点ハンドル（青球）
   modelGroup.add(lineSelGroup);
   let lineSel = null, lineDrag = null;
@@ -9005,25 +9002,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (d < bestD) { bestD = d; best = mpos.clone(); }
     };
     for (const p of placedParts) { if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue; for (const local of snapLocalsOf(p)) test(connModelPos(p, local)); }
-    for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
+    if (showOriginPts) for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) test(sp); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）。設定「起点」でOFF可
     if (showXpts) for (const pt of xlinePts) test(pt);   // 線どうしの交点へも吸着（設定でOFF可）
     if (!best && nearSnapOn) best = nearestOnLine(cx, cy, NEAR_SNAP_PX, r => exAnns.has(r) || r === drawState.editRec || (annMoveSnap && selAnns.has(r)));   // 近接＝線上へ
     return best;
   }
-  // 移動中の起点(橙)・他アイテムの機点(青/吸着は緑)マーカー。部品の showInteractionMarkers と同じ見た目
+  // 移動中の起点(橙)と、スナップで近づいた点だけを表示（2026-07-20 社長：候補点の常時表示は廃止）
   function showLineMoveMarkers(gripPt, exParts, exAnns, snapPoint) {
     clearMarkers();
     addMarker(gripPt, 0xff8a3c, markerRadiusFor(null, false));
-    if (snapPoint) addSnapMarker(snapPoint, markerRadiusFor(null, true));   // 吸着位置＝緑（四半円点=赤◇・フランジ穴=赤＋）
-    const mark = (pt, rN, rB) => { const isSnap = snapPoint && pt.distanceTo(snapPoint) < 1e-6; addMarker(pt, isSnap ? 0x39ff8a : 0x7fd1ff, isSnap ? rB : rN); };
-    for (const p of placedParts) {
-      if (exParts.has(p) || !p.userData.faceLocal || p.userData.hidden) continue;
-      const rN = markerRadiusFor(p, false), rB = markerRadiusFor(p, true);
-      for (const local of connsOf(p)) { if (!isBoltLocal(p, local)) mark(connModelPos(p, local), rN, rB); }   // フランジ穴・四半円点は常時表示しない
-    }
-    const lN = markerRadiusFor(null, false), lB = markerRadiusFor(null, true);
-    for (const r of annStore) { if (exAnns.has(r) || r.hidden) continue; for (const sp of annSnapPoints(r)) mark(sp, lN, lB); }   // 線分=端点+中点／円=中心+四半円点（構築線は交点のみ）
-    if (showXpts) for (const p of xlinePts) mark(p, lN, lB);
+    if (snapPoint) addSnapMarker(snapPoint, markerRadiusFor(null, true));   // 吸着点＝緑（四半円点=赤◇・ボルト穴=赤＋・交点=黄）
   }
   let _lnLastT = 0, _lnLastX = 0, _lnLastY = 0, _lnLastRec = null;   // ダブルクリック検出（自由移動）
   let _lnEmptyDown = null;   // 空きスペース押下位置＝クリック（動かさず離す）でのみ線選択を解除する用
