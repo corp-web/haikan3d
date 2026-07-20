@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-W';
+const APP_VER = 'v0720-X';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2818,12 +2818,27 @@ function drawSelectedConns(part) {
     addMarker(connModelPos(part, local), isGrip ? 0x39ff8a : 0x7fd1ff, markerRadiusFor(part, isGrip));
   }
 }
+// 複数選択：EL基準＝橙・大、選択中アイテムの他の機点＝水色・小（タップでそこを基準にできる・2026-07-20 社長要望）
+function drawMultiSelMarkers() {
+  clearMarkers();
+  const base = originModelPos(selectedPart);
+  for (const p of selectedParts) {
+    if (!p.userData.faceLocal || p.userData.hidden) continue;
+    for (const local of connsOf(p)) {
+      if (isBoltLocal(p, local)) continue;
+      const mpos = connModelPos(p, local);
+      if (mpos.distanceTo(base) < 1e-6) continue;    // 基準点は下で橙・大で描く
+      addMarker(mpos, 0x7fd1ff, markerRadiusFor(p, false));
+    }
+  }
+  addMarker(base, 0xff8a3c, markerRadiusFor(selectedPart, true));
+}
 function updateIdleMarkers() {
   if (followTool || movingPart || dirDrag || pipeEndDrag) { _idleSig = null; return; }
   // 設定「起点」はスナップのON/OFFであり表示は制御しない（2026-07-20 社長）。選択中アイテムの点は常に表示する
   let sig = null;
   if (selectedParts.size > 1 && selectedPart && selectedPart.userData.faceLocal) {
-    // 複数選択：EL基準（基準アイテムの起点）がどこかオブジェクト上で分かるよう橙で強調（2026-07-20 社長）
+    // 複数選択：EL基準（基準アイテムの起点）を橙で強調＋選択中アイテムの機点を水色で表示（タップで基準を変更できる）
     const o = originModelPos(selectedPart);
     sig = `multi|${selectedPart.uuid}|${selectedParts.size}|${o.x.toFixed(3)},${o.y.toFixed(3)},${o.z.toFixed(3)}`;
   } else if (pipeSelected() && selectedPart.userData.faceLocal) {
@@ -2837,7 +2852,7 @@ function updateIdleMarkers() {
   }
   if (sig === _idleSig) return;       // 状態変化なし→何もしない
   if (!sig) clearMarkers();
-  else if (sig.startsWith('multi|')) { clearMarkers(); addMarker(originModelPos(selectedPart), 0xff8a3c, markerRadiusFor(selectedPart, true)); }   // EL基準＝橙・大
+  else if (sig.startsWith('multi|')) drawMultiSelMarkers();
   else if (sig.startsWith('pipe|')) drawPipeEnds(selectedPart);
   else drawSelectedConns(selectedPart);
   _idleSig = sig;
@@ -4390,9 +4405,20 @@ renderer.domElement.addEventListener('pointerdown', e => {
              && _lastDownPart === part;
   _lastDownT = e.timeStamp; _lastDownX = e.clientX; _lastDownY = e.clientY; _lastDownPart = part;
   // クリック近傍の機点を「移動の起点(grip)」に選ぶ（パイプ以外・単一選択時）。方向/自由移動とも起点になる。
-  if (part.userData.partType !== 'pipe' && !(selectedParts.has(part) && selectedParts.size > 1)) {
+  const multiMember = selectedParts.has(part) && selectedParts.size > 1;
+  if (part.userData.partType !== 'pipe' && !multiMember) {
     const gl = nearestConnLocal(part, e.clientX, e.clientY);
     if (gl) { part.userData.gripLocal = gl; resetPipeRotState(); }   // 起点が変わったら回転軸を再計算
+  } else if (multiMember) {
+    // 複数選択中：機点をタップしたらそこを EL基準（起点）にする（2026-07-20 社長要望）。
+    // 選択は保ったまま、基準アイテムと起点だけを付け替える。機点から離れた場所を掴んだ時は従来どおり集団移動
+    const gl = nearestConnLocal(part, e.clientX, e.clientY);
+    if (gl) {
+      if (selectedPart !== part) { selectedPart = part; pipeEndSel = null; }
+      part.userData.gripLocal = gl;
+      resetPipeRotState();
+      _idleSig = null; updateForm(); refreshItemList();
+    }
   }
   if (isDbl && moveMode) {                             // 自由移動も「移動」コマンドON時のみ
     _lastDownT = 0; _lastDownPart = null;              // 3連クリックの誤検出を防ぐためリセット
@@ -5569,6 +5595,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const w = await handle.createWritable();
     await w.write(text); await w.close();
   }
+  // ---- 端末内の図面保存（2026-07-20 社長：上書き保存で「次の方法で開く」を出さない） ----
+  // iPad Safari は同名ファイルへ書き戻す手段が無く、ダウンロードすると必ず確認シートが出る。
+  // そこで上書き保存はブラウザ内（この端末内）へ即時保存し、ダイアログを一切出さない。
+  // 端末内の図面は「開く」から一覧で選べる（ファイルからの読込も従来どおり可能）。
+  const DEVFILES_KEY = 'haikan3d.files';
+  function devFilesGet() { try { return JSON.parse(localStorage.getItem(DEVFILES_KEY) || '{}'); } catch (e) { return {}; } }
+  function devFileSave(name, text) {
+    try {
+      const all = devFilesGet();
+      all[name] = { t: Date.now(), data: text };
+      localStorage.setItem(DEVFILES_KEY, JSON.stringify(all));
+      return true;
+    } catch (e) { return false; }   // 容量超過など
+  }
+  function devFileDelete(name) {
+    try { const all = devFilesGet(); delete all[name]; localStorage.setItem(DEVFILES_KEY, JSON.stringify(all)); } catch (e) {}
+  }
+  window.__devFiles = devFilesGet;   // テスト・保守用
   async function saveAsNew() {
     const text = JSON.stringify(serialize(), null, 2);
     const name = defaultSaveName();
@@ -5585,6 +5629,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const r = await saveWithLocationChoice(name, text, 'application/json');
     if (r === null) return;
     _saveTarget = { handle: null, name };
+    devFileSave(name, text);        // 以後の「上書き保存」用に端末内へも控える（ダイアログ無しで上書きできる）
     toast('保存しました：' + name);
   }
   async function saveOverwrite() {
@@ -5597,9 +5642,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         return;
       } catch (err) { if (err && err.name === 'AbortError') return; }   // 権限拒否等は保存先選択で続行
     }
-    // iPad等：保存先は聞かずそのまま同名で書き出す（社長指示：上書き保存で再確認はおかしい）
-    downloadBlob(_saveTarget.name, text);
-    toast('上書き保存しました：' + _saveTarget.name);
+    // iPad等：端末内へ即時上書き（社長指示：確認シートも「次の方法で開く」も出さない）。
+    // ファイルとして書き出したい時は「新規保存」を使う（保存先を選べる）
+    if (devFileSave(_saveTarget.name, text)) toast('上書き保存しました：' + _saveTarget.name);
+    else alert('端末内の空き容量が足りず上書きできませんでした。「新規保存」でファイルに保存してください。');
   }
   window.__toast = toast;   // トップレベルの機能（干渉チェック等）からも通知を出せるように
   // ---- 自動保存（ブラウザ内バックアップ・事故防止・2026-07-14 社長要望） ----
@@ -5776,7 +5822,61 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__recordHistory = recordHistory;
   window.__undo = undo; window.__redo = redo; window.__resetHistory = resetHistory;
   setTimeout(() => { try { recordHistory(); } catch (e) {} }, 0);   // 初期状態を基準として記録（初期化完了後に実行）
+  // 端末内に保存した図面の一覧から開く／削除する画面。端末内が空なら出さず、そのままファイル選択へ進む
+  function showDeviceFileList() {
+    const all = devFilesGet();
+    const names = Object.keys(all).sort((a, b) => (all[b].t || 0) - (all[a].t || 0));
+    if (!names.length) return false;
+    const ov = document.createElement('div');
+    ov.id = '__devFileList';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(8,12,24,.72);display:flex;align-items:center;justify-content:center;font:13px Meiryo,sans-serif;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#f6f9fd;color:#26324a;border:1px solid #c4ccda;border-radius:10px;box-shadow:0 10px 34px rgba(0,0,0,.45);min-width:320px;max-width:min(560px,92vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden;';
+    const hd = document.createElement('div');
+    hd.textContent = 'この端末に保存した図面';
+    hd.style.cssText = 'padding:10px 14px;font-weight:700;color:#1f6fd0;border-bottom:1px solid #d7dee9;';
+    const list = document.createElement('div');
+    list.style.cssText = 'overflow:auto;padding:6px 8px;';
+    const close = () => ov.remove();
+    for (const nm of names) {
+      const d = new Date(all[nm].t || 0);
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 6px;border-bottom:1px solid #e6ebf3;';
+      const lab = document.createElement('button');
+      lab.type = 'button';
+      lab.innerHTML = `<b>${esc(nm)}</b><br><span style="color:#6b7a99;font-size:11px">${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}</span>`;
+      lab.style.cssText = 'flex:1;text-align:left;background:none;border:0;cursor:pointer;font:inherit;color:inherit;padding:4px;';
+      lab.onclick = () => {
+        try {
+          applyData(JSON.parse(all[nm].data)); resetHistory();
+          _saveTarget = { handle: null, name: nm };   // 続けて上書き保存できる
+          close(); toast('開きました：' + nm);
+        } catch (err) { alert('読込に失敗しました：' + err.message); }
+      };
+      const del = document.createElement('button');
+      del.type = 'button'; del.textContent = '削除';
+      del.style.cssText = 'flex:none;padding:4px 10px;border:1px solid #d0b0b0;border-radius:6px;background:#fff;color:#a33;cursor:pointer;font:inherit;';
+      del.onclick = () => { if (confirm(nm + ' を端末内から削除しますか？')) { devFileDelete(nm); row.remove(); if (!list.children.length) close(); } };
+      row.append(lab, del);
+      list.appendChild(row);
+    }
+    const ft = document.createElement('div');
+    ft.style.cssText = 'display:flex;gap:8px;padding:10px 14px;border-top:1px solid #d7dee9;';
+    const mk = (t, primary) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = t; b.style.cssText = `padding:7px 14px;border:1px solid ${primary ? '#2f7bff' : '#c4ccda'};border-radius:7px;background:${primary ? '#2f7bff' : '#fff'};color:${primary ? '#fff' : '#33405c'};cursor:pointer;font:inherit;`; return b; };
+    const fromFile = mk('ファイルから開く', true), cancel = mk('取消');
+    fromFile.style.marginLeft = 'auto';
+    fromFile.onclick = () => { close(); loadFromFile(); };
+    cancel.onclick = close;
+    ft.append(cancel, fromFile);
+    box.append(hd, list, ft); ov.appendChild(box); document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    return true;
+  }
   async function load() {
+    if (showDeviceFileList()) return;   // 端末内に図面があれば一覧から選ぶ（無ければ従来どおりファイル選択）
+    return loadFromFile();
+  }
+  async function loadFromFile() {
     // PC(Chrome/Edge)：File System Access API で開くとハンドルが取れ、そのまま「上書き保存」で書き戻せる
     if (window.showOpenFilePicker) {
       let h = null, f = null, text = null;
