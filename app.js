@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-M';
+const APP_VER = 'v0721-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6747,6 +6747,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const r of d.anns) if (annStore.includes(r) && !r.hidden) { box.expandByPoint(r.a); box.expandByPoint(r.b); }
     return box.isEmpty() ? null : box;
   }
+  function relabelDetails() { detailAreas.forEach((d, i) => d.id = DETAIL_IDS[i]); }   // A/B/C を詰め直す
+  function sameSet(d, parts, anns) {   // 同じアイテムの組み合わせか（＝登録済みを選び直した）
+    if (d.parts.length !== parts.length || d.anns.length !== anns.length) return false;
+    return d.parts.every(p => parts.includes(p)) && d.anns.every(a => anns.includes(a));
+  }
   function addDetailArea() {
     const parts = [...selectedParts], anns = [...selAnns];
     if (!parts.length && !anns.length) {          // 選択なしで押す＝登録の全解除
@@ -6755,13 +6760,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (window.__toast) window.__toast('詳細図の登録をすべて解除しました');
       return;
     }
+    // 既に登録済みのアイテムをもう一度選んで押す＝その詳細図だけ取り消す（2026-07-21 社長要望）
+    const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
+    if (exist >= 0) {
+      const gid = detailAreas[exist].id;
+      detailAreas.splice(exist, 1);
+      relabelDetails();
+      if (window.__toast) window.__toast(`詳細${gid} を取り消しました`);
+      return;
+    }
     if (detailAreas.length >= DETAIL_IDS.length) {
       if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです（選択なしで押すと解除）`);
       return;
     }
     const id = DETAIL_IDS[detailAreas.length];
     detailAreas.push({ id, parts, anns });
-    if (window.__toast) window.__toast(`詳細${id} を登録しました（印刷に拡大図が付きます）`);
+    if (window.__toast) window.__toast(`詳細${id} を登録しました（もう一度同じ所を選んで押すと取り消し）`);
   }
   // 指定範囲が画面いっぱいに入るようカメラを寄せて印刷用スナップを撮り、元の視点へ戻す。
   // 向き（見る方角）は本図と同じにする＝拡大しても同じ姿勢で読める
