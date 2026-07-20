@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-Z';
+const APP_VER = 'v0721-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2589,6 +2589,8 @@ try { showXpts = localStorage.getItem('p3d_show_xpt') !== '0'; } catch (e) {}
 let showBoltPts = false;
 try { showBoltPts = localStorage.getItem('p3d_show_boltpt') === '1'; } catch (e) {}
 // 四半円点（部品外径のN/E/S/Wリム点）＝既定OFF（2026-07-20 社長・同日改訂）
+let autoGasket = true;    // フランジ面どうしを合わせた時にガスケットを自動で挟む（2026-07-20 社長要望・既定ON）
+try { autoGasket = localStorage.getItem('p3d_auto_gasket') !== '0'; } catch (e) {}
 let showQuadPts = false;
 try { showQuadPts = localStorage.getItem('p3d_show_quad') === '1'; } catch (e) {}
 const SNAP_RED = 0xff4040;   // 四半円点・ボルト穴に吸着した時の起点マーク＝赤（スナップ接近時のみ表示・2026-07-20 社長）
@@ -2991,6 +2993,70 @@ function addSnapMarker(pt, r) {
 }
 // この機点はフランジ穴か（常時マーカーには出さない＝スナップ接近時のみシンボル表示）
 function isBoltLocal(p, local) { return !!(p.userData.boltLocals && p.userData.boltLocals.includes(local)); }
+
+// ===== ガスケットの自動挿入（2026-07-20 社長要望） =====
+// フランジのフェイス面どうし（＋フランジ形バルブ）を突き合わせた時だけ、パレットの厚みのガスケットを
+// 自動で挟み、置いた側を厚みぶん押し出す。呼び径・クラスは相手のフランジから取るのでサイズ違いが起きない。
+// ・パイプ端×フランジのフェイス面は対象外（実物では背面へ溶接するため、ここで挟むと邪魔になる）
+// ・部品表の自動計上（accessoryRows）とまったく同じ判定条件を使う＝図と部品表が食い違わない
+function connNormalOf(p, local) {
+  const u = p.userData;
+  let n = null;
+  if (u.faceLocal && local === u.faceLocal && u.faceNormal) n = u.faceNormal.clone();
+  else if (u.backLocal && local === u.backLocal && u.backNormal) n = u.backNormal.clone();
+  if (!n && u.faceLocal && u.backLocal) {                 // 明示が無い部品（フランジ等）＝軸方向から求める
+    const ax = u.faceLocal.clone().sub(u.backLocal);
+    if (ax.lengthSq() > 1e-12) n = (local === u.backLocal) ? ax.negate().normalize() : ax.normalize();
+  }
+  if (!n) n = new THREE.Vector3(0, 1, 0);
+  return n.applyQuaternion(p.quaternion).normalize();
+}
+// その機点がガスケット面か：'flange'＝フランジのフェイス／'valve'＝フランジ形バルブの端／null＝対象外
+function gasketSideOf(p, local) {
+  const u = p.userData;
+  if (u.partType === 'flange') return (u.faceLocal && local === u.faceLocal) ? 'flange' : null;
+  if (u.partType === 'valve') {
+    const k = (u.valve && u.valve.kind) || '';
+    return ['swgate', 'swglobe'].includes(k) ? null : 'valve';   // ねじ込み/SW形はガスケット継手ではない
+  }
+  return null;
+}
+function autoInsertGasket(part) {
+  if (!autoGasket || !part || !part.userData || part.userData.hidden) return null;
+  if (part.userData.partType === 'gasket') return null;         // ガスケット自身は対象外
+  const TOL = 0.0015;
+  for (const local of connsOf(part)) {
+    const sideA = gasketSideOf(part, local);
+    if (!sideA) continue;
+    const pos = connModelPos(part, local);
+    for (const q of placedParts) {
+      if (q === part || q.userData.hidden || !q.userData.faceLocal) continue;
+      for (const l2 of connsOf(q)) {
+        const sideB = gasketSideOf(q, l2);
+        if (!sideB) continue;
+        if (sideA === 'valve' && sideB === 'valve') continue;    // フランジ面が無い＝仕様を決められない
+        if (connModelPos(q, l2).distanceTo(pos) > TOL) continue;
+        // 仕様はフランジ側から取る（サイズ違い防止）
+        const fl = (sideA === 'flange') ? part : q;
+        const spec = fl.userData.flange || {};
+        const t = (parseFloat(gasketOpts.t) > 0) ? parseFloat(gasketOpts.t) : 3;
+        const g = makeGasket({ sizeA: spec.sizeA, cls: spec.cls, t });
+        if (!g) return null;
+        computeConns(g);
+        const n = connNormalOf(q, l2);                            // 固定側の面から外向き＝押し出す方向
+        g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+        g.position.copy(pos);                                     // 背面(0,0,0)を相手の面に合わせる
+        g.userData.placed = true; g.userData.orient = 0; g.userData.roll = 0;
+        modelGroup.add(g); placedParts.push(g);
+        part.position.addScaledVector(n, t / 1000);               // 置いた側を厚みぶん押し出す
+        refreshItemList();
+        if (window.__toast) window.__toast(`ガスケット t${t} を自動で挟みました（${spec.sizeA || ''} ${spec.cls || ''}）`);
+        return g;
+      }
+    }
+  }
+  return null;
+}
 // 起点に使う機点（grip）。ユーザーが選んだ機点 gripLocal、未選択なら faceLocal。
 // パイプは端クリックで pipeEndSel(face/back) を起点に選ぶので、選択中パイプはそれを優先（移動と回転で起点を一致させる）。
 function gripLocalOf(obj) {
@@ -3201,6 +3267,7 @@ function placeToolAt(tool, clientX, clientY) {
   modelGroup.add(obj);
   placedParts.push(obj);
   refreshItemList();
+  autoInsertGasket(obj);      // フランジ面どうしなら、ここでガスケットを挟んで厚みぶん押し出す
   return obj;
 }
 
@@ -3255,6 +3322,7 @@ function dropMovingPart() {           // ドラッグを離して（またはク
   if (!movingPart) return;
   movingPart.userData.orient = movingOrient;
   movingPart.userData.roll = movingRoll;
+  autoInsertGasket(movingPart);   // 移動でフランジ面どうしが合った時もガスケットを挟む
   movingPart = null; moveOrig = null; moveGroup = []; movingByDrag = false; moveHoldTap = false;
   moveStartPt = null; moveStarted = false; moveGrabOff = { x: 0, y: 0 };
   finishMoveCommand();   // 自由移動1回で「移動」コマンド終了
@@ -4124,9 +4192,35 @@ function accessoryRows() {
       }
     }
   }
+  // 実物のガスケットを挟んだ継手も「ボルト・ナット1式」を計上する（2026-07-20 社長要望）。
+  // 挟むとフランジ面どうしが接しなくなり上の判定に掛からないため、ガスケット部品側から数える。
+  const bolts = new Map(gasket);
+  for (const p of placedParts) {
+    const u = p.userData;
+    if (u.partType !== 'gasket' || u.hidden || !u.faceLocal) continue;
+    const faces = [connModelPos(p, u.backLocal), connModelPos(p, u.faceLocal)];
+    let hit = null;
+    for (const q of placedParts) {
+      const qu = q.userData;
+      if (q === p || qu.hidden || !qu.faceLocal) continue;
+      const isFl = qu.partType === 'flange';
+      const vk = (qu.valve && qu.valve.kind) || '';
+      const isFlValve = qu.partType === 'valve' && !['swgate', 'swglobe'].includes(vk);
+      if (!isFl && !isFlValve) continue;
+      const cand = isFl ? [qu.faceLocal] : connsOf(q);
+      for (const l of cand) {
+        if (!l) continue;
+        const w = connModelPos(q, l);
+        if (!faces.some(f => f.distanceTo(w) <= TOL)) continue;
+        if (isFl) hit = { size: (qu.flange && qu.flange.sizeA) || '', cls: (qu.flange && qu.flange.cls) || '' };
+        else if (!hit) hit = { size: (qu.valve && qu.valve.sizeA) || '', cls: (qu.valve && qu.valve.rating) || '' };
+      }
+    }
+    if (hit) bump(bolts, `${hit.size}|${hit.cls}`);
+  }
   const rows = [];
   for (const [k, n] of gasket) { const [size, cls] = k.split('|'); rows.push({ kind: 'ガスケット', type: '自動', size, cls, qty: n, mat: '' }); }
-  for (const [k, n] of gasket) { const [size, cls] = k.split('|'); rows.push({ kind: 'ボルト・ナット', type: '自動・1式', size, cls, qty: n, mat: '' }); }
+  for (const [k, n] of bolts) { const [size, cls] = k.split('|'); rows.push({ kind: 'ボルト・ナット', type: '自動・1式', size, cls, qty: n, mat: '' }); }
   for (const [size, n] of weldB) rows.push({ kind: '溶接口(突合せ)', type: '自動', size, cls: '—', qty: n, mat: '' });
   for (const [size, n] of weldS) rows.push({ kind: '溶接口(差込)', type: '自動', size, cls: '—', qty: n, mat: '' });
   // パイプ合計長さ（呼び径×Schごと・m）
@@ -4503,7 +4597,9 @@ renderer.domElement.addEventListener('pointerup', e => {
     dropMovingPart();                    // 移動モード：タップで確定（選択は継続）
   } else if (dirDrag && dirDrag.locked) {
     // 方向移動の確定待ち：タップで確定（位置はそのまま・距離入力は閉じる）。2026-07-20 社長要望
+    const moved = dirDrag.part;
     dirDrag = null; clearMarkers(); _idleSig = null; updateForm();
+    autoInsertGasket(moved);   // 確定した位置でフランジ面どうしならガスケットを挟む
   } else {
     pickPartAt(e.clientX, e.clientY, false);   // 通常クリック＝単一選択（Ctrlは別経路で処理済み）
   }
@@ -9828,7 +9924,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const cbO = document.getElementById('setOrigin'), cbX = document.getElementById('setXpt');
     const cbG = document.getElementById('setGround');
     const cbB = document.getElementById('setBolt'), cbQ = document.getElementById('setQuad');
-    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; if (cbB) cbB.checked = showBoltPts; if (cbQ) cbQ.checked = showQuadPts; };
+    const cbAG = document.getElementById('setAutoGsk');
+    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; if (cbB) cbB.checked = showBoltPts; if (cbQ) cbQ.checked = showQuadPts; if (cbAG) cbAG.checked = autoGasket; };
     const closeSet = () => { _setMenu.style.display = 'none'; _bSet.classList.remove('active'); };
     _bSet.onclick = () => {
       const open = _setMenu.style.display !== 'block';
@@ -9848,6 +9945,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbG) cbG.addEventListener('change', () => { showGround = cbG.checked; applyGround(); });
     if (cbB) cbB.addEventListener('change', () => { showBoltPts = cbB.checked; _idleSig = null; try { localStorage.setItem('p3d_show_boltpt', showBoltPts ? '1' : '0'); } catch (e) {} });
     if (cbQ) cbQ.addEventListener('change', () => { showQuadPts = cbQ.checked; _idleSig = null; try { localStorage.setItem('p3d_show_quad', showQuadPts ? '1' : '0'); } catch (e) {} });
+    if (cbAG) cbAG.addEventListener('change', () => { autoGasket = cbAG.checked; try { localStorage.setItem('p3d_auto_gasket', autoGasket ? '1' : '0'); } catch (e) {} });
     document.addEventListener('pointerdown', e => {
       if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
     }, true);
