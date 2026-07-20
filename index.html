@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0720X — SKT-HD ♦</title>
+<title>配管3D v0720Y — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（2026-07-20 社長要望）：アイソメのエルボ＋フランジ＋寸法。iOSはapple-touch-iconを使う -->
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-<meta name="apple-mobile-web-app-title" content="配管3D v0720X">
+<meta name="apple-mobile-web-app-title" content="配管3D v0720Y">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -113,7 +113,10 @@
   #itemList .il-head:hover { color: #cfe0fb; background: rgba(127,168,232,.10); }
   #itemList .il-caret { position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
     font-size: 10px; color: #7fa8e8; letter-spacing: 0; }
-  #itemList .il-body { overflow-y: auto; flex: 1 1 auto; min-height: 44px; }
+  /* 折りたたみはゆっくり開閉（2026-07-20 社長要望）。表示/非表示ではなく高さと不透明度を補間する */
+  #itemList .il-body { overflow-y: auto; flex: 1 1 auto; min-height: 44px; max-height: 60vh;
+    transition: max-height .42s cubic-bezier(.25,.9,.3,1), opacity .34s ease; }
+  #itemList .il-body.fold { max-height: 0; min-height: 0; opacity: 0; overflow: hidden; }
   #itemList table { width: 100%; border-collapse: collapse; font-size: 11px; }
   #itemList thead th { position: sticky; top: 0; background: #2a3656; color: #b9c7e6;
     font-weight: 700; text-align: left; padding: 4px 6px; border-bottom: 1px solid #44537a; white-space: nowrap; }
@@ -165,10 +168,14 @@
   #palette .pal-title { cursor: pointer; user-select: none; position: relative; }
   #palette .pal-title:hover { color: #cfe0fb; }
   #palette .il-caret { position: absolute; right: 2px; top: 0; font-size: 10px; color: #7fa8e8; }
-  #palette.collapsed > :not(.pal-title) { display: none !important; }   /* 折りたたみ＝タイトル以外を隠す */
+  /* 折りたたみ＝タイトル以外を高さで畳む（ゆっくり開閉・2026-07-20 社長要望） */
+  #palette.collapsed > :not(.pal-title) { opacity: 0; pointer-events: none; }
+  #palette > :not(.pal-title) { transition: opacity .3s ease; }
   #palette { position: fixed; left: 12px; top: 12px; width: 124px;
     background: rgba(20,28,51,.92); border: 1px solid #36436b; border-radius: 10px;
-    padding: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+    padding: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+    overflow: hidden; max-height: 86vh; transition: max-height .46s cubic-bezier(.25,.9,.3,1); }
+  #palette.collapsed { max-height: 32px; }
   #palette .pal-title { color: #9fb2d6; font-size: 11px; font-weight: 700;
     text-align: center; margin-bottom: 6px; letter-spacing: 1px; }
   #palette .pal-select { width: 100%; margin-bottom: 8px; background: #0f1830; color: #dbe4f3;
@@ -347,7 +354,8 @@
   #touchCtrl { position: fixed; left: 12px; bottom: 58px; z-index: 28; display: none;
     flex-direction: column; gap: 9px; }
   body.tc-on #touchCtrl { display: flex; }
-  #touchCtrl button { width: 54px; height: 54px; border-radius: 50%; border: 1px solid #3c4f7e;
+  #touchCtrl button { flex: none; overflow: hidden; transition: width .4s cubic-bezier(.25,.9,.3,1), opacity .32s ease, border-width .4s ease;
+    width: 54px; height: 54px; border-radius: 50%; border: 1px solid #3c4f7e;
     background: rgba(20,28,51,.92); color: #dbe4f3; cursor: pointer; user-select: none;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 1px; box-shadow: 0 3px 10px rgba(0,0,0,.45); font-family: inherit;
@@ -358,7 +366,8 @@
   #touchCtrl button.on .lb { color: #fff; }
   #touchCtrl button .ic { font-size: 21px; line-height: 1; }
   #touchCtrl button .lb { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: #aebfe0; }
-  #touchCtrl.collapsed button:not(#tcEsc) { display: none; }   /* 取消長押しでボタン列を1個に集約 */
+  /* 取消長押しでボタン列を1個に集約。幅と不透明度でゆっくり開閉（2026-07-20 社長要望） */
+  #touchCtrl.collapsed button:not(#tcEsc) { width: 0; opacity: 0; border-width: 0; pointer-events: none; }
   #touchCtrl .tc-zoom { font-size: 26px; font-weight: 700; }
 
   /* ===== ホワイトモード（body.light）：主要UIを明色に ===== */
