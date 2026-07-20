@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-K';
+const APP_VER = 'v0721-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -228,15 +228,43 @@ const gizmo = {};
   }
   const FACE_TEXTS = ['右', '左', '上', '下', '前', '後'];
   const faceMat = t => new THREE.MeshStandardMaterial({ map: faceTexture(t), color: 0xffffff, roughness: 0.58, metalness: 0.06 });
-  const cube = new THREE.Mesh(
-    new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize),
-    FACE_TEXTS.map(faceMat)
-  );
+  // 角の丸いキューブ（2026-07-21 社長要望）。箱を分割し、頂点を「角の丸み半径」ぶん内側の芯へ
+  // 寄せてから半径だけ押し出す＝面は平ら・稜線は円筒・角は球になる。面ごとのUVと材質分けは箱のまま
+  // 保たれるので、6面の文字テクスチャも当たり判定（face.normal）もこれまでどおり効く。
+  const CUBE_R = cubeSize * 0.11;
+  function roundedBoxGeo(size, radius, seg) {
+    const g = new THREE.BoxGeometry(size, size, size, seg, seg, seg);
+    const h = size / 2, r = Math.min(radius, h * 0.5);
+    const pos = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3(), d = new THREE.Vector3();
+    const cl = t => Math.max(-(h - r), Math.min(h - r, t));
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      c.set(cl(v.x), cl(v.y), cl(v.z));
+      d.subVectors(v, c);
+      const len = d.length();
+      if (len > 1e-9) { d.multiplyScalar(r / len); v.copy(c).add(d); }
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    pos.needsUpdate = true;
+    g.computeVertexNormals();
+    return g;
+  }
+  const cube = new THREE.Mesh(roundedBoxGeo(cubeSize, CUBE_R, 20), FACE_TEXTS.map(faceMat));
   globe.add(cube);
   gizmo.cube = cube;
 
+  // 稜線＝平らな面の外周だけを描く（丸めた部分にはみ出さない）
+  function faceOutlineGeo(size, radius) {
+    const h = size / 2, a = h - radius, pts = [];
+    const quad = q => { for (let i = 0; i < 4; i++) { pts.push(q[i], q[(i + 1) % 4]); } };
+    const mk = fn => quad([fn(-a, -a), fn(a, -a), fn(a, a), fn(-a, a)]);
+    mk((u, v) => new THREE.Vector3(h, u, v));  mk((u, v) => new THREE.Vector3(-h, u, v));
+    mk((u, v) => new THREE.Vector3(u, h, v));  mk((u, v) => new THREE.Vector3(u, -h, v));
+    mk((u, v) => new THREE.Vector3(u, v, h));  mk((u, v) => new THREE.Vector3(u, v, -h));
+    return new THREE.BufferGeometry().setFromPoints(pts);
+  }
   const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize)),
+    faceOutlineGeo(cubeSize * 1.002, CUBE_R),
     new THREE.LineBasicMaterial({ color: gizPal.edge })
   );
   globe.add(edges);
@@ -517,6 +545,15 @@ function inGizmo(px, py) {
   const r = gizmoRect();
   return px >= r.x0 && px <= r.x0 + r.size && py >= r.y0 && py <= r.y0 + r.size;
 }
+// キューブの角を丸めたので、稜線・角をタップした時の面法線を近い正方向へ整える。
+// 面＝その正面、稜線＝2軸の斜め、角＝アイソメ（3軸均等）になる（2026-07-21）
+function gizmoSnapDir(n) {
+  const q = new THREE.Vector3(
+    Math.abs(n.x) > 0.5 ? Math.sign(n.x) : 0,
+    Math.abs(n.y) > 0.5 ? Math.sign(n.y) : 0,
+    Math.abs(n.z) > 0.5 ? Math.sign(n.z) : 0);
+  return q.lengthSq() > 0 ? q.normalize() : n.clone().normalize();
+}
 
 // ortho解除の判定：pointerdown開始時点で「何か選択中」だったかを最初に記録する
 // （後段の deselect より前に走るよう、window capture で早く登録）。
@@ -559,7 +596,7 @@ renderer.domElement.addEventListener('pointerup', e => {
   const hits = gizmoRay.intersectObject(gizmo.cube, false);
   if (!hits.length) return;
   const n = hits[0].face.normal.clone().transformDirection(gizmo.cube.matrixWorld).normalize();
-  snapToDir(n);
+  snapToDir(gizmoSnapDir(n));
 });
 
 // ---- ギズモを画面右上に描く ----
