@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0720-V';
+const APP_VER = 'v0720-W';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5597,10 +5597,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         return;
       } catch (err) { if (err && err.name === 'AbortError') return; }   // 権限拒否等は保存先選択で続行
     }
-    // iPad等：真の上書きはできないので同名で保存先を選んで書き出す（「ファイル」側で置き換えできる）
-    const r = await saveWithLocationChoice(_saveTarget.name, text, 'application/json');
-    if (r === null) return;
-    toast('保存しました：' + _saveTarget.name);
+    // iPad等：保存先は聞かずそのまま同名で書き出す（社長指示：上書き保存で再確認はおかしい）
+    downloadBlob(_saveTarget.name, text);
+    toast('上書き保存しました：' + _saveTarget.name);
   }
   window.__toast = toast;   // トップレベルの機能（干渉チェック等）からも通知を出せるように
   // ---- 自動保存（ブラウザ内バックアップ・事故防止・2026-07-14 社長要望） ----

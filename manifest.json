@@ -1,0 +1,16 @@
+{
+  "name": "配管3D",
+  "short_name": "配管3D",
+  "description": "現場で採寸しながらアイソメ図を作る配管3Dアプリ（志基テクノ）",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "browser",
+  "background_color": "#ccd6e4",
+  "theme_color": "#1c3157",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+  ]
+}
