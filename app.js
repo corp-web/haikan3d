@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-R';
+const APP_VER = 'v0721-S';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6750,7 +6750,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const r of d.anns) if (annStore.includes(r) && !r.hidden) { box.expandByPoint(r.a); box.expandByPoint(r.b); }
     return box.isEmpty() ? null : box;
   }
-  function relabelDetails() { detailAreas.forEach((d, i) => d.id = DETAIL_IDS[i]); }   // A/B/C を詰め直す
+  function relabelDetails() { detailAreas.forEach((d, i) => { d.id = DETAIL_IDS[i] || String(i + 1); if (!d.renamed) d.name = `詳細${d.id}`; }); }   // A/B/C・名前を詰め直す
   function sameSet(d, parts, anns) {   // 同じアイテムの組み合わせか（＝登録済みを選び直した）
     if (d.parts.length !== parts.length || d.anns.length !== anns.length) return false;
     return d.parts.every(p => parts.includes(p)) && d.anns.every(a => anns.includes(a));
@@ -6767,12 +6767,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const anns = annStore.filter(r => !r.hidden && (inRect(r.a) || inRect(r.b)));
     return { parts, anns };
   }
-  // 詳細図ボタンの点灯（枠モード中・登録あり）を反映（2026-07-21 社長要望）
+  // 詳細図ボタンの点灯＝枠モード中だけ（登録して枠モードを抜けたら消える・2026-07-21 社長仕様）
   function updateDetailBtn() {
     const b = document.getElementById('cmdDetail');
-    if (b) b.classList.toggle('active', !!detailFrame || detailAreas.length > 0);
+    if (b) b.classList.toggle('active', !!detailFrame);
   }
   window.__detailBtnState = () => { const b = document.getElementById('cmdDetail'); return b && b.classList.contains('active'); };
+  window.__detailNames = () => detailAreas.map(d => d.name);
   // 窓の中身を「そのまま切り取った写真」にする（2026-07-21 社長：フィット拡大でなく実際に見えている大きさのまま）。
   // 印刷スタイルで全体を撮り、指定した画面矩形(0..1正規化)だけを切り出す。
   async function captureDetailCrop(nx, ny, nw, nh) {
@@ -6815,9 +6816,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const nw = Math.abs(x1 - x0) / rc.width, nh = Math.abs(y1 - y0) / rc.height;
     const id = DETAIL_IDS[detailAreas.length];
     const url = await captureDetailCrop(nx, ny, nw, nh);
-    detailAreas.push({ id, parts, anns, rect: { nx, ny, nw, nh }, aspect: nw * rc.width / Math.max(nh * rc.height, 1), url });
+    detailAreas.push({ id, name: `詳細${id}`, parts, anns, rect: { nx, ny, nw, nh }, aspect: nw * rc.width / Math.max(nh * rc.height, 1), url });
     updateDetailBtn();
-    if (window.__toast) window.__toast(`詳細${id} を登録しました（同じ範囲を囲むと取り消し）`);
+    if (window.__toast) window.__toast(`詳細${id} を登録しました（長押しで一覧・編集）`);
   }
   // 従来の「選択して押す」も残す（選択があればそれを写真として登録／無ければ枠モードへ）
   async function addDetailArea() {
@@ -6830,7 +6831,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!nr) { if (window.__toast) window.__toast('画面に映っていません（対象が見える向きにしてから登録してください）'); return; }
       const id = DETAIL_IDS[detailAreas.length];
       const url = await captureDetailCrop(nr.nx, nr.ny, nr.nw, nr.nh);
-      detailAreas.push({ id, parts, anns, rect: nr, aspect: nr.nw / Math.max(nr.nh, 0.001), url });
+      detailAreas.push({ id, name: `詳細${id}`, parts, anns, rect: nr, aspect: nr.nw / Math.max(nr.nh, 0.001), url });
       updateDetailBtn();
       if (window.__toast) window.__toast(`詳細${id} を登録しました`);
       return;
@@ -6838,6 +6839,64 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     startDetailFrame();   // 選択が無ければ枠ドラッグモードへ
   }
   window.__registerDetailRect = registerDetailRect;
+  // ===== 詳細図の一覧・プレビュー（長押しで開く／名前の編集・削除）2026-07-21 社長要望 =====
+  function closeDetailPanels() {
+    for (const id of ['__detailList', '__detailPrev']) { const el = document.getElementById(id); if (el) el.remove(); }
+  }
+  window.__detailPanelsOpen = () => !!(document.getElementById('__detailList') || document.getElementById('__detailPrev'));
+  function openDetailList() {
+    closeDetailPanels();
+    if (!detailAreas.length) { if (window.__toast) window.__toast('詳細図はまだありません（押して枠で囲むと登録）'); return; }
+    const ov = document.createElement('div'); ov.id = '__detailList';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(8,12,24,.55);display:flex;align-items:center;justify-content:center;font:13px Meiryo,sans-serif;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#f6f9fd;color:#26324a;border:1px solid #c4ccda;border-radius:10px;box-shadow:0 10px 34px rgba(0,0,0,.4);width:min(360px,92vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden;';
+    const hd = document.createElement('div'); hd.textContent = '詳細図の一覧'; hd.style.cssText = 'padding:10px 14px;font-weight:700;color:#1f6fd0;border-bottom:1px solid #d7dee9;';
+    const list = document.createElement('div'); list.style.cssText = 'overflow:auto;padding:6px;';
+    detailAreas.forEach((d, i) => {
+      const row = document.createElement('button'); row.type = 'button';
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:#fff;border:1px solid #e0e6ef;border-radius:8px;padding:7px 8px;margin-bottom:6px;cursor:pointer;font:inherit;color:inherit;';
+      const th = document.createElement('img'); th.src = d.url; th.style.cssText = 'width:56px;height:40px;object-fit:contain;background:#fff;border:1px solid #dde3ec;border-radius:4px;flex:none;';
+      const nm = document.createElement('div'); nm.innerHTML = `<b>${esc(d.name)}</b><br><span style="color:#6b7a99;font-size:11px">記号 ${d.id}</span>`;
+      row.append(th, nm); row.onclick = () => openDetailPreview(i);
+      list.appendChild(row);
+    });
+    const ft = document.createElement('div'); ft.style.cssText = 'display:flex;justify-content:flex-end;padding:10px 14px;border-top:1px solid #d7dee9;';
+    const cl = document.createElement('button'); cl.type = 'button'; cl.textContent = '閉じる';
+    cl.style.cssText = 'padding:7px 14px;border:1px solid #c4ccda;border-radius:7px;background:#fff;color:#33405c;cursor:pointer;font:inherit;';
+    cl.onclick = closeDetailPanels; ft.appendChild(cl);
+    box.append(hd, list, ft); ov.appendChild(box); document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) closeDetailPanels(); });
+  }
+  function openDetailPreview(i) {
+    closeDetailPanels();
+    const d = detailAreas[i]; if (!d) return;
+    const ov = document.createElement('div'); ov.id = '__detailPrev';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(8,12,24,.6);display:flex;align-items:center;justify-content:center;font:13px Meiryo,sans-serif;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#f6f9fd;color:#26324a;border:1px solid #c4ccda;border-radius:10px;box-shadow:0 10px 34px rgba(0,0,0,.45);width:min(440px,94vw);display:flex;flex-direction:column;overflow:hidden;';
+    const hd = document.createElement('div'); hd.textContent = 'プレビュー'; hd.style.cssText = 'padding:10px 14px;font-weight:700;color:#1f6fd0;border-bottom:1px solid #d7dee9;';
+    const img = document.createElement('img'); img.src = d.url; img.style.cssText = 'display:block;max-width:100%;max-height:52vh;object-fit:contain;margin:10px auto;background:#fff;border:1px solid #dde3ec;';
+    const nmRow = document.createElement('div'); nmRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:0 14px 6px;';
+    const nmLb = document.createElement('label'); nmLb.textContent = '名前'; nmLb.style.cssText = 'color:#4a5a74;';
+    const nmIn = document.createElement('input'); nmIn.type = 'text'; nmIn.value = d.name;
+    nmIn.style.cssText = 'flex:1;background:#fff;color:#2a3550;border:1px solid #c4ccda;border-radius:6px;padding:5px 7px;font:inherit;';
+    nmIn.addEventListener('input', () => { d.name = nmIn.value.trim() || `詳細${d.id}`; d.renamed = true; });
+    nmIn.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') nmIn.blur(); });
+    nmRow.append(nmLb, nmIn);
+    const ft = document.createElement('div'); ft.style.cssText = 'display:flex;gap:8px;padding:10px 14px;border-top:1px solid #d7dee9;';
+    const mk = (t, primary, danger) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = t;
+      b.style.cssText = `padding:7px 14px;border-radius:7px;cursor:pointer;font:inherit;border:1px solid ${danger ? '#d0a0a0' : (primary ? '#2f7bff' : '#c4ccda')};background:${primary ? '#2f7bff' : '#fff'};color:${danger ? '#a33' : (primary ? '#fff' : '#33405c')};`; return b; };
+    const del = mk('削除', false, true), back = mk('一覧へ'), cl = mk('閉じる', true);
+    del.onclick = () => { detailAreas.splice(i, 1); relabelDetails(); updateDetailBtn(); if (window.__toast) window.__toast('詳細図を削除しました'); openDetailList(); };
+    back.onclick = () => openDetailList();
+    cl.onclick = closeDetailPanels;
+    ft.append(del, back); ft.style.justifyContent = 'flex-start'; const spacer = document.createElement('div'); spacer.style.flex = '1'; ft.append(spacer, cl);
+    box.append(hd, img, nmRow, ft); ov.appendChild(box); document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) closeDetailPanels(); });
+  }
+  window.__detailOpenList = openDetailList;
+  window.__detailOpenPreview = openDetailPreview;
   // ===== 枠ドラッグモード：画面に矩形を描いて範囲を囲む =====
   let detailFrame = null;   // { down:{x,y}, box:DOM }
   const detailBoxEl = document.createElement('div');
@@ -6933,7 +6992,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       // 拡大図＝登録時に切り取った写真（窓の中身をそのままの大きさで）。印は登録時の窓の位置に四角で。
       const r = d.rect;
       const mx = ox + r.nx * iw, my = oy + r.ny * ih, mw = r.nw * iw, mh = r.nh * ih;
-      details.push({ id: d.id, url: d.url, aspect: d.aspect,
+      details.push({ id: d.id, name: d.name || ('詳細' + d.id), url: d.url, aspect: d.aspect,
         mx, my, mw: Math.max(mw, 6), mh: Math.max(mh, 6), inView: true });
     }
     const axisSvg = buildAxisGlyph();   // 3D方位コンパス（現在の向き）
@@ -7017,7 +7076,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ${(() => { let top = 36; return details.map(d => {
         const dw = 86, dih = Math.max(34, Math.min(70, dw / (d.aspect || 1.4)));
         const html = `<div class="detail" style="left:${INSET + 2}mm;top:${top}mm;width:${dw}mm">
-      <div class="dttl">詳細 ${d.id}（拡大）</div><img src="${d.url}" style="height:${dih.toFixed(0)}mm">
+      <div class="dttl">${esc(d.name)}（拡大）</div><img src="${d.url}" style="height:${dih.toFixed(0)}mm">
     </div>`;
         top += dih + 8; return html; }).join(''); })()}
     ${axisSvg}
@@ -10751,7 +10810,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
   { const b = $('cmdRotate'); if (b) b.onclick = rotateCmd; }   // 回転コマンド（2026-07-21 社長要望）
-  { const b = $('cmdDetail'); if (b) b.onclick = () => { if (window.__addDetailArea) window.__addDetailArea(); }; }   // 詳細図（部分拡大）
+  // 詳細図：タップ＝枠モード/登録、長押し＝一覧（プレビュー・名前編集・削除）。2026-07-21 社長要望
+  { const b = $('cmdDetail');
+    if (b) {
+      let t = null, longed = false;
+      const clr = () => { if (t) { clearTimeout(t); t = null; } };
+      b.addEventListener('pointerdown', () => { longed = false; clr(); t = setTimeout(() => { longed = true; if (window.__detailOpenList) window.__detailOpenList(); }, 500); });
+      b.addEventListener('pointerup', clr);
+      b.addEventListener('pointerleave', clr);
+      b.addEventListener('click', () => { if (longed) { longed = false; return; } if (window.__addDetailArea) window.__addDetailArea(); });
+    }
+  }
   $('cmdGroup').onclick = groupSelection;
   $('cmdUngroup').onclick = ungroupSelection;
   $('cmdUndo').onclick = () => { if (window.__undo) window.__undo(); };
