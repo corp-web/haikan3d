@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-T';
+const APP_VER = 'v0721-U';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -10739,7 +10739,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdSave').onclick = openSaveMenu;   // 初回＝新規保存／保存済みなら 新規/上書き の選択メニュー
   $('cmdOpen').onclick = load;
   $('cmdCsv').onclick = exportCsv;       // 部品表CSV（自動集計付き）
-  $('cmdClash').onclick = runClashCheck; // 干渉チェック（参考）
+  { const b = $('cmdClash'); if (b) b.onclick = runClashCheck; }   // 干渉チェック（2026-07-21 社長要望で一旦UIから外す。ロジックは残置）
   $('cmdMove').onclick = () => setMoveMode(!moveMode);   // 移動モードのトグル
   // 非表示／再表示。旧index.html（10分キャッシュ）と新app.jsが混在してもボタン無しで壊れないよう null 許容
   const _bHide = $('cmdHide'); if (_bHide) _bHide.onclick = hideCommand;
