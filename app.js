@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-N';
+const APP_VER = 'v0721-P';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6752,34 +6752,102 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (d.parts.length !== parts.length || d.anns.length !== anns.length) return false;
     return d.parts.every(p => parts.includes(p)) && d.anns.every(a => anns.includes(a));
   }
-  function addDetailArea() {
-    const parts = [...selectedParts], anns = [...selAnns];
-    if (!parts.length && !anns.length) {          // 選択なしで押す＝登録の全解除
-      if (!detailAreas.length) { if (window.__toast) window.__toast('詳細図：拡大したいアイテムを選んでから押してください'); return; }
-      detailAreas.length = 0;
-      if (window.__toast) window.__toast('詳細図の登録をすべて解除しました');
-      return;
-    }
-    // 既に登録済みのアイテムをもう一度選んで押す＝その詳細図だけ取り消す（2026-07-21 社長要望）
+  // 画面の矩形内にあるアイテム（部品・線/寸法）を、選択を変えずに集める
+  function itemsInRect(x0, y0, x1, y1) {
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const lo = Math.min, hi = Math.max;
+    const rx0 = lo(x0, x1), rx1 = hi(x0, x1), ry0 = lo(y0, y1), ry1 = hi(y0, y1);
+    const inRect = w => { const n = modelGroup.localToWorld(w.clone()).project(cam); if (n.z >= 1) return false;
+      const sx = rect.left + (n.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-n.y * 0.5 + 0.5) * rect.height;
+      return sx >= rx0 && sx <= rx1 && sy >= ry0 && sy <= ry1; };
+    const parts = placedParts.filter(p => p.userData.faceLocal && !p.userData.hidden && inRect(originModelPos(p)));
+    const anns = annStore.filter(r => !r.hidden && (inRect(r.a) || inRect(r.b)));
+    return { parts, anns };
+  }
+  // 枠ドラッグで詳細図を登録する（2026-07-21 社長案：ボタン→枠で囲む→その形を拡大図に）
+  function registerDetailRect(x0, y0, x1, y1) {
+    const { parts, anns } = itemsInRect(x0, y0, x1, y1);
+    if (!parts.length && !anns.length) { if (window.__toast) window.__toast('枠の中にアイテムがありません'); return; }
+    const aspect = Math.abs(x1 - x0) / Math.max(Math.abs(y1 - y0), 1);   // 囲んだ枠の縦横比＝拡大図の形
     const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
-    if (exist >= 0) {
+    if (exist >= 0) {                                   // 同じ範囲を再度囲む＝取り消し
       const gid = detailAreas[exist].id;
-      detailAreas.splice(exist, 1);
-      relabelDetails();
+      detailAreas.splice(exist, 1); relabelDetails();
       if (window.__toast) window.__toast(`詳細${gid} を取り消しました`);
       return;
     }
-    if (detailAreas.length >= DETAIL_IDS.length) {
-      if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです（選択なしで押すと解除）`);
+    if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
+    const id = DETAIL_IDS[detailAreas.length];
+    detailAreas.push({ id, parts, anns, aspect: Math.max(0.5, Math.min(2.4, aspect)) });
+    if (window.__toast) window.__toast(`詳細${id} を登録しました（同じ範囲を囲むと取り消し）`);
+  }
+  // 従来の「選択して押す」も残す（選択があればそれを登録／無ければ枠モードへ）
+  function addDetailArea() {
+    const parts = [...selectedParts], anns = [...selAnns];
+    if (parts.length || anns.length) {
+      const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
+      if (exist >= 0) { const gid = detailAreas[exist].id; detailAreas.splice(exist, 1); relabelDetails(); if (window.__toast) window.__toast(`詳細${gid} を取り消しました`); return; }
+      if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
+      const id = DETAIL_IDS[detailAreas.length];
+      detailAreas.push({ id, parts, anns });
+      if (window.__toast) window.__toast(`詳細${id} を登録しました`);
       return;
     }
-    const id = DETAIL_IDS[detailAreas.length];
-    detailAreas.push({ id, parts, anns });
-    if (window.__toast) window.__toast(`詳細${id} を登録しました（もう一度同じ所を選んで押すと取り消し）`);
+    startDetailFrame();   // 選択が無ければ枠ドラッグモードへ
   }
+  window.__registerDetailRect = registerDetailRect;
+  // ===== 枠ドラッグモード：画面に矩形を描いて範囲を囲む =====
+  let detailFrame = null;   // { down:{x,y}, box:DOM }
+  const detailBoxEl = document.createElement('div');
+  detailBoxEl.style.cssText = 'position:fixed;z-index:88;display:none;border:1.5px dashed #2f7bff;background:rgba(47,123,255,.10);pointer-events:none';
+  document.body.appendChild(detailBoxEl);
+  const detailHint = document.createElement('div');
+  detailHint.style.cssText = 'position:fixed;z-index:88;display:none;left:50%;top:54px;transform:translateX(-50%);padding:5px 14px;font:bold 12px Meiryo,sans-serif;color:#fff;background:rgba(31,90,180,.94);border-radius:8px;pointer-events:none;white-space:nowrap';
+  detailHint.textContent = '拡大したい所を枠で囲んでください（囲んだ形が拡大図になります）';
+  document.body.appendChild(detailHint);
+  function startDetailFrame() {
+    if (detailFrame) { endDetailFrame(); return; }
+    detailFrame = { down: null };
+    renderer.domElement.style.cursor = 'crosshair';
+    detailHint.style.display = 'block';
+  }
+  function endDetailFrame() {
+    detailFrame = null;
+    renderer.domElement.style.cursor = '';
+    detailBoxEl.style.display = 'none';
+    detailHint.style.display = 'none';
+  }
+  window.__detailFrameActive = () => !!detailFrame;
+  window.addEventListener('pointerdown', e => {
+    if (!detailFrame || e.button !== 0) return;
+    if (e.target !== renderer.domElement) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    detailFrame.down = { x: e.clientX, y: e.clientY };
+    Object.assign(detailBoxEl.style, { display: 'block', left: e.clientX + 'px', top: e.clientY + 'px', width: '0px', height: '0px' });
+  }, true);
+  window.addEventListener('pointermove', e => {
+    if (!detailFrame || !detailFrame.down) return;
+    const d = detailFrame.down;
+    Object.assign(detailBoxEl.style, {
+      left: Math.min(d.x, e.clientX) + 'px', top: Math.min(d.y, e.clientY) + 'px',
+      width: Math.abs(e.clientX - d.x) + 'px', height: Math.abs(e.clientY - d.y) + 'px',
+    });
+  }, true);
+  window.addEventListener('pointerup', e => {
+    if (!detailFrame) return;
+    const d = detailFrame.down; detailFrame.down = null;
+    detailBoxEl.style.display = 'none';
+    if (!d) return;
+    if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 8) { endDetailFrame(); return; }   // ほぼ動かず＝取消
+    registerDetailRect(d.x, d.y, e.clientX, e.clientY);
+    endDetailFrame();
+  }, true);
+  window.addEventListener('keydown', e => {
+    if (detailFrame && e.key === 'Escape') { e.stopImmediatePropagation(); endDetailFrame(); }
+  }, true);
   // 指定範囲が画面いっぱいに入るようカメラを寄せて印刷用スナップを撮り、元の視点へ戻す。
   // 向き（見る方角）は本図と同じにする＝拡大しても同じ姿勢で読める
-  function snapshotDetail(box, margin) {
+  function snapshotDetail(box, margin, aspect) {   // aspect＝囲んだ枠の形。拡大図の枠はこの比で作る（画像はobject-fitで中央寄せ）
     const cam = activeCam();
     const savePos = cam.position.clone(), saveZoom = cam.zoom, saveTarget = controls.target.clone();
     const c = box.getCenter(new THREE.Vector3());
@@ -6817,18 +6885,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const d of detailAreas) {
       const box = detailBox(d);
       if (!box) continue;
-      const url = snapshotDetail(box, 1.15);
+      const url = snapshotDetail(box, 1.15, d.aspect);
       const cam = activeCam();
-      const c = box.getCenter(new THREE.Vector3());
-      const nd = modelGroup.localToWorld(c.clone()).project(cam);
-      const u = nd.x * 0.5 + 0.5, v = -nd.y * 0.5 + 0.5;
-      // 丸印の大きさ＝対象の見かけの大きさ（画面上の半径を紙のmmへ）
-      const sph = box.getBoundingSphere(new THREE.Sphere());
-      const e = modelGroup.localToWorld(c.clone().add(new THREE.Vector3(sph.radius, 0, 0))).project(cam);
-      const rmm = Math.max(Math.hypot((e.x - nd.x) * 0.5 * iw, (e.y - nd.y) * 0.5 * ih), 4);
-      details.push({ id: d.id, url,
-        mx: ox + u * iw, my: oy + v * ih, mr: Math.min(rmm * 1.25, 40),
-        inView: nd.z < 1 && u > -0.05 && u < 1.05 && v > -0.05 && v < 1.05 });
+      // 本図での対象の画面範囲（枠印の位置と大きさ）＝箱の8頂点を投影して包む
+      let uMin = 1e9, uMax = -1e9, vMin = 1e9, vMax = -1e9, anyFront = false;
+      const cs = [box.min, box.max];
+      for (let xi = 0; xi < 2; xi++) for (let yi = 0; yi < 2; yi++) for (let zi = 0; zi < 2; zi++) {
+        const w = new THREE.Vector3(cs[xi].x, cs[yi].y, cs[zi].z);
+        const n = modelGroup.localToWorld(w).project(cam);
+        if (n.z < 1) anyFront = true;
+        const u = n.x * 0.5 + 0.5, vv = -n.y * 0.5 + 0.5;
+        uMin = Math.min(uMin, u); uMax = Math.max(uMax, u); vMin = Math.min(vMin, vv); vMax = Math.max(vMax, vv);
+      }
+      const pad = 0.012;
+      const mx = ox + (uMin - pad) * iw, my = oy + (vMin - pad) * ih;
+      const mw = (uMax - uMin + pad * 2) * iw, mh = (vMax - vMin + pad * 2) * ih;
+      details.push({ id: d.id, url, aspect: d.aspect,
+        mx, my, mw: Math.max(mw, 6), mh: Math.max(mh, 6),
+        inView: anyFront && uMax > -0.05 && uMin < 1.05 && vMax > -0.05 && vMin < 1.05 });
     }
     const axisSvg = buildAxisGlyph();   // 3D方位コンパス（現在の向き）
     const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
@@ -6883,7 +6957,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   .detail{position:absolute;width:86mm;background:#fff;border:0.3mm solid #111;border-radius:1mm;overflow:hidden;}
   .detail .dttl{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:0.8mm;border-bottom:0.2mm solid #111;}
   .detail img{display:block;width:100%;height:52mm;object-fit:contain;}
-  .dmark{position:absolute;border:0.4mm solid #111;border-radius:50%;pointer-events:none;}
+  .dmark{position:absolute;border:0.4mm solid #111;border-radius:1mm;pointer-events:none;}
   .dmarkt{position:absolute;font-size:4mm;font-weight:700;color:#111;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
   .panel{position:absolute;right:9mm;bottom:9mm;width:124mm;max-height:calc(100% - 19mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
@@ -6906,11 +6980,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 </style></head><body>
   <div class="pg">
     <div class="dwg"><img src="${img}"></div>
-    ${details.map(d => d.inView ? `<div class="dmark" style="left:${(d.mx - d.mr).toFixed(1)}mm;top:${(d.my - d.mr).toFixed(1)}mm;width:${(d.mr * 2).toFixed(1)}mm;height:${(d.mr * 2).toFixed(1)}mm"></div>
-    <div class="dmarkt" style="left:${(d.mx + d.mr + 1).toFixed(1)}mm;top:${(d.my - d.mr - 1).toFixed(1)}mm">${d.id}</div>` : '').join('')}
-    ${details.map((d, i) => `<div class="detail" style="left:${INSET + 2}mm;top:${36 + i * 62}mm">
-      <div class="dttl">詳細 ${d.id}（拡大）</div><img src="${d.url}">
-    </div>`).join('')}
+    ${details.map(d => d.inView ? `<div class="dmark" style="left:${d.mx.toFixed(1)}mm;top:${d.my.toFixed(1)}mm;width:${d.mw.toFixed(1)}mm;height:${d.mh.toFixed(1)}mm"></div>
+    <div class="dmarkt" style="left:${(d.mx + d.mw + 1).toFixed(1)}mm;top:${(d.my - 1).toFixed(1)}mm">${d.id}</div>` : '').join('')}
+    ${(() => { let top = 36; return details.map(d => {
+        const dw = 86, dih = Math.max(34, Math.min(70, dw / (d.aspect || 1.4)));
+        const html = `<div class="detail" style="left:${INSET + 2}mm;top:${top}mm;width:${dw}mm">
+      <div class="dttl">詳細 ${d.id}（拡大）</div><img src="${d.url}" style="height:${dih.toFixed(0)}mm">
+    </div>`;
+        top += dih + 8; return html; }).join(''); })()}
     ${axisSvg}
     <div class="panel">
       ${ilCollapsed ? '' : `<div class="hd">アイテムリスト</div>
