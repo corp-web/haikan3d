@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-P';
+const APP_VER = 'v0721-Q';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5464,7 +5464,10 @@ let prevT = performance.now();
   if (!useOrtho && !tween) {
     // Ctrl中は選択があっても視点操作を許可（2026-07-20 社長案：Ctrl＋ドラッグ＝空間移動・窓選択はダブルタップ→ドラッグ）
     const ctrlFree = touchCtrl || kbCtrl;
-    const lock = followTool || movingPart || dirDrag || pipeEndDrag
+    const modal = (window.__detailFrameActive && window.__detailFrameActive())
+               || (window.__rotateActive && window.__rotateActive())
+               || (window.__mirrorActive && window.__mirrorActive());   // 枠囲み・回転・鏡の最中は視点固定
+    const lock = modal || followTool || movingPart || dirDrag || pipeEndDrag
               || ((selectedPart || (selectedParts && selectedParts.size)
                    || (window.__annHasSel && window.__annHasSel())) && !ctrlFree);
     controls.enabled = !lock && !boxSel;
@@ -6810,12 +6813,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     detailFrame = { down: null };
     renderer.domElement.style.cursor = 'crosshair';
     detailHint.style.display = 'block';
+    controls.enabled = false;   // 枠を囲む間は視点を固定（社長要望：詳細を押したら画面が回らない）
   }
   function endDetailFrame() {
     detailFrame = null;
     renderer.domElement.style.cursor = '';
     detailBoxEl.style.display = 'none';
     detailHint.style.display = 'none';
+    controls.enabled = true;
   }
   window.__detailFrameActive = () => !!detailFrame;
   window.addEventListener('pointerdown', e => {
