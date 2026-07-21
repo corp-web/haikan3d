@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-S';
+const APP_VER = 'v0721-T';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7071,8 +7071,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 </style></head><body>
   <div class="pg">
     <div class="dwg"><img src="${img}"></div>
-    ${details.map(d => d.inView ? `<div class="dmark" style="left:${d.mx.toFixed(1)}mm;top:${d.my.toFixed(1)}mm;width:${d.mw.toFixed(1)}mm;height:${d.mh.toFixed(1)}mm"></div>
-    <div class="dmarkt" style="left:${(d.mx + d.mw + 1).toFixed(1)}mm;top:${(d.my - 1).toFixed(1)}mm">${d.id}</div>` : '').join('')}
     ${(() => { let top = 36; return details.map(d => {
         const dw = 86, dih = Math.max(34, Math.min(70, dw / (d.aspect || 1.4)));
         const html = `<div class="detail" style="left:${INSET + 2}mm;top:${top}mm;width:${dw}mm">
