@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-Q';
+const APP_VER = 'v0721-R';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6767,32 +6767,71 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const anns = annStore.filter(r => !r.hidden && (inRect(r.a) || inRect(r.b)));
     return { parts, anns };
   }
-  // 枠ドラッグで詳細図を登録する（2026-07-21 社長案：ボタン→枠で囲む→その形を拡大図に）
-  function registerDetailRect(x0, y0, x1, y1) {
+  // 詳細図ボタンの点灯（枠モード中・登録あり）を反映（2026-07-21 社長要望）
+  function updateDetailBtn() {
+    const b = document.getElementById('cmdDetail');
+    if (b) b.classList.toggle('active', !!detailFrame || detailAreas.length > 0);
+  }
+  window.__detailBtnState = () => { const b = document.getElementById('cmdDetail'); return b && b.classList.contains('active'); };
+  // 窓の中身を「そのまま切り取った写真」にする（2026-07-21 社長：フィット拡大でなく実際に見えている大きさのまま）。
+  // 印刷スタイルで全体を撮り、指定した画面矩形(0..1正規化)だけを切り出す。
+  async function captureDetailCrop(nx, ny, nw, nh) {
+    const url = snapshotForPrint();
+    const img = new Image();
+    await new Promise(r => { img.onload = r; img.onerror = r; img.src = url; });
+    const sx = nx * img.width, sy = ny * img.height, sw = Math.max(1, nw * img.width), sh = Math.max(1, nh * img.height);
+    const cv = document.createElement('canvas'); cv.width = Math.round(sw); cv.height = Math.round(sh);
+    cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+    return cv.toDataURL('image/png');
+  }
+  // 部品・注釈の集合を、画面上の外接矩形（正規化・少し余白）にする
+  function screenRectOf(parts, anns) {
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    let uMin = 1e9, uMax = -1e9, vMin = 1e9, vMax = -1e9, any = false;
+    const add = w => { const n = modelGroup.localToWorld(w.clone()).project(cam); if (n.z >= 1) return; any = true;
+      const u = n.x * 0.5 + 0.5, v = -n.y * 0.5 + 0.5; uMin = Math.min(uMin, u); uMax = Math.max(uMax, u); vMin = Math.min(vMin, v); vMax = Math.max(vMax, v); };
+    for (const p of parts) { const b = new THREE.Box3().setFromObject(p); const cs = [b.min, b.max];
+      for (let xi = 0; xi < 2; xi++) for (let yi = 0; yi < 2; yi++) for (let zi = 0; zi < 2; zi++) add(new THREE.Vector3(cs[xi].x, cs[yi].y, cs[zi].z)); }
+    for (const r of anns) { add(r.a); add(r.b); }
+    if (!any) return null;
+    const pad = 0.03;
+    return { nx: Math.max(0, uMin - pad), ny: Math.max(0, vMin - pad),
+             nw: Math.min(1, uMax + pad) - Math.max(0, uMin - pad), nh: Math.min(1, vMax + pad) - Math.max(0, vMin - pad) };
+  }
+  // 枠ドラッグで詳細図を登録する（2026-07-21 社長案：ボタン→枠で囲む→窓の中身を写真として拡大図に）
+  async function registerDetailRect(x0, y0, x1, y1) {
     const { parts, anns } = itemsInRect(x0, y0, x1, y1);
     if (!parts.length && !anns.length) { if (window.__toast) window.__toast('枠の中にアイテムがありません'); return; }
-    const aspect = Math.abs(x1 - x0) / Math.max(Math.abs(y1 - y0), 1);   // 囲んだ枠の縦横比＝拡大図の形
     const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
     if (exist >= 0) {                                   // 同じ範囲を再度囲む＝取り消し
       const gid = detailAreas[exist].id;
-      detailAreas.splice(exist, 1); relabelDetails();
+      detailAreas.splice(exist, 1); relabelDetails(); updateDetailBtn();
       if (window.__toast) window.__toast(`詳細${gid} を取り消しました`);
       return;
     }
     if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
+    const rc = renderer.domElement.getBoundingClientRect();
+    const nx = (Math.min(x0, x1) - rc.left) / rc.width, ny = (Math.min(y0, y1) - rc.top) / rc.height;
+    const nw = Math.abs(x1 - x0) / rc.width, nh = Math.abs(y1 - y0) / rc.height;
     const id = DETAIL_IDS[detailAreas.length];
-    detailAreas.push({ id, parts, anns, aspect: Math.max(0.5, Math.min(2.4, aspect)) });
+    const url = await captureDetailCrop(nx, ny, nw, nh);
+    detailAreas.push({ id, parts, anns, rect: { nx, ny, nw, nh }, aspect: nw * rc.width / Math.max(nh * rc.height, 1), url });
+    updateDetailBtn();
     if (window.__toast) window.__toast(`詳細${id} を登録しました（同じ範囲を囲むと取り消し）`);
   }
-  // 従来の「選択して押す」も残す（選択があればそれを登録／無ければ枠モードへ）
-  function addDetailArea() {
+  // 従来の「選択して押す」も残す（選択があればそれを写真として登録／無ければ枠モードへ）
+  async function addDetailArea() {
     const parts = [...selectedParts], anns = [...selAnns];
     if (parts.length || anns.length) {
       const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
-      if (exist >= 0) { const gid = detailAreas[exist].id; detailAreas.splice(exist, 1); relabelDetails(); if (window.__toast) window.__toast(`詳細${gid} を取り消しました`); return; }
+      if (exist >= 0) { const gid = detailAreas[exist].id; detailAreas.splice(exist, 1); relabelDetails(); updateDetailBtn(); if (window.__toast) window.__toast(`詳細${gid} を取り消しました`); return; }
       if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
+      const nr = screenRectOf(parts, anns);
+      if (!nr) { if (window.__toast) window.__toast('画面に映っていません（対象が見える向きにしてから登録してください）'); return; }
       const id = DETAIL_IDS[detailAreas.length];
-      detailAreas.push({ id, parts, anns });
+      const url = await captureDetailCrop(nr.nx, nr.ny, nr.nw, nr.nh);
+      detailAreas.push({ id, parts, anns, rect: nr, aspect: nr.nw / Math.max(nr.nh, 0.001), url });
+      updateDetailBtn();
       if (window.__toast) window.__toast(`詳細${id} を登録しました`);
       return;
     }
@@ -6814,6 +6853,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.domElement.style.cursor = 'crosshair';
     detailHint.style.display = 'block';
     controls.enabled = false;   // 枠を囲む間は視点を固定（社長要望：詳細を押したら画面が回らない）
+    updateDetailBtn();          // ボタンを点灯（社長要望）
   }
   function endDetailFrame() {
     detailFrame = null;
@@ -6821,6 +6861,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     detailBoxEl.style.display = 'none';
     detailHint.style.display = 'none';
     controls.enabled = true;
+    updateDetailBtn();
   }
   window.__detailFrameActive = () => !!detailFrame;
   window.addEventListener('pointerdown', e => {
@@ -6838,14 +6879,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       width: Math.abs(e.clientX - d.x) + 'px', height: Math.abs(e.clientY - d.y) + 'px',
     });
   }, true);
-  window.addEventListener('pointerup', e => {
+  window.addEventListener('pointerup', async e => {
     if (!detailFrame) return;
     const d = detailFrame.down; detailFrame.down = null;
     detailBoxEl.style.display = 'none';
     if (!d) return;
     if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 8) { endDetailFrame(); return; }   // ほぼ動かず＝取消
-    registerDetailRect(d.x, d.y, e.clientX, e.clientY);
-    endDetailFrame();
+    const x0 = d.x, y0 = d.y, x1 = e.clientX, y1 = e.clientY;
+    endDetailFrame();                       // 先にモードを閉じてから撮影（印刷スタイルの一瞬の切替を隠す）
+    await registerDetailRect(x0, y0, x1, y1);
   }, true);
   window.addEventListener('keydown', e => {
     if (detailFrame && e.key === 'Escape') { e.stopImmediatePropagation(); endDetailFrame(); }
@@ -6888,26 +6930,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const ox = INSET + (cw - iw) / 2, oy = INSET + (ch - ih) / 2;
     const details = [];
     for (const d of detailAreas) {
-      const box = detailBox(d);
-      if (!box) continue;
-      const url = snapshotDetail(box, 1.15, d.aspect);
-      const cam = activeCam();
-      // 本図での対象の画面範囲（枠印の位置と大きさ）＝箱の8頂点を投影して包む
-      let uMin = 1e9, uMax = -1e9, vMin = 1e9, vMax = -1e9, anyFront = false;
-      const cs = [box.min, box.max];
-      for (let xi = 0; xi < 2; xi++) for (let yi = 0; yi < 2; yi++) for (let zi = 0; zi < 2; zi++) {
-        const w = new THREE.Vector3(cs[xi].x, cs[yi].y, cs[zi].z);
-        const n = modelGroup.localToWorld(w).project(cam);
-        if (n.z < 1) anyFront = true;
-        const u = n.x * 0.5 + 0.5, vv = -n.y * 0.5 + 0.5;
-        uMin = Math.min(uMin, u); uMax = Math.max(uMax, u); vMin = Math.min(vMin, vv); vMax = Math.max(vMax, vv);
-      }
-      const pad = 0.012;
-      const mx = ox + (uMin - pad) * iw, my = oy + (vMin - pad) * ih;
-      const mw = (uMax - uMin + pad * 2) * iw, mh = (vMax - vMin + pad * 2) * ih;
-      details.push({ id: d.id, url, aspect: d.aspect,
-        mx, my, mw: Math.max(mw, 6), mh: Math.max(mh, 6),
-        inView: anyFront && uMax > -0.05 && uMin < 1.05 && vMax > -0.05 && vMin < 1.05 });
+      // 拡大図＝登録時に切り取った写真（窓の中身をそのままの大きさで）。印は登録時の窓の位置に四角で。
+      const r = d.rect;
+      const mx = ox + r.nx * iw, my = oy + r.ny * ih, mw = r.nw * iw, mh = r.nh * ih;
+      details.push({ id: d.id, url: d.url, aspect: d.aspect,
+        mx, my, mw: Math.max(mw, 6), mh: Math.max(mh, 6), inView: true });
     }
     const axisSvg = buildAxisGlyph();   // 3D方位コンパス（現在の向き）
     const date = esc($('dwgDate').value), place = esc($('dwgPlace').value),
@@ -6961,7 +6988,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   /* 詳細図（部分拡大）：左上に積む。本図には丸印＋記号を重ねる（2026-07-21 社長要望） */
   .detail{position:absolute;width:86mm;background:#fff;border:0.3mm solid #111;border-radius:1mm;overflow:hidden;}
   .detail .dttl{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:0.8mm;border-bottom:0.2mm solid #111;}
-  .detail img{display:block;width:100%;height:52mm;object-fit:contain;}
+  .detail img{display:block;width:100%;height:52mm;object-fit:fill;}
   .dmark{position:absolute;border:0.4mm solid #111;border-radius:1mm;pointer-events:none;}
   .dmarkt{position:absolute;font-size:4mm;font-weight:700;color:#111;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
