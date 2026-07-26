@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0721-U';
+const APP_VER = 'v0726-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -81,14 +81,64 @@ function syncOrtho() {
 }
 
 // ---- ライト（2026-07-19 社長要望：全体を明るく・立体感を強く） ----
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-scene.add(new THREE.HemisphereLight(0xf2f6ff, 0x434b59, 0.6));   // 空/地の自然グラデ＝面の向きで明るさが変わる
+// ※2026-07-26：環境マップ（下）が全方位の明かりを兼ねるようになったため、
+//   環境光・空地光は大きく下げた。下げないと金属が白く飛んで、明るい背景と見分けがつかなくなる。
+scene.add(new THREE.AmbientLight(0xffffff, 0.16));
+scene.add(new THREE.HemisphereLight(0xf2f6ff, 0x434b59, 0.22));   // 空/地の自然グラデ＝面の向きで明るさが変わる
 const key = new THREE.DirectionalLight(0xffffff, 1.05);
 key.position.set(8, 12, 6); scene.add(key);
 const fill = new THREE.DirectionalLight(0x88aaff, 0.3);
 fill.position.set(-8, 4, -6); scene.add(fill);
 const rim = new THREE.DirectionalLight(0xffffff, 0.28);           // 逆側からの輪郭光＝金属の締まり
 rim.position.set(2, -6, -9); scene.add(rim);
+
+// ---- 環境マップ＝金属の映り込み（2026-07-26） ----
+// MeshStandardMaterial は「映り込む先」が無いと金属が灰色の粘土のように見える。
+// 空・地面・太陽を描いた全天球を1枚だけ作って scene.environment に渡すと、
+// 全部品（FLANGE_MAT・バルブ等はすべて Standard 系）が自動で反射を拾い、鋼らしい艶が出る。
+// ※PMREM のテクスチャは生成したレンダラ専用＝パレットのサムネイル（別レンダラ）には使わない。
+// ※印刷は MeshBasicMaterial に差し替えて撮るので、この映り込みは図面には出ない。
+scene.environment = (() => {
+  const W = 256, H = 128;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const c = cv.getContext('2d');
+  const gr = c.createLinearGradient(0, 0, 0, H);
+  gr.addColorStop(0, '#e6eefc');      // 天頂
+  gr.addColorStop(0.46, '#ffffff');   // 地平線＝いちばん明るい（管の腹に横一文字のハイライトが乗る）
+  gr.addColorStop(0.52, '#b9c0ca');   // 地平線の下＝地面
+  gr.addColorStop(1, '#7d838c');      // 足元
+  c.fillStyle = gr; c.fillRect(0, 0, W, H);
+  // 太陽＝キーライト(8,12,6)の方角にひとつ。これが金属のハイライトの芯になる。
+  const sun = c.createRadialGradient(W * 0.40, H * 0.22, 0, W * 0.40, H * 0.22, W * 0.14);
+  sun.addColorStop(0, 'rgba(255,255,255,1)'); sun.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = sun; c.fillRect(0, 0, W, H);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  try {
+    const pm = new THREE.PMREMGenerator(renderer);
+    const rt = pm.fromEquirectangular(tex);
+    pm.dispose(); tex.dispose();
+    return rt.texture;
+  } catch (e) { return null; }        // 非対応環境では映り込みなしで続行（見た目が従来に戻るだけ）
+})();
+
+// ---- 画面の外形線＋陰（2026-07-26） ----
+// 印刷で使っている「深度差から輪郭を抜く」パスを画面でも回す。輪郭が入ると部品の形が締まり、
+// 明るい背景の中でも配管が背景に溶けない。中身は後半の drawSilhouette（定義後にここへ入る）。
+const SCREEN_EDGE_COLOR = 0x1a2029;   // 画面の外形線＝墨色（紙の真っ黒より軽く）
+// 効き具合。edgeAlpha=外形線の濃さ／ao=くぼみの陰の濃さ（0で陰なし）
+// 屋外の日光下でも形が読めるよう、線・陰ともやや強めを既定にする（弱いと反射に負ける）
+const SCREEN_EDGE_OPT = { edgeColor: SCREEN_EDGE_COLOR, edgeAlpha: 0.85, ao: 0.62, aoRadius: 5.0 };
+window.__edgeTune = (o) => Object.assign(SCREEN_EDGE_OPT, o);   // 見比べ・テスト用
+let screenSilhouette = null;
+let showEdges = true;                 // 既定ON。重い端末のために設定⚙で消せる
+try { showEdges = localStorage.getItem('p3d_show_edge') !== '0'; } catch (e) {}
+window.__edgeOn = () => showEdges;
+window.__edgeSet = (v) => {
+  showEdges = !!v;
+  const cb = document.getElementById('setEdge'); if (cb) cb.checked = showEdges;
+  try { localStorage.setItem('p3d_show_edge', showEdges ? '1' : '0'); } catch (e) {}
+};
 
 // ---- モデル空間（配管はここに入れる） ----
 const modelGroup = new THREE.Group();
@@ -5475,6 +5525,8 @@ let prevT = performance.now();
   updateIdleMarkers();         // 選択中パイプの両端センターを表示（アイドル時）
   renderer.clear();
   renderer.render(scene, activeCam());
+  // 部品の外形線と、くぼみの陰を重ねる。ビューキューブ・座標軸より前に描く＝ギズモは縁取らない。
+  if (showEdges && screenSilhouette && placedParts.length) screenSilhouette(activeCam());
   renderGizmo();
   renderAxisGizmo();           // 左下の座標軸インジケータ
   positionHeightForm();        // 選択部品の脇に高さ入力フォームを追従させる
@@ -6507,10 +6559,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           texel: { value: new THREE.Vector2(1 / w, 1 / h) },
           cnear: { value: 0.1 }, cfar: { value: 100 },
           isOrtho: { value: 0 }, rel: { value: 0.012 }, spread: { value: 1.0 },
+          edgeCol: { value: new THREE.Color(0x0f0f0f) }, edgeA: { value: 1.0 },
+          aoK: { value: 0.0 }, aoR: { value: 5.0 },   // 陰の濃さ / 拾う半径(px)。0＝陰なし（印刷はこちら）
         },
         vertexShader: 'varying vec2 vUv;\nvoid main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
         fragmentShader: [
           'uniform sampler2D tDepth; uniform vec2 texel; uniform float cnear, cfar, isOrtho, rel, spread;',
+          'uniform vec3 edgeCol; uniform float edgeA, aoK, aoR;',
           'varying vec2 vUv;',
           'float lin(vec2 uv){',
           '  float z = texture2D(tDepth, uv).x;',
@@ -6519,6 +6574,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           '  return (2.0 * cnear * cfar) / (cfar + cnear - ndc * (cfar - cnear));',
           '}',
           'void main(){',
+          '  if (texture2D(tDepth, vUv).x > 0.99995) discard;',             // 部品が写っていない画素（空・地面）は触らない
           '  vec2 t = texel * spread;',
           '  float c = lin(vUv);',
           '  float l = lin(vUv - vec2(t.x, 0.0));',
@@ -6526,8 +6582,26 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           '  float u = lin(vUv + vec2(0.0, t.y));',
           '  float d = lin(vUv - vec2(0.0, t.y));',
           '  float m = max(max(abs(c - l), abs(c - r)), max(abs(c - u), abs(c - d)));',
-          '  if (m / max(c, 1e-4) < rel) discard;',                          // 深度差が小さい＝縁ではない
-          '  gl_FragColor = vec4(0.06, 0.06, 0.06, 1.0);',
+          '  if (m / max(c, 1e-4) >= rel) {',                               // 深度差が大きい＝物の縁
+          '    gl_FragColor = vec4(edgeCol, edgeA);',
+          '    return;',
+          '  }',
+          // くぼみの陰（キャビティAO）：まわりが自分より手前にあるほど暗くする。
+          // 法線を使う本式のSSAOではなく深度差だけの安価な方式＝溶接部・ボルト穴・部品の合わせ目が締まる。
+          '  if (aoK <= 0.0) discard;',
+          '  vec2 a = texel * aoR;',
+          '  float occ = 0.0;',
+          '  for (int i = 0; i < 8; i++) {',
+          '    float ang = float(i) * 0.7853982;',                          // 45°ずつ8方向
+          '    vec2 o = vec2(cos(ang), sin(ang)) * a;',
+          '    float dz = c - lin(vUv + o);',                               // 正＝まわりの方が手前＝遮蔽
+          '    occ += clamp(dz / (c * 0.014), 0.0, 1.0);',                  // 視距離に対する相対量で見る
+          '  }',
+          '  occ = occ / 8.0;',
+          '  occ = occ * occ * (3.0 - 2.0 * occ);',                         // なめらかに（急に暗くならない）
+          '  float al = occ * aoK;',
+          '  if (al < 0.004) discard;',
+          '  gl_FragColor = vec4(0.0, 0.0, 0.0, al);',                      // 黒を薄く重ねる＝掛け算で暗くなる
           '}',
         ].join('\n'),
         transparent: true, depthTest: false, depthWrite: false,
@@ -6541,13 +6615,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     return _edgeQuad.material;
   }
-  // 部品だけを深度へ描いて輪郭線を canvas に重ねる
-  function drawSilhouette(cam) {
+  // 部品だけを深度へ描いて輪郭線（と陰）を canvas に重ねる。
+  // opt = { edgeColor, edgeAlpha, ao, aoRadius }。省略時は印刷用＝真っ黒の線・陰なし。
+  function drawSilhouette(cam, opt) {
     const w = renderer.domElement.width, h = renderer.domElement.height;
     let mat;
     try { mat = ensureEdgePass(w, h); } catch (e) { return false; }   // 深度テクスチャ非対応なら輪郭線なしで続行
+    // 部品の縁だけを拾う＝注釈・マーカー・グリッド・地面は深度に入れない
+    // （入れると寸法線や吸着点の緑玉まで縁取りされる）
     const hidden = [];
-    for (const g of [annGroup, markerGroup, grid, groundGroup]) {     // 部品の縁だけを拾う
+    for (const g of [annGroup, markerGroup, grid, groundGroup, xptGroup, lineGuideGroup, lineSelGroup, _clashGroup]) {
       if (g && g.visible) { g.visible = false; hidden.push(g); }
     }
     const prevTarget = renderer.getRenderTarget();
@@ -6556,14 +6633,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.render(scene, cam);
     renderer.setRenderTarget(prevTarget);
     for (const g of hidden) g.visible = true;
+    const o = opt || {};
     mat.uniforms.cnear.value = cam.near; mat.uniforms.cfar.value = cam.far;
     mat.uniforms.isOrtho.value = cam.isOrthographicCamera ? 1 : 0;
+    mat.uniforms.edgeCol.value.setHex(o.edgeColor === undefined ? 0x0f0f0f : o.edgeColor);
+    mat.uniforms.edgeA.value = o.edgeAlpha === undefined ? 1.0 : o.edgeAlpha;
+    mat.uniforms.aoK.value = o.ao === undefined ? 0.0 : o.ao;
+    mat.uniforms.aoR.value = o.aoRadius === undefined ? 5.0 : o.aoRadius;
     const prevAuto = renderer.autoClear;
     renderer.autoClear = false;
     renderer.render(_edgeScene, _edgeCam);
     renderer.autoClear = prevAuto;
     return true;
   }
+  // 画面用の外形線＋陰（2026-07-26）。印刷でしか使っていなかったこのパスを描画ループでも回す。
+  // 紙より軽い墨色＋薄い陰＝「品よく締まる」程度に留め、図面（印刷）の真っ黒な線とは別物にする。
+  // 描画ループは app.js の前半にあり、この関数はまだ定義されていないので変数に入れて渡す。
+  screenSilhouette = (cam) => drawSilhouette(cam, SCREEN_EDGE_OPT);
   // 画面1px相当のワールド長さ（外形線の太さを紙の上で一定に保つ）。
   // 印刷は高解像度で描くので、実際の描画バッファの高さを渡すこと（線が太く・鉛筆書きのようになるのを防ぐ）
   function pixelWorldSize(hPx) {
@@ -10771,7 +10857,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const cbG = document.getElementById('setGround');
     const cbB = document.getElementById('setBolt'), cbQ = document.getElementById('setQuad');
     const cbAG = document.getElementById('setAutoGsk');
-    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; if (cbB) cbB.checked = showBoltPts; if (cbQ) cbQ.checked = showQuadPts; if (cbAG) cbAG.checked = autoGasket; };
+    const cbE = document.getElementById('setEdge');
+    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; if (cbB) cbB.checked = showBoltPts; if (cbQ) cbQ.checked = showQuadPts; if (cbE) cbE.checked = showEdges; if (cbAG) cbAG.checked = autoGasket; };
     const closeSet = () => { _setMenu.style.display = 'none'; _bSet.classList.remove('active'); };
     _bSet.onclick = () => {
       const open = _setMenu.style.display !== 'block';
@@ -10791,6 +10878,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbG) cbG.addEventListener('change', () => { showGround = cbG.checked; applyGround(); });
     if (cbB) cbB.addEventListener('change', () => { showBoltPts = cbB.checked; _idleSig = null; try { localStorage.setItem('p3d_show_boltpt', showBoltPts ? '1' : '0'); } catch (e) {} });
     if (cbQ) cbQ.addEventListener('change', () => { showQuadPts = cbQ.checked; _idleSig = null; try { localStorage.setItem('p3d_show_quad', showQuadPts ? '1' : '0'); } catch (e) {} });
+    if (cbE) cbE.addEventListener('change', () => { window.__edgeSet(cbE.checked); });   // 記憶も __edgeSet 側で行う
     if (cbAG) cbAG.addEventListener('change', () => { autoGasket = cbAG.checked; try { localStorage.setItem('p3d_auto_gasket', autoGasket ? '1' : '0'); } catch (e) {} });
     document.addEventListener('pointerdown', e => {
       if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
