@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-B';
+const APP_VER = 'v0727-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2227,10 +2227,12 @@ function makePG(opts) {
   const nutH = VMM(14), nutR = tR * 1.45;
   const nut = new THREE.Mesh(new THREE.CylinderGeometry(nutR, nutR, nutH, 6), opMat);
   nut.position.y = nutH / 2; g.add(nut);
-  // 管の芯線：立ち上がり → 渦（一周半）→ 計器までの立ち上がり。
-  // 渦は「縦軸まわりのらせん」にする（2026-07-27 社長指示：一周半）。
-  //   平面の輪では一周半すると出口の向きが真下を向いてしまい、計器へ上がれない。
-  //   らせんなら回りながら上がるので、一周半でも入口・出口とも上向きのまま繋がる。
+  // 管の芯線：立ち上がり → 90°曲げ → 渦（一周半）→ 90°曲げ → 計器までの立ち上がり。
+  // **渦の面は縦**（最初の版と同じ向き。2026-07-27 社長指示「向きは最初の通り縦方向」）。
+  // 縦の輪で一周半すると、輪の横（管が真上を向く点）から入ると出口が真下を向いてしまう。
+  //   → **輪の下端から入り、上端へ抜ける**ことで解決する。出入口はどちらも横向きなので、
+  //     前後に90°の曲げを付けて立ち上がりへ繋ぐ。出口は入口の真上＝計器も取付口の真上に載る。
+  // 一周半は半周ぶん自分に重なるので、渦の間だけ奥(Z)へ管1本ぶんずらす。
   // なめらかさの要点＝点の間隔をそろえること。直線部と渦で間隔が違うとCatmullRomが折れる
   //   （2026-07-27 社長指摘「曲がりがなめらかでない」の原因）。約4mm間隔で全体を刻む。
   const STEP = 0.004;
@@ -2239,42 +2241,37 @@ function makePG(opts) {
     const n = Math.max(1, Math.round(a.distanceTo(b) / STEP));
     for (let i = 1; i <= n; i++) pts.push(a.clone().lerp(b, i / n));
   };
-  let gx = 0, gz = 0;                                   // 計器を載せる位置（既定＝取付口の真上）
+  // XY平面の円弧を等間隔に刻む。中心(cx,cy)・半径r・角度a0→a1、Zはz0→z1へ一様に進む
+  const pushArc = (cx, cy, r, a0, a1, z0, z1) => {
+    const n = Math.max(3, Math.round(Math.abs(a1 - a0) * r / STEP));
+    for (let i = 1; i <= n; i++) {
+      const t = i / n, a = a0 + (a1 - a0) * t;
+      pts.push(new V3(cx + Math.cos(a) * r, cy + Math.sin(a) * r, z0 + (z1 - z0) * t));
+    }
+  };
+  let gx = 0, gz = 0;                                   // 計器を載せる位置（取付口の真上）
+  pts.push(new V3(0, 0, 0));
   if (siphon) {
-    const TURNS = 1.5;
-    const y0 = SL * 0.20;                               // 渦の下端＝立ち上がりの高さ
-    const rise = SL * 0.35;                             // 渦の高さ（管どうしが重ならないピッチ）
-    pts.push(new V3(0, 0, 0));
-    pushLine(new V3(0, 0, 0), new V3(0, y0, 0));
-    // らせん：中心(coilR,·,0)・半径coilR。入口は角度180°＝(0,y0,0)＝立ち上がりの真上。
-    // 角度だけを緩急（smoothstep）で回す＝入口と出口では回転が止まり、管が真上を向いたまま繋がる。
-    // 等速で回すと出口の向きが横を向いてしまい、そこで折れて見える。
-    const N = Math.max(80, Math.round((2 * Math.PI * coilR * TURNS) / STEP));
-    for (let i = 1; i <= N; i++) {
-      const t = i / N, s = t * t * (3 - 2 * t);
-      const a = Math.PI - s * TURNS * Math.PI * 2;
-      pts.push(new V3(coilR + Math.cos(a) * coilR, y0 + rise * t, Math.sin(a) * coilR));
-    }
-    // 一周半なので出口は入口の反対側（2×渦半径ぶん横）に出る。
-    // そこから白鳥首（S字）で戻し、計器は取付口の真上に載せる（2026-07-27 社長指示）。
-    const E = new V3(coilR * 2, y0 + rise, 0), T = new V3(0, SL, 0);
-    const h = T.y - E.y;
-    const c1 = new V3(E.x, E.y + h * 0.5, E.z), c2 = new V3(T.x, T.y - h * 0.5, T.z);
-    const M = Math.max(40, Math.round((E.distanceTo(T) * 1.35) / STEP));
-    for (let i = 1; i <= M; i++) {                      // 3次ベジェを等間隔に刻む
-      const t = i / M, u = 1 - t;
-      const w0 = u * u * u, w1 = 3 * u * u * t, w2 = 3 * u * t * t, w3 = t * t * t;
-      pts.push(new V3(w0 * E.x + w1 * c1.x + w2 * c2.x + w3 * T.x,
-                      w0 * E.y + w1 * c1.y + w2 * c2.y + w3 * T.y,
-                      w0 * E.z + w1 * c1.z + w2 * c2.z + w3 * T.z));
-    }
+    const rb = VMM(20);                                 // 出入口の曲げ半径
+    const top = VMM(30);                                // 渦の上から計器までの立ち上がり
+    const y1 = Math.max(VMM(10), SL - 2 * rb - 2 * coilR - top);   // 下の立ち上がり
+    const dz = tR * 2.8;                                // 渦が自分に重ならないよう奥へずらす量（管1本ぶん以上あける）
+    const yC = y1 + rb;                                 // 渦の下端
+    const yT = yC + 2 * coilR;                          // 渦の上端
+    pushLine(new V3(0, 0, 0), new V3(0, y1, 0));        // ①立ち上がり
+    pushArc(rb, y1, rb, Math.PI, Math.PI / 2, 0, 0);    // ②上向き→+X へ90°
+    pushArc(rb, yC + coilR, coilR, -Math.PI / 2, -Math.PI / 2 + 3 * Math.PI, 0, dz);   // ③渦 一周半（下端→上端）
+    pushArc(rb, yT + rb, rb, -Math.PI / 2, -Math.PI, dz, dz);                          // ④−X→上向きへ90°
+    pushLine(new V3(0, yT + rb, dz), new V3(0, SL, dz));                                // ⑤計器までの立ち上がり
+    gz = dz;
   } else {
-    pts.push(new V3(0, 0, 0));
     pushLine(new V3(0, 0, 0), new V3(0, SL, 0));
   }
   // centromedial(centripetal)＝点の詰まった所でも膨らまない。折れ・行き過ぎが出にくい
   const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
-  g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(240, pts.length), tR, 18, false), mat));
+  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(240, pts.length), tR, 18, false), mat);
+  tube.name = 'siphon';       // 検証用（渦の径をこのメッシュだけで測れるようにする）
+  g.add(tube);
   const topZ = gz;
   // 計器本体（文字板の軸＝+Z＝バルブのハンドルと同じ向き。部品ごと回して読める向きへ向ける）
   const caseR = VMM(dia) / 2, caseT = VMM(dia) * 0.26;
