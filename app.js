@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0728-B';
+const APP_VER = 'v0728-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2937,6 +2937,7 @@ function clearOtherCommands(keep) {
   if (keep !== 'place') stopFollow();
   if (keep !== 'move' && typeof moveMode !== 'undefined' && moveMode) setMoveMode(false);
   if (keep !== 'move' && typeof movePickOrigin !== 'undefined' && movePickOrigin) endMovePickOrigin();
+  if (keep !== 'move' && typeof moveReady !== 'undefined') moveReady = false;
   if (keep !== 'hide' && typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);
   if (keep !== 'draw' && window.__exitDrawMode) window.__exitDrawMode();
   if (keep !== 'pending' && window.__clearPendingCmd) window.__clearPendingCmd();
@@ -2961,6 +2962,7 @@ function setGripFromPoint(part, pt) {
 let movePicking = false;           // 起点の位置決め中（指を置いてから離すまで）
 let movePickAwait = false;         // 位置は決まり、確定のタップ待ち（カーソルは出したまま）
 let movePickParked = null;         // 離した所（＝これから起点にする点）
+let moveReady = false;             // 起点は決まった。次にタッチした所から動かし始める
 let movePickCursorShown = false;   // 起点の十字を出したまま指を離すのを待っている
 // 起点が決まったら、そのまま「掴んだ状態」にする＝スライドで動かし、タップで確定（鏡・回転と同じ流れ）
 function beginMoveAfterOrigin(cx, cy) {
@@ -5289,6 +5291,12 @@ renderer.domElement.addEventListener('pointerdown', e => {
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
   if (annPlaceMode) return;   // 複製した線・寸法を置いている最中＝タップは「確定」なので部品を掴まない
+  if (moveReady) {              // 起点確定後の最初のタッチ＝ここから動かし始める
+    moveReady = false;
+    e.stopImmediatePropagation();
+    beginMoveAfterOrigin(e.clientX, e.clientY);
+    return;
+  }
   if (movePickOrigin) {
     // 移動：①指でカーソルの位置を決める（押す→動かす→離す。離した所にカーソルは残る）
     //       ②もう一度タップで起点を確定（2026-07-28 社長指示）
@@ -5299,7 +5307,8 @@ renderer.domElement.addEventListener('pointerdown', e => {
       endMovePickOrigin();
       if (pt && selectedPart) setGripFromPoint(selectedPart, pt);
       _idleSig = null; updateForm();
-      beginMoveAfterOrigin(e.clientX, e.clientY);
+      moveReady = true;                        // ここではまだ動かさない。次のタッチで動き始める
+      if (window.__toast) window.__toast('移動：起点を決めました。次にタッチしてスライドで距離と方向を決めてください');
       return;
     }
     movePicking = true;                        // ①位置決め開始
@@ -5624,6 +5633,7 @@ window.addEventListener('keydown', e => {
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
     else if (annPlaceMode) cancelAnnPlace();
+    else if (moveReady) { moveReady = false; if (window.__originPickClear) window.__originPickClear(); }
     else if (movePickOrigin || movePicking) { movePicking = false; movePickAwait = false; endMovePickOrigin(); }
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
     if (moveMode) setMoveMode(false);   // Esc＝「移動」コマンドも取消（進行中の移動は上で取消済み）
@@ -6472,7 +6482,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       rotateMode.picking = true;
       const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
       if (r && r.p) rotateMode.parked = r.p.clone();
-    } else {                                               // ②角度を確定
+    } else if (!rotateMode.aiming) {                       // ②最初のタッチ＝角度を決め始める（まだ実行しない）
+      rotateMode.aiming = true;
+      if (window.__toast) window.__toast('回転：スライドで角度を決め、離してからタップで確定してください');
+    } else {                                               // ③タップで確定
       const deg = rotAngleFrom(e.clientX, e.clientY, e.shiftKey || touchShift);
       execRotate(deg == null ? (parseFloat(rotCmdA.value) || 0) : deg);
     }
@@ -6680,7 +6693,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       mirrorMode.picking = true;
       const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
       if (r && r.p) mirrorMode.parked = r.p.clone();
-    } else {                                               // ②方向 → 実行
+    } else if (!mirrorMode.aiming) {                       // ②最初のタッチ＝方向を決め始める（まだ実行しない）
+      mirrorMode.aiming = true;
+      if (window.__toast) window.__toast('鏡：スライドで方向を決め、離してからタップで確定してください');
+    } else {                                               // ③タップで確定
       const r = mirrorXformFrom(e.clientX, e.clientY);
       if (r) execMirror(r.M);
     }
