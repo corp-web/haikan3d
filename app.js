@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-F';
+const APP_VER = 'v0727-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2379,10 +2379,12 @@ const TOOLS = [
   { type: 'vSafety', name: '安全弁(アングル)', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
     { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, hasB: true, bLarger: true, bLabel: '出口',
       make: () => { const a = clampValveSize(); return makeValve({ kind: 'safety', sizeA: a, sizeB: clampValveOutlet(a), rating: valveCls() }); } } ] },
-  { type: 'vSWgate', name: 'ゲートバルブ(800)', curType: '—', valve: true, vclasses: ['Class800'], build() { return famVariant(this).make(); }, variants: [
-    { t: '—', single: true, sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swgate', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
-  { type: 'vSWglobe', name: 'グローブバルブ(800)', curType: '—', valve: true, vclasses: ['Class800'], build() { return famVariant(this).make(); }, variants: [
-    { t: '—', single: true, sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swglobe', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
+  // 鍛造SW形(Class800)の小型弁は「コンパクトバルブ」1つにまとめ、タイプでゲート／グローブを選ぶ
+  //（2026-07-27 社長要望）。保存される種別(userData.valve.kind)は従来どおり swgate / swglobe なので、
+  //  過去の図面もそのまま開ける。
+  { type: 'vCompact', name: 'コンパクトバルブ', curType: 'ゲート', valve: true, vclasses: ['Class800'], build() { return famVariant(this).make(); }, variants: [
+    { t: 'ゲート',   sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swgate', sizeA: clampValveSize(SW800_SIZE_TBL) }) },
+    { t: 'グローブ', sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swglobe', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
   // 機器類（2026-07-27 社長要望）。継手・バルブの variant 方式ではなく専用のオプション欄を持つ。
   { type: 'flex',  name: 'フレキシブル', equip: true, build: () => makeFlex(flexOpts) },
   { type: 'sight', name: 'サイドグラス', equip: true, build: () => makeSightGlass(sightOpts) },
@@ -2804,7 +2806,7 @@ function toolTypeOfPart(p) {
   }
   if (u.partType === 'valve') {
     const k = (u.valve && u.valve.kind) || '';
-    return ({ ball: 'vBall', gate: 'vGate', globe: 'vGlobe', check: 'vCheck', strainer: 'vStrainer', butterfly: 'vButterfly', safety: 'vSafety', swgate: 'vSWgate', swglobe: 'vSWglobe' })[k] || null;
+    return ({ ball: 'vBall', gate: 'vGate', globe: 'vGlobe', check: 'vCheck', strainer: 'vStrainer', butterfly: 'vButterfly', safety: 'vSafety', swgate: 'vCompact', swglobe: 'vCompact' })[k] || null;
   }
   return ({ flange: 'flange', gasket: 'gasket', pipe: 'pipe', tee: 'tee', reducer: 'reducer', cap: 'cap',
             flex: 'flex', sight: 'sight', pg: 'pg' })[u.partType] || null;
@@ -2818,6 +2820,9 @@ function variantTOfPart(p) {
   if (u.partType === 'cap') return 'BW';
   if (u.partType === 'sw') return ({ FC: 'FC', HC: 'HC', FCR: 'FCR', T: 'SW(T)', TR: 'SW(RT)', '90E': 'SW', '45E': 'SW', CROSS: 'SW', BOSS: 'SW', CAP: 'SW', UNION: 'SW' })[(u.sw && u.sw.kind) || ''] || 'SW';
   if (u.partType === 'valve' && u.valve && u.valve.kind === 'butterfly') return u.valve.style === 'wafer' ? 'ウエハー' : 'フランジ';
+  // コンパクトバルブ（Class800のSW形）＝タイプでゲート／グローブを選ぶ
+  if (u.partType === 'valve' && u.valve && u.valve.kind === 'swgate') return 'ゲート';
+  if (u.partType === 'valve' && u.valve && u.valve.kind === 'swglobe') return 'グローブ';
   return null;
 }
 let _syncingPalette = false;   // 選択→パレット反映中は「パレット→部品」の適用を抑止（多重・逆流防止）
@@ -3889,9 +3894,9 @@ const DEFAULT_POSE = {
   return180: { dir: 4, roll: 0 },
   tee: { dir: 13, roll: 2 },
   boss: { dir: 2, roll: 0 },
-  vSWgate: { dir: 2, roll: 2 }, vSWglobe: { dir: 2, roll: 2 },
+  vCompact: { dir: 2, roll: 2 },
   sight: { dir: 0, roll: 2 },
-  pg: { dir: 2, roll: 0 },
+  pg: { dir: 2, roll: 6 },
   vSafety: { dir: 2, roll: 0 },
 };
 function defaultPose(tool) {
@@ -4600,7 +4605,7 @@ function partColumns(p) {
     case 'tee':    { const o = u.tee || {};    const rt = (o.sizeB && o.sizeB !== o.sizeA); return { kind: 'ティー', type: rt ? 'BW(RT)' : 'BW(T)', size: rt ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: o.sch || '' }; }
     case 'reducer':{ const o = u.reducer || {};return { kind: 'レジューサ', type: o.ecc ? 'BW(E)' : 'BW(C)', size: `${o.sizeA || ''}×${o.sizeB || ''}`, cls: o.sch || '' }; }
     case 'sw':     { const o = u.sw || {}; const nm = {'90E':'90°エルボ','45E':'45°エルボ','T':'ティー','TR':'ティー','CROSS':'クロス','FC':'カップリング','HC':'カップリング','FCR':'カップリング','BOSS':'ボス','CAP':'キャップ','UNION':'ユニオン'}; const tp = {'FC':'FC','HC':'HC','FCR':'FCR','T':'SW(T)','TR':'SW(RT)'}[o.kind] || 'SW'; const rb = (o.sizeB && o.sizeB !== o.sizeA); return { kind: nm[o.kind] || 'SW継手', type: tp, size: rb ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: 'Sch80' }; }
-    case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'ゲートバルブ(800)',swglobe:'グローブバルブ(800)'}; let tp = '', cls = '', sz = o.sizeA || ''; if (o.kind === 'butterfly') { tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); cls = o.rating || ''; } else if (o.kind === 'swgate' || o.kind === 'swglobe') { cls = 'Class800'; } else { cls = o.rating || ''; } if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls }; }
+    case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'コンパクトバルブ',swglobe:'コンパクトバルブ'}; let tp = '', cls = '', sz = o.sizeA || ''; if (o.kind === 'butterfly') { tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); cls = o.rating || ''; } else if (o.kind === 'swgate' || o.kind === 'swglobe') { tp = (o.kind === 'swgate' ? 'ゲート' : 'グローブ'); cls = 'Class800'; } else { cls = o.rating || ''; } if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls }; }
     case 'flex':   { const o = u.flex || {};   return { kind: 'フレキシブル', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'sight':  { const o = u.sight || {};  return { kind: 'サイドグラス', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'pg':     { const o = u.pg || {};     return { kind: 'PG(圧力計)', type: `${o.thread || ''}${o.siphon === false ? '' : '＋サイフォン'}`, size: `${o.dia || 100}Φ`, cls: '' }; }
@@ -4627,7 +4632,7 @@ function partTypeRank(p) {
   }
   if (u.partType === 'valve') {
     const k = (u.valve && u.valve.kind) || '';
-    const map = { ball:'vBall', gate:'vGate', globe:'vGlobe', check:'vCheck', strainer:'vStrainer', butterfly:'vButterfly', safety:'vSafety', swgate:'vSWgate', swglobe:'vSWglobe' };
+    const map = { ball:'vBall', gate:'vGate', globe:'vGlobe', check:'vCheck', strainer:'vStrainer', butterfly:'vButterfly', safety:'vSafety', swgate:'vCompact', swglobe:'vCompact' };
     return r(map[k] || u.partType);
   }
   return r(u.partType);
