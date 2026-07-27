@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0728-E';
+const APP_VER = 'v0728-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3878,7 +3878,9 @@ function dropMovingPart() {           // ドラッグを離して（またはク
   autoInsertGasket(movingPart);   // 移動でフランジ面どうしが合った時もガスケットを挟む
   movingPart = null; moveOrig = null; moveGroup = []; movingByDrag = false; moveHoldTap = false;
   moveStartPt = null; moveStarted = false; moveGrabOff = { x: 0, y: 0 };
+  const wasMoveCmd = moveMode;
   finishMoveCommand();   // 自由移動1回で「移動」コマンド終了
+  if (wasMoveCmd) selectPart(null);   // 移動コマンドで動かした時は選択も解除（直線移動と揃える。2026-07-28 社長指摘）
   if (annFollowMove) { window.__annMoveEnd(); annFollowMove = false; }
   controls.enabled = true;
   clearMarkers();
@@ -5551,8 +5553,13 @@ renderer.domElement.addEventListener('pointerup', e => {
     if (dirDrag.hover && !dirDrag.started) return;
     // 方向移動の確定待ち：タップで確定（位置はそのまま・距離入力は閉じる）。2026-07-20 社長要望
     const moved = dirDrag.part;
+    const wasHover = dirDrag.hover;
     dirDrag = null; clearMarkers(); _idleSig = null; updateForm();
     autoInsertGasket(moved);   // 確定した位置でフランジ面どうしならガスケットを挟む
+    if (wasHover) {            // 起点を決めて行う直線移動＝自由移動と同じ後始末（2026-07-28 社長指摘）
+      finishMoveCommand();     // 移動コマンドを終了（リボンの光を消す）
+      selectPart(null);        // 選択も解除
+    }
   } else {
     pickPartAt(e.clientX, e.clientY, false);   // 通常クリック＝単一選択（Ctrlは別経路で処理済み）
   }
@@ -6283,12 +6290,20 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // そのあとアイテムを選んだ時点で実行する。判定は選択処理が全部終わってから（末尾の pointerup で呼ぶ）。
   let pendingCmd = null;                          // 'dup' | 'mirror' | 'rotate' | null
   const PENDING_BTN = { dup: 'cmdDup', mirror: 'cmdMirror', rotate: 'cmdRotate' };
+  // リボンの光り方は「実行中」も「待ち受け中」も光る＝移動ボタンと同じ扱いにする（2026-07-28 社長指摘）
+  function syncCmdLights() {
+    const on = { dup: pendingCmd === 'dup',
+                 mirror: !!mirrorMode || pendingCmd === 'mirror',
+                 rotate: !!rotateMode || pendingCmd === 'rotate' };
+    for (const k of Object.keys(PENDING_BTN)) {
+      const b = $(PENDING_BTN[k]); if (b) b.classList.toggle('active', !!on[k]);
+    }
+  }
+  window.__syncCmdLights = syncCmdLights;
   function setPendingCmd(name, msg) {
     if (name && typeof clearOtherCommands === 'function') clearOtherCommands('pending');   // 他のコマンドは解除
     pendingCmd = name || null;
-    for (const k of Object.keys(PENDING_BTN)) {
-      const b = $(PENDING_BTN[k]); if (b) b.classList.toggle('active', pendingCmd === k);
-    }
+    syncCmdLights();
     if (pendingCmd && msg && window.__toast) window.__toast(msg);
   }
   window.__clearPendingCmd = () => { if (pendingCmd) setPendingCmd(null); };
@@ -6363,6 +6378,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function endMirrorMode() {
     mirrorMode = null; clearMirrorGuide();
     renderer.domElement.style.cursor = '';
+    syncCmdLights();                          // コマンド終了＝ボタンの光を消す
   }
   window.__mirrorActive = () => !!mirrorMode;   // 鏡モード中は各種入力フォームを隠す用
   window.__mirrorCancel = () => { if (mirrorMode) endMirrorMode(); };   // 他コマンドへ切替える時の取消
@@ -6396,6 +6412,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function endRotateMode() {
     rotateMode = null; clearMirrorGuide(); rotBox.style.display = 'none';
     renderer.domElement.style.cursor = '';
+    syncCmdLights();                          // コマンド終了＝ボタンの光を消す
   }
   window.__rotateActive = () => !!rotateMode;
   window.__rotateCancel = endRotateMode;
@@ -6407,6 +6424,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     setPendingCmd(null);
     if (typeof clearOtherCommands === 'function') clearOtherCommands('rotate');   // 他のコマンドは解除
     rotateMode = { parts, anns, p1: null, ang: 0 };
+    syncCmdLights();                          // 実行中はボタンを光らせる
     renderer.domElement.style.cursor = DRAW_CURSOR;
     if (window.__toast) window.__toast('回転：回転の起点（中心）をタップしてください');
   }
@@ -6580,6 +6598,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     setPendingCmd(null);
     if (typeof clearOtherCommands === 'function') clearOtherCommands('mirror');   // 他のコマンドは解除
     mirrorMode = { parts, anns, p1: null };
+    syncCmdLights();                          // 実行中はボタンを光らせる
     renderer.domElement.style.cursor = DRAW_CURSOR;
     // 次に何をすればよいか分かるように案内する（2026-07-27 社長要望：起点を選ぶワンタップを明示）
     if (window.__toast) window.__toast('鏡：反転の起点（基準点）をタップしてください');
