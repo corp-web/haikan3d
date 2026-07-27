@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-H';
+const APP_VER = 'v0727-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6106,6 +6106,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       refreshAnnHi(); refreshHandles();
       if (typeof updateForm === 'function') updateForm();
     }
+    // 複製した物は「その場に置く」のではなく、掴んだ状態にして置き場所を決めてもらう
+    //（2026-07-27 社長要望：複製されたものは先ずフリーで移動でき、タップで位置決め）。
+    // startMovePart に掴んだ座標を渡さない＝指を動かした時点で追従が始まり、タップで確定する。
+    // 選択された線分もそのまま一緒に動く（annFollowMove）。
+    if (copies.length) {
+      startMovePart(copies[0], null, null);
+      movingByDrag = false; moveHoldTap = false;   // ドラッグ確定ではなく「タップで確定」の流れにする
+      if (window.__toast) window.__toast('複製：置きたい位置をタップで確定（Escで取消）');
+    }
   }
 
   // ================= 編集：鏡（対話式・2026-06-13 社長指示の新フロー） =================
@@ -7371,7 +7380,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const nmRow = document.createElement('div'); nmRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:0 14px 6px;';
     const nmLb = document.createElement('label'); nmLb.textContent = '名前'; nmLb.style.cssText = 'color:#4a5a74;';
     const nmIn = document.createElement('input'); nmIn.type = 'text'; nmIn.value = d.name;
-    nmIn.style.cssText = 'flex:1;background:#fff;color:#2a3550;border:1px solid #c4ccda;border-radius:6px;padding:5px 7px;font:inherit;';
+    nmIn.className = 'val-input'; nmIn.style.cssText = 'flex:1;padding:5px 7px;font:inherit;';   // 色・枠は共通指定
     nmIn.addEventListener('input', () => { d.name = nmIn.value.trim() || `詳細${d.id}`; d.renamed = true; });
     nmIn.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') nmIn.blur(); });
     nmRow.append(nmLb, nmIn);
@@ -10176,13 +10185,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ---- 寸法値の上書き入力フォーム（自由テキスト可・補助線や実測はそのまま） ----
   const dimValForm = document.createElement('div');
   dimValForm.id = 'dimValForm';
-  dimValForm.style.cssText = 'position:fixed;z-index:70;display:none;align-items:center;gap:4px;padding:2px 6px;font:12px Meiryo,sans-serif;color:#ffd9d9;background:rgba(40,12,12,.85);border:1px solid #a04040;border-radius:4px';
+  // 見た目は他の入力フォーム（高さ・角度・脚）と同じにする。色や角丸は index.html の共通指定に任せ、
+  // ここでは位置と幅だけを持たせる（2026-07-27 社長要望：入力フォームの色がバラバラ）
+  dimValForm.className = 'valForm';
+  dimValForm.style.cssText = 'position:fixed;z-index:70;display:none;';
   const dimValLabel = document.createElement('span');
   dimValLabel.textContent = '値';
   dimValForm.appendChild(dimValLabel);
   const dimValInput = document.createElement('input');
   dimValInput.type = 'text';
-  dimValInput.style.cssText = 'width:96px;font:bold 12px Meiryo,sans-serif;color:#ff6a5a;background:#1a0e0e;border:1px solid #7a3030;border-radius:3px;padding:1px 4px';
+  dimValInput.className = 'val-input';
+  dimValInput.style.width = '96px';
   dimValForm.appendChild(dimValInput);
   document.body.appendChild(dimValForm);
   const applyDimVal = (commit) => {

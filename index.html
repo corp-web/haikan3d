@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0727H — SKT-HD ♦</title>
+<title>配管3D v0727I — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0727H">
+<meta name="apple-mobile-web-app-title" content="配管3D v0727I">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -450,6 +450,42 @@
   body.light #hForm input, body.light #rotForm input, body.light .legBox input { background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #rotBtns button { background: #eef2f8; color: #4a5a74; border-color: #c4ccda; }
   body.light #rotBtns button:hover { border-color: #2f7bff; color: #1f3a68; }
+
+  /* ==========================================================================
+     値の入力欄は全部おなじ見た目にする（2026-07-27 社長要望：色などがバラバラ）
+     対象＝高さ／角度／脚／寸法の値／プロパティ／パレット／図面情報／設計仕様／材質／詳細図の名前。
+     ※<style>の最後に置いて個別指定を上書きしている。入力欄を新しく足す時は、
+       この並びに加えるか class="val-input" を付けること。
+     ※チェックボックスは対象外（白地・角丸にすると別物に見えるため）。
+     ========================================================================== */
+  body.light #hForm input, body.light #rotForm input, body.light .legBox input,
+  body.light #ppBody .pp-row input, body.light #ppBody .pp-row select,
+  body.light #itemList .il-foot input, body.light #itemList .il-foot .dwg-row2 > input,
+  body.light #itemList .il-specbody input, body.light #itemList .c-mat input.mat-input,
+  body.light #palette .pal-select,
+  body.light #palette .pal-opts input:not([type="checkbox"]), body.light #palette .pal-opts select,
+  body.light .val-input {
+    background: #fff; color: #2a3550; border: 1px solid #c4ccda; border-radius: 5px;
+    color-scheme: light;
+  }
+  /* 触れている欄がひと目で分かるように、focusの見え方も統一する */
+  body.light #hForm input:focus, body.light #rotForm input:focus, body.light .legBox input:focus,
+  body.light #ppBody .pp-row input:focus, body.light #ppBody .pp-row select:focus,
+  body.light #itemList .il-foot input:focus, body.light #itemList .il-specbody input:focus,
+  body.light #itemList .c-mat input.mat-input:focus,
+  body.light #palette .pal-select:focus,
+  body.light #palette .pal-opts input:focus, body.light #palette .pal-opts select:focus,
+  body.light .val-input:focus {
+    outline: none; border-color: #2f7bff; box-shadow: 0 0 0 2px rgba(47,123,255,.18);
+  }
+  /* 3D画面に浮く入力フォームの「枠」も共通（高さ・角度・脚・寸法の値） */
+  body.light #hForm, body.light #rotForm, body.light .legBox, body.light .valForm {
+    display: none; align-items: center; gap: 6px; padding: 5px 8px; white-space: nowrap;
+    font: 12px "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
+    background: rgba(248,250,253,.97); color: #33405c;
+    border: 1px solid #7fa8e8; border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(20,40,80,.20);
+  }
 </style>
 </head>
 <body class="light">
