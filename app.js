@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-A';
+const APP_VER = 'v0727-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1891,6 +1891,21 @@ function vHandwheel(R, mat) {
   nut.rotation.x = Math.PI / 2; nut.position.z = R * 0.22; g.add(nut);             // ステムナット（六角）
   return g;
 }
+// レバーハンドル（ボール弁・バタフライ弁 共通）。流れ軸(Y)と直角＝「閉」の姿勢で +X 側へ出す。
+//   D=フランジ外径(m) を目安に長さを決める／stemZ=ステム頂部のZ／rPipe=管半径(m)
+// ※流れ方向に寝かせると長さが面間を越えて両端フランジに食い込む（2026-07-27 社長指摘）
+function vLever(D, rPipe, stemZ, opMat) {
+  const g = new THREE.Group();
+  const len = Math.max(D * 0.85, rPipe * 6);
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(len, rPipe * 0.42, rPipe * 0.30), opMat);
+  bar.position.set(len / 2 - rPipe * 0.7, 0, stemZ + rPipe * 0.18); g.add(bar);
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(rPipe * 0.42, rPipe * 0.42, rPipe * 0.36, 12), opMat);
+  hub.rotation.x = Math.PI / 2; hub.position.z = stemZ + rPipe * 0.18; g.add(hub);      // 軸まわりのハブ
+  const grip = new THREE.Mesh(new THREE.CylinderGeometry(rPipe * 0.30, rPipe * 0.30, len * 0.30, 12), opMat);
+  grip.rotation.z = Math.PI / 2;
+  grip.position.set(len * 0.82 - rPipe * 0.7, 0, stemZ + rPipe * 0.18); g.add(grip);    // 先端の握り
+  return g;
+}
 // 2点間を結ぶ丸棒（ヨーク腕など）
 function vBar(p1, p2, r, mat) {
   const d = p2.clone().sub(p1);
@@ -1904,14 +1919,7 @@ function vBar(p1, p2, r, mat) {
 // 座標系＝フロー軸Y・ステム軸+Z（bonZ=ボンネットフランジのZ位置・bonTop=ボンネット上端・wheelZ=ハンドル位置）
 function vDressBonnet(g, bodyR, bonR, bonZ, bonTop, wheelZ, wheelR, stemR, bodyMat, opMat) {
   const bfT = bodyR * 0.16;
-  const nb = 6, bbr = bodyR * 0.56;                          // ボンネットボルト（6本・フランジ縁の内側）
-  for (let i = 0; i < nb; i++) {
-    const a = (i / nb) * Math.PI * 2 + Math.PI / nb;
-    const b = new THREE.Mesh(new THREE.CylinderGeometry(bodyR * 0.055, bodyR * 0.055, bfT * 3.2, 6), opMat);
-    b.rotation.x = Math.PI / 2;
-    b.position.set(Math.cos(a) * bbr, Math.sin(a) * bbr, bonZ);
-    g.add(b);
-  }
+  // ※ボンネットのボルト（6本）は廃止（2026-07-27 社長指示：ボルトのような画像は不要）
   const gl = new THREE.Mesh(new THREE.CylinderGeometry(bonR * 0.85, bonR * 0.95, bonR * 0.4, 16), bodyMat);
   gl.rotation.x = Math.PI / 2; gl.position.z = bonTop + bonR * 0.12; g.add(gl);    // グランド押え
   const yokeHub = wheelZ - wheelR * 0.32;                    // ヨークスリーブ（ハンドル直下のハブ）
@@ -1941,11 +1949,15 @@ function makeValve(opts) {
   const halfL = VMM(valveFtF(o.kind, sizeA)) / 2;
   const k = o.kind;
 
+  // 中心ボアの半径。valveEndFlange が板に開ける穴と同じ値にして、面から穴がまっすぐ見えるようにする。
+  const boreR = VMM(od * 0.42);
   // --- 共通：両端フランジ＋連結ネック ---
   function flangedEnds(neckR) {
     const f1 = valveEndFlange(cls, sizeA, bodyMat); f1.position.y = halfL; g.add(f1);
     const f2 = valveEndFlange(cls, sizeA, bodyMat); f2.position.y = -halfL; f2.rotation.x = Math.PI; g.add(f2);
-    g.add(vCylY(neckR, -halfL, halfL, bodyMat));   // ボア導管
+    // ボア導管＝中空の筒。塞がった円柱にすると端のフタが穴をふさぎ、フランジ面がブラインドに見える
+    // （2026-07-27 社長指摘「各面がブラインドの様になっている」の原因）
+    g.add(new THREE.Mesh(ringGeo(neckR, boreR, 2 * halfL), bodyMat));
   }
 
   if (k === 'gate' || k === 'globe' || k === 'ball') {
@@ -1957,11 +1969,12 @@ function makeValve(opts) {
       g.add(vCylY(bodyR, -bodyR * 0.9, bodyR * 0.9, bodyMat));                    // 円筒ボディ
     }
     if (k === 'ball') {
-      // ボール弁：レバーハンドル（平棒）＋短ステム
+      // ボール弁：レバーハンドル（平棒）＋短ステム。
+      // レバーは流れ軸(Y)と直角＝「閉」の姿勢を既定にする（2026-07-27 社長指示）。
+      // 従来は流れ方向に寝ていたため、長さが面間を越えて両端フランジに食い込んでいた。
       const stemTop = bodyR + VMM(8 + od * 0.18);
       g.add(vCylZ(rPipe * 0.28, bodyR * 0.7, stemTop, opMat));
-      const lever = new THREE.Mesh(new THREE.BoxGeometry(rPipe * 0.5, halfL * 1.4, rPipe * 0.28), opMat);
-      lever.position.set(0, halfL * 0.35, stemTop + rPipe * 0.14); g.add(lever);
+      g.add(vLever(VMM(D), rPipe, stemTop, opMat));
     } else {
       // ゲート/グローブ：ボンネット＋ハンドル車
       const bonR = bodyR * 0.52, bonTop = bodyR + halfL * 0.55;
@@ -1984,11 +1997,7 @@ function makeValve(opts) {
     g.add(vCylZ(covR, bodyR * 0.5, covZ, bodyMat));                             // 上カバー（ボルト蓋・ハンドル無し）
     const lid = new THREE.Mesh(new THREE.CylinderGeometry(covR * 1.15, covR * 1.15, VMM(_vdn(sizeA) * 0.1 + 3), 20), bodyMat);
     lid.rotation.x = Math.PI / 2; lid.position.z = covZ; g.add(lid);
-    for (let i = 0; i < 6; i++) {                                               // 蓋のボルト（リアル化）
-      const a = (i / 6) * Math.PI * 2;
-      const b = new THREE.Mesh(new THREE.CylinderGeometry(covR * 0.09, covR * 0.09, VMM(_vdn(sizeA) * 0.1 + 3) * 3, 6), opMat);
-      b.rotation.x = Math.PI / 2; b.position.set(Math.cos(a) * covR * 0.92, Math.sin(a) * covR * 0.92, covZ); g.add(b);
-    }
+    // ※蓋のボルトは廃止（2026-07-27 社長指示）
     g.userData.faceNormal = new V3(0, 1, 0); g.userData.backNormal = new V3(0, -1, 0);
     g.userData.faceLocal = new V3(0, halfL, 0); g.userData.backLocal = new V3(0, -halfL, 0);
     g.userData.gripLocal = g.userData.faceLocal;
@@ -2008,14 +2017,14 @@ function makeValve(opts) {
   } else if (k === 'butterfly') {
     const wafer = (o.style === 'wafer');
     const discR = VMM(rfFaceDia(cls, sizeA) || od * 1.1) / 2;                   // ディスク外径≈座径
-    g.add(vCylY(discR * 1.08, -halfL, halfL, bodyMat));                         // 薄い大径ボディ
+    g.add(new THREE.Mesh(ringGeo(discR * 1.08, boreR, 2 * halfL), bodyMat));    // 薄い大径ボディ（中空＝面がブラインドにならない）
     const disc = new THREE.Mesh(new THREE.CylinderGeometry(discR * 0.92, discR * 0.92, VMM(_vdn(sizeA) * 0.08 + 3), 36), opMat);
-    disc.rotation.z = 0.18; g.add(disc);                                        // ディスク（少し開）
+    g.add(disc);                                                                // ディスク（流れに直角＝閉。レバーの姿勢と合わせる）
     if (!wafer) { const f1 = valveEndFlange(cls, sizeA, bodyMat, true); f1.position.y = halfL; g.add(f1); const f2 = valveEndFlange(cls, sizeA, bodyMat, true); f2.position.y = -halfL; f2.rotation.x = Math.PI; g.add(f2); }   // ハブ無し（面間が短く大口径でハブが突き抜けるため）
     const stemTop = discR + VMM(_vdn(sizeA) * 0.2 + 10);
     g.add(vCylZ(rPipe * 0.2, discR * 0.9, stemTop, opMat));
-    const gb = new THREE.Mesh(new THREE.BoxGeometry(discR * 0.7, discR * 0.7, discR * 0.5), opMat); gb.position.z = stemTop + discR * 0.25; g.add(gb);   // ギヤボックス
-    const hw = vHandwheel(discR * 0.55, opMat); hw.position.z = stemTop + discR * 0.5; g.add(hw);
+    // ハンドルはボール弁と同じレバー（流れに直角＝閉）。ギヤボックス＋ハンドル車は廃止（2026-07-27 社長指示）
+    g.add(vLever(VMM(D), rPipe, stemTop, opMat));
     g.userData.faceNormal = new V3(0, 1, 0); g.userData.backNormal = new V3(0, -1, 0);
     g.userData.faceLocal = new V3(0, halfL, 0); g.userData.backLocal = new V3(0, -halfL, 0);
     g.userData.gripLocal = g.userData.faceLocal;
@@ -2026,13 +2035,16 @@ function makeValve(opts) {
     const bodyR = outR * 1.25;
     const fi = valveEndFlange(cls, inSize, bodyMat); fi.position.y = -inHalf; fi.rotation.x = Math.PI; g.add(fi);       // 入口（下・-Y）
     const fo = valveEndFlange(cls, outSize, bodyMat); fo.position.x = outHalf; fo.rotation.z = -Math.PI / 2; g.add(fo);  // 出口（横・+X）
-    g.add(vCylY(inR * 1.1, -inHalf, 0, bodyMat));                               // 入口ネック
+    // 入口・出口のネックは中空にする（塞ぐとフランジ面がブラインドに見える・2026-07-27 社長指摘）
+    const inBore = VMM((FLG_BORE[inSize] || 34) * 0.42), outBore = VMM((FLG_BORE[outSize] || 60) * 0.42);
+    const inN = new THREE.Mesh(ringGeo(inR * 1.1, inBore, inHalf), bodyMat); inN.position.y = -inHalf / 2; g.add(inN);
     g.add(new THREE.Mesh(new THREE.SphereGeometry(bodyR, 22, 16), bodyMat));    // 本体
-    const on = new THREE.Mesh(new THREE.CylinderGeometry(outR * 1.1, outR * 1.1, outHalf, 22), bodyMat); on.rotation.z = Math.PI / 2; on.position.x = outHalf / 2; g.add(on);   // 出口ネック
+    const on = new THREE.Mesh(ringGeo(outR * 1.1, outBore, outHalf), bodyMat);
+    on.rotation.z = Math.PI / 2; on.position.x = outHalf / 2; g.add(on);        // 出口ネック
     const bonR = bodyR * 0.55, bonTop = bodyR + outHalf * 1.3;
     g.add(vCylY(bonR, bodyR * 0.5, bonTop, bodyMat));                           // ボンネット（ばね室・上）
     const capD = new THREE.Mesh(new THREE.SphereGeometry(bonR * 1.05, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), bodyMat); capD.position.y = bonTop; g.add(capD);   // ドーム蓋
-    const lever = new THREE.Mesh(new THREE.BoxGeometry(bonR * 0.3, bonR * 2.0, bonR * 0.3), opMat); lever.position.set(0, bonTop + bonR * 0.4, bonR * 1.0); lever.rotation.x = -0.3; g.add(lever);   // リフトレバー
+    // ※リフトレバー（ハンドルのような棒）は廃止（2026-07-27 社長指示）
     g.userData.faceNormal = new V3(1, 0, 0); g.userData.backNormal = new V3(0, -1, 0);
     g.userData.faceLocal = new V3(outHalf, 0, 0); g.userData.backLocal = new V3(0, -inHalf, 0);   // 出口=face／入口=back
     g.userData.cornerLocal = new V3(0, 0, 0); g.userData.extraLocals = [g.userData.cornerLocal];
@@ -2137,13 +2149,17 @@ function makeFlex(opts) {
   const od = FLG_BORE[sizeA] || 60, rPipe = VMM(od) / 2;
   const yIn = equipFlangedEnds(g, cls, sizeA, halfL, mat);
   // 口金（かしめ）＝フランジ背面から編組へ移る部分。編組はその内側に渡す。
+  // 筒はすべて中空にする＝塞ぐとフランジ面がブラインドに見える（2026-07-27 社長指摘）
+  const boreR = VMM(od * 0.42);
   const ferL = Math.min(VMM(16 + od * 0.14), Math.max(yIn, 0.001) * 0.42);
   const ferR = rPipe * 1.22, braidR = rPipe * 1.06;
-  g.add(vCylY(ferR, yIn - ferL, yIn, mat));
-  g.add(vCylY(ferR, -yIn, -yIn + ferL, mat));
+  const fer1 = new THREE.Mesh(ringGeo(ferR, boreR, ferL), mat); fer1.position.y = yIn - ferL / 2; g.add(fer1);
+  const fer2 = new THREE.Mesh(ringGeo(ferR, boreR, ferL), mat); fer2.position.y = -yIn + ferL / 2; g.add(fer2);
   const braidMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.62, roughness: 0.40 });
   braidMat.map = braidTexture(Math.min(Math.max(Math.round(VMM(len) / 0.05), 2), 24));   // 50mmに1目盛りぶん
-  g.add(vCylY(braidR, -yIn + ferL * 0.6, yIn - ferL * 0.6, braidMat));
+  // 編組は「フタの無い円筒」＝網目のUVを保ったまま中が抜ける
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(braidR, braidR, 2 * (yIn - ferL * 0.6), 28, 1, true), braidMat));
+  g.add(new THREE.Mesh(new THREE.CylinderGeometry(boreR, boreR, 2 * yIn, 24, 1, true), mat));   // 内側のライナ（ボア壁）
   equipConns(g, halfL);
   g.userData.partType = 'flex';
   g.userData.flex = { sizeA, cls, length: Math.round(len) };
@@ -2161,7 +2177,8 @@ function makeSightGlass(opts) {
   const od = FLG_BORE[sizeA] || 60, rPipe = VMM(od) / 2;
   const yIn = equipFlangedEnds(g, cls, sizeA, halfL, mat);
   const bodyR = rPipe * 1.34;                                  // 金属の胴体
-  g.add(vCylY(bodyR, -yIn, yIn, mat));
+  const boreR = VMM(od * 0.42);
+  g.add(new THREE.Mesh(ringGeo(bodyR, boreR, 2 * yIn), mat));  // 中空＝フランジ面から穴が見える（のぞきガラスも中が抜ける）
   // 左右(±X)の丸のぞき窓：座＋ガラス円板＋押えボルト。ガラスは半透明。
   const winR = Math.min(bodyR * 0.60, Math.max(yIn, 0.001) * 0.70);
   const glassMat = new THREE.MeshStandardMaterial({
@@ -2210,43 +2227,74 @@ function makePG(opts) {
   const nutH = VMM(14), nutR = tR * 1.45;
   const nut = new THREE.Mesh(new THREE.CylinderGeometry(nutR, nutR, nutH, 6), opMat);
   nut.position.y = nutH / 2; g.add(nut);
-  // 管の芯線：立ち上がり → 渦（1周・自分に当たらないようZへ管1本ぶんずらす）→ 計器までの立ち上がり
-  const dz = tR * 2.2;
+  // 管の芯線：立ち上がり → 渦（一周半）→ 計器までの立ち上がり。
+  // 渦は「縦軸まわりのらせん」にする（2026-07-27 社長指示：一周半）。
+  //   平面の輪では一周半すると出口の向きが真下を向いてしまい、計器へ上がれない。
+  //   らせんなら回りながら上がるので、一周半でも入口・出口とも上向きのまま繋がる。
+  // なめらかさの要点＝点の間隔をそろえること。直線部と渦で間隔が違うとCatmullRomが折れる
+  //   （2026-07-27 社長指摘「曲がりがなめらかでない」の原因）。約4mm間隔で全体を刻む。
+  const STEP = 0.004;
   const pts = [];
+  const pushLine = (a, b) => {                          // a→b を等間隔に刻む（aは前段が入れている前提で除く）
+    const n = Math.max(1, Math.round(a.distanceTo(b) / STEP));
+    for (let i = 1; i <= n; i++) pts.push(a.clone().lerp(b, i / n));
+  };
+  let gx = 0, gz = 0;                                   // 計器を載せる位置（既定＝取付口の真上）
   if (siphon) {
-    const y0 = (SL - 2 * coilR) / 2;                    // 渦の下端（全長200・渦100Φなら 50mm）
-    pts.push(new V3(0, 0, 0), new V3(0, y0 * 0.6, 0), new V3(0, y0, 0));
-    const N = 48;
-    for (let i = 1; i <= N; i++) {                      // 渦：中心(0, y0+coilR)まわりを下端から1周
-      const a = -Math.PI / 2 + (i / N) * Math.PI * 2;
-      pts.push(new V3(Math.cos(a) * coilR, y0 + coilR + Math.sin(a) * coilR, (i / N) * dz));
+    const TURNS = 1.5;
+    const y0 = SL * 0.20;                               // 渦の下端＝立ち上がりの高さ
+    const rise = SL * 0.35;                             // 渦の高さ（管どうしが重ならないピッチ）
+    pts.push(new V3(0, 0, 0));
+    pushLine(new V3(0, 0, 0), new V3(0, y0, 0));
+    // らせん：中心(coilR,·,0)・半径coilR。入口は角度180°＝(0,y0,0)＝立ち上がりの真上。
+    // 角度だけを緩急（smoothstep）で回す＝入口と出口では回転が止まり、管が真上を向いたまま繋がる。
+    // 等速で回すと出口の向きが横を向いてしまい、そこで折れて見える。
+    const N = Math.max(80, Math.round((2 * Math.PI * coilR * TURNS) / STEP));
+    for (let i = 1; i <= N; i++) {
+      const t = i / N, s = t * t * (3 - 2 * t);
+      const a = Math.PI - s * TURNS * Math.PI * 2;
+      pts.push(new V3(coilR + Math.cos(a) * coilR, y0 + rise * t, Math.sin(a) * coilR));
     }
-    pts.push(new V3(0, y0 + (SL - y0) * 0.5, dz), new V3(0, SL, dz));
+    // 一周半なので出口は入口の反対側（2×渦半径ぶん横）に出る。
+    // そこから白鳥首（S字）で戻し、計器は取付口の真上に載せる（2026-07-27 社長指示）。
+    const E = new V3(coilR * 2, y0 + rise, 0), T = new V3(0, SL, 0);
+    const h = T.y - E.y;
+    const c1 = new V3(E.x, E.y + h * 0.5, E.z), c2 = new V3(T.x, T.y - h * 0.5, T.z);
+    const M = Math.max(40, Math.round((E.distanceTo(T) * 1.35) / STEP));
+    for (let i = 1; i <= M; i++) {                      // 3次ベジェを等間隔に刻む
+      const t = i / M, u = 1 - t;
+      const w0 = u * u * u, w1 = 3 * u * u * t, w2 = 3 * u * t * t, w3 = t * t * t;
+      pts.push(new V3(w0 * E.x + w1 * c1.x + w2 * c2.x + w3 * T.x,
+                      w0 * E.y + w1 * c1.y + w2 * c2.y + w3 * T.y,
+                      w0 * E.z + w1 * c1.z + w2 * c2.z + w3 * T.z));
+    }
   } else {
-    pts.push(new V3(0, 0, 0), new V3(0, SL * 0.5, 0), new V3(0, SL, 0));
+    pts.push(new V3(0, 0, 0));
+    pushLine(new V3(0, 0, 0), new V3(0, SL, 0));
   }
-  const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.0);
-  g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, siphon ? 140 : 16, tR, 14, false), mat));
-  const topZ = siphon ? dz : 0;
+  // centromedial(centripetal)＝点の詰まった所でも膨らまない。折れ・行き過ぎが出にくい
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5);
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(240, pts.length), tR, 18, false), mat));
+  const topZ = gz;
   // 計器本体（文字板の軸＝+Z＝バルブのハンドルと同じ向き。部品ごと回して読める向きへ向ける）
   const caseR = VMM(dia) / 2, caseT = VMM(dia) * 0.26;
   const cy = SL + caseR;                                 // ステムは計器の下から入る
   const cas = new THREE.Mesh(new THREE.CylinderGeometry(caseR, caseR, caseT, 40), mat);
-  cas.rotation.x = Math.PI / 2; cas.position.set(0, cy, topZ); g.add(cas);
+  cas.rotation.x = Math.PI / 2; cas.position.set(gx, cy, topZ); g.add(cas);
   // 文字板・ベゼル・指針はケース前面より手前へ重ねる。
   // ※ケース前面と同じ高さに置くとz-fightingで放射状のちらつきが出る（2026-07-27 修正）
   const zF = topZ + caseT / 2;
   const face = new THREE.Mesh(new THREE.CylinderGeometry(caseR * 0.90, caseR * 0.90, VMM(1.2), 36),
     new THREE.MeshStandardMaterial({ color: 0xf2f4f7, metalness: 0.0, roughness: 0.85 }));
-  face.rotation.x = Math.PI / 2; face.position.set(0, cy, zF + VMM(0.8)); g.add(face);       // 文字板
+  face.rotation.x = Math.PI / 2; face.position.set(gx, cy, zF + VMM(0.8)); g.add(face);       // 文字板
   const bez = new THREE.Mesh(new THREE.TorusGeometry(caseR * 0.96, caseR * 0.055, 10, 40), opMat);
-  bez.position.set(0, cy, zF + VMM(1.0)); g.add(bez);                                        // ベゼル（文字板を押さえる環）
+  bez.position.set(gx, cy, zF + VMM(1.0)); g.add(bez);                                        // ベゼル（文字板を押さえる環）
   const nd = new THREE.Mesh(new THREE.BoxGeometry(caseR * 0.055, caseR * 0.78, VMM(1.4)),
     new THREE.MeshStandardMaterial({ color: 0x1e2530, metalness: 0.1, roughness: 0.6 }));
-  nd.position.set(caseR * 0.27, cy + caseR * 0.27, zF + VMM(2.4));
+  nd.position.set(gx + caseR * 0.27, cy + caseR * 0.27, zF + VMM(2.4));
   nd.rotation.z = -Math.PI / 4; g.add(nd);                                                   // 指針（右上向き）
   const stem = new THREE.Mesh(new THREE.CylinderGeometry(tR * 0.85, tR * 0.85, caseR * 0.6, 14), opMat);
-  stem.position.set(0, SL + caseR * 0.35, topZ); g.add(stem);                                // 計器の取付ステム
+  stem.position.set(gx, SL + caseR * 0.35, topZ); g.add(stem);                                // 計器の取付ステム
   // 機点＝接続ネジの口だけ（下向き）。キャップと同じく face/back を同位置に置く。
   g.userData.faceLocal = new V3(0, 0, 0); g.userData.backLocal = new V3(0, 0, 0);
   g.userData.faceNormal = new V3(0, -1, 0); g.userData.backNormal = new V3(0, -1, 0);
