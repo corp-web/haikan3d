@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-I';
+const APP_VER = 'v0727-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8681,7 +8681,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ---- 構築線の角度ラベル（寸法は出さず、置いた方位角だけ表示） ----
   const xlineAngleEl = document.createElement('div');
   xlineAngleEl.id = 'xlineAngle';
-  xlineAngleEl.style.cssText = 'position:fixed;z-index:60;display:none;padding:1px 6px;font:bold 12px Meiryo,sans-serif;color:#aaffcc;background:rgba(8,24,14,.82);border:1px solid #2e7d4f;border-radius:4px;pointer-events:none;white-space:nowrap';
+  // 見た目は入力フォームと共通（2026-07-27 社長要望）。色・枠は index.html の .valLabel に任せる
+  xlineAngleEl.className = 'valLabel';
+  xlineAngleEl.style.cssText = 'position:fixed;z-index:60;display:none;';
   document.body.appendChild(xlineAngleEl);
   function hideXlineAngle() { xlineAngleEl.style.display = 'none'; }
   function xlineAngleDeg(a, b) {   // 水平面の方位角（+X=0°）。線は無向きなので0〜180°で表す
@@ -8704,7 +8706,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ---- 寸法線の逃げ量ラベル（調整中に寸法線本体の中点脇へ表示） ----
   const dimOffEl = document.createElement('div');
   dimOffEl.id = 'dimOffLabel';
-  dimOffEl.style.cssText = 'position:fixed;z-index:60;display:none;padding:1px 6px;font:bold 12px Meiryo,sans-serif;color:#ffd9a0;background:rgba(26,18,6,.82);border:1px solid #8a6a2e;border-radius:4px;pointer-events:none;white-space:nowrap';
+  dimOffEl.className = 'valLabel';
+  dimOffEl.style.cssText = 'position:fixed;z-index:60;display:none;';
   document.body.appendChild(dimOffEl);
   function hideDimOffLabel() { dimOffEl.style.display = 'none'; }
   function showDimOffLabel() {
@@ -8727,7 +8730,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ---- 円の半径ラベル（描画中・編集中に R○mm を追従表示） ----
   const circleREl = document.createElement('div');
   circleREl.id = 'circleRLabel';
-  circleREl.style.cssText = 'position:fixed;z-index:60;display:none;padding:1px 6px;font:bold 12px Meiryo,sans-serif;color:#dbe4f3;background:rgba(20,28,51,.86);border:1px solid #3a4a6e;border-radius:4px;pointer-events:none;white-space:nowrap';
+  circleREl.className = 'valLabel';
+  circleREl.style.cssText = 'position:fixed;z-index:60;display:none;';
   document.body.appendChild(circleREl);
   function hideCircleR() { circleREl.style.display = 'none'; }
   function showCircleR(center, edge) {

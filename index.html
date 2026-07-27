@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0727I — SKT-HD ♦</title>
+<title>配管3D v0727J — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0727I">
+<meta name="apple-mobile-web-app-title" content="配管3D v0727J">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -477,6 +477,16 @@
   body.light #palette .pal-opts input:focus, body.light #palette .pal-opts select:focus,
   body.light .val-input:focus {
     outline: none; border-color: #2f7bff; box-shadow: 0 0 0 2px rgba(47,123,255,.18);
+  }
+  /* 作図中に浮く読み取り専用のラベル（構築線の角度・円の半径・寸法の逃げ）。
+     入力フォームと同じ配色にする（2026-07-27 社長要望：角度や円の値の表示も統一）。
+     以前は角度＝緑地、円＝紺地、逃げ＝茶地とバラバラだった。 */
+  body.light .valLabel {
+    padding: 2px 7px; white-space: nowrap; pointer-events: none;
+    font: bold 12px "Segoe UI","Hiragino Kaku Gothic ProN","Meiryo",sans-serif;
+    background: rgba(248,250,253,.97); color: #33405c;
+    border: 1px solid #7fa8e8; border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(20,40,80,.20);
   }
   /* 3D画面に浮く入力フォームの「枠」も共通（高さ・角度・脚・寸法の値） */
   body.light #hForm, body.light #rotForm, body.light .legBox, body.light .valForm {
