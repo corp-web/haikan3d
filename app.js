@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0726-A';
+const APP_VER = 'v0727-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2078,6 +2078,184 @@ const VALVE_CLASSES = VALVE_RATINGS;
 const valveOpts = { cls: 'JIS 10K' };
 function valveCls() { return VALVE_RATINGS.includes(valveOpts.cls) ? valveOpts.cls : 'JIS 10K'; }
 
+// ===================================================================
+//  機器類  フレキシブル／サイドグラス／PG(圧力計)   2026-07-27 社長要望
+//  ・フレキシブル・サイドグラスは両端フランジ形＝バルブとまったく同じ作り
+//    （valveEndFlange の規格フランジを流用）。面間は規格表を持たないので
+//    パレットの「長さ」(mm)＝フランジ面どうしの距離をそのまま使う。
+//  ・PGは圧力計＋サイフォン管。接続はネジ1口だけ（下向き）＝溶接もガスケットも計上しない。
+// ===================================================================
+const EQUIP_SIZES = VALVE_SIZES;                       // 呼び径はバルブと同じ範囲(15A〜200A)
+const EQUIP_RF_H = 0.0018;                             // valveEndFlange のレイズドフェイス高さ(m)と合わせる
+const flexOpts  = { sizeA: '50A', cls: 'JIS 10K', length: 200 };
+const sightOpts = { sizeA: '50A', cls: 'JIS 10K', length: 150 };
+// 両端フランジを付け、フランジ板の内側の端(y)を返す共通処理
+function equipFlangedEnds(g, cls, sizeA, halfL, mat) {
+  const f1 = valveEndFlange(cls, sizeA, mat, true); f1.position.y = halfL; g.add(f1);            // ハブ無し＝胴体は自前で作る
+  const f2 = valveEndFlange(cls, sizeA, mat, true); f2.position.y = -halfL; f2.rotation.x = Math.PI; g.add(f2);
+  return halfL - VMM(flangeDim(cls, sizeA).t) - EQUIP_RF_H;                                      // 板の背面＝胴体を伸ばせる位置
+}
+// 両端フランジ形の機点（＝バルブと同一規約：フェイス=+Y端／背面=-Y端／中央にも起点候補）
+function equipConns(g, halfL) {
+  const V3 = THREE.Vector3;
+  g.userData.faceNormal = new V3(0, 1, 0); g.userData.backNormal = new V3(0, -1, 0);
+  g.userData.faceLocal = new V3(0, halfL, 0); g.userData.backLocal = new V3(0, -halfL, 0);
+  g.userData.gripLocal = g.userData.faceLocal;
+  g.userData.extraLocals = [new V3(0, 0, 0)];          // 面間の中央（バルブと同じく起点候補にする）
+}
+
+// 編組（ブレード）の網目テクスチャ。斜めの筋を交差させただけの軽い作り。
+// ジオメトリを増やさないので、画面では編み目に見え、印刷（線画）ではただの円筒＝図面が汚れない。
+let _braidTexBase = null;
+function braidTexture(repeatY) {
+  if (!_braidTexBase) {
+    const S = 128, cv = document.createElement('canvas'); cv.width = cv.height = S;
+    const c = cv.getContext('2d');
+    c.fillStyle = '#8a9199'; c.fillRect(0, 0, S, S);
+    c.lineWidth = S / 11;
+    for (const dir of [1, -1]) {
+      c.strokeStyle = dir > 0 ? '#c2c8d0' : '#6c727a';   // 手前の筋を明るく・奥の筋を暗く＝編み込みに見える
+      for (let i = -S; i < S * 2; i += S / 5) { c.beginPath(); c.moveTo(i, 0); c.lineTo(i + dir * S, S); c.stroke(); }
+    }
+    _braidTexBase = new THREE.CanvasTexture(cv);
+    _braidTexBase.wrapS = _braidTexBase.wrapT = THREE.RepeatWrapping;
+  }
+  const t = _braidTexBase.clone(); t.needsUpdate = true;   // 部品ごとに繰り返し数を変える（長さに応じて網目の大きさを保つ）
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(9, repeatY);
+  return t;
+}
+// フレキシブル（ブレード付ホース）。opts={sizeA, cls, length[mm]=フランジ面間}
+function makeFlex(opts) {
+  const o = Object.assign({ sizeA: '50A', cls: 'JIS 10K', length: 200 }, opts || {});
+  const sizeA = EQUIP_SIZES.includes(o.sizeA) ? o.sizeA : '50A';
+  const cls = VALVE_RATINGS.includes(o.cls) ? o.cls : 'JIS 10K';
+  const len = Math.max(Number(o.length) || 200, 60);         // 短すぎると両端フランジがめり込むので下限60mm
+  const halfL = VMM(len) / 2;
+  const mat = valveBodyMat();
+  const g = new THREE.Group();
+  const od = FLG_BORE[sizeA] || 60, rPipe = VMM(od) / 2;
+  const yIn = equipFlangedEnds(g, cls, sizeA, halfL, mat);
+  // 口金（かしめ）＝フランジ背面から編組へ移る部分。編組はその内側に渡す。
+  const ferL = Math.min(VMM(16 + od * 0.14), Math.max(yIn, 0.001) * 0.42);
+  const ferR = rPipe * 1.22, braidR = rPipe * 1.06;
+  g.add(vCylY(ferR, yIn - ferL, yIn, mat));
+  g.add(vCylY(ferR, -yIn, -yIn + ferL, mat));
+  const braidMat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.62, roughness: 0.40 });
+  braidMat.map = braidTexture(Math.min(Math.max(Math.round(VMM(len) / 0.05), 2), 24));   // 50mmに1目盛りぶん
+  g.add(vCylY(braidR, -yIn + ferL * 0.6, yIn - ferL * 0.6, braidMat));
+  equipConns(g, halfL);
+  g.userData.partType = 'flex';
+  g.userData.flex = { sizeA, cls, length: Math.round(len) };
+  return g;
+}
+// サイドグラス（のぞき窓形）。opts={sizeA, cls, length[mm]=フランジ面間}
+function makeSightGlass(opts) {
+  const o = Object.assign({ sizeA: '50A', cls: 'JIS 10K', length: 150 }, opts || {});
+  const sizeA = EQUIP_SIZES.includes(o.sizeA) ? o.sizeA : '50A';
+  const cls = VALVE_RATINGS.includes(o.cls) ? o.cls : 'JIS 10K';
+  const len = Math.max(Number(o.length) || 150, 60);
+  const halfL = VMM(len) / 2;
+  const mat = valveBodyMat(), opMat = valveOpMat();
+  const g = new THREE.Group();
+  const od = FLG_BORE[sizeA] || 60, rPipe = VMM(od) / 2;
+  const yIn = equipFlangedEnds(g, cls, sizeA, halfL, mat);
+  const bodyR = rPipe * 1.34;                                  // 金属の胴体
+  g.add(vCylY(bodyR, -yIn, yIn, mat));
+  // 左右(±X)の丸のぞき窓：座＋ガラス円板＋押えボルト。ガラスは半透明。
+  const winR = Math.min(bodyR * 0.60, Math.max(yIn, 0.001) * 0.70);
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0xbfe4f0, metalness: 0.0, roughness: 0.05, transparent: true, opacity: 0.34, side: THREE.DoubleSide });
+  for (const sx of [1, -1]) {
+    const seat = new THREE.Mesh(new THREE.CylinderGeometry(winR * 1.30, winR * 1.30, VMM(7), 26), mat);
+    seat.rotation.z = Math.PI / 2; seat.position.x = sx * bodyR; g.add(seat);                    // 座（胴体から出っ張る）
+    const glass = new THREE.Mesh(new THREE.CylinderGeometry(winR, winR, VMM(8), 28), glassMat);
+    glass.rotation.z = Math.PI / 2; glass.position.x = sx * (bodyR + VMM(1.5)); g.add(glass);    // のぞきガラス
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(winR * 1.06, winR * 0.10, 8, 26), opMat);
+    ring.rotation.y = Math.PI / 2; ring.position.x = sx * (bodyR + VMM(4)); g.add(ring);         // 押え環
+    for (let i = 0; i < 6; i++) {                                                                 // 押えボルト
+      const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(winR * 0.10, winR * 0.10, VMM(10), 6), opMat);
+      b.rotation.z = Math.PI / 2;
+      b.position.set(sx * (bodyR + VMM(2)), Math.cos(a) * winR * 1.22, Math.sin(a) * winR * 1.22);
+      g.add(b);
+    }
+  }
+  equipConns(g, halfL);
+  g.userData.partType = 'sight';
+  g.userData.sight = { sizeA, cls, length: Math.round(len) };
+  return g;
+}
+
+// ---- PG（圧力計）----
+// 呼び径＝文字板の径(Φmm・既定100・数値で調整)／ネジ＝3/4・1/2／サイフォン管＝ON/OFF。
+// サイフォン管は「管径＝ネジの呼び径・全長200mm・渦の径100Φ」で固定（2026-07-27 社長指示）。
+const PG_THREADS = ['3/4', '1/2'];
+const PG_THREAD_OD = { '3/4': 27.2, '1/2': 21.7 };     // ネジの呼びに相当する管外径(mm)＝20A / 15A
+const PG_SIPHON_LEN = 200;                              // サイフォン管の全長(mm)
+const PG_SIPHON_COIL = 100;                             // 渦の径(mm)
+const pgOpts = { dia: 100, thread: '3/4', siphon: true };
+function makePG(opts) {
+  const V3 = THREE.Vector3;
+  const o = Object.assign({ dia: 100, thread: '3/4', siphon: true }, opts || {});
+  const dia = Math.min(Math.max(Number(o.dia) || 100, 25), 300);
+  const th = PG_THREADS.includes(o.thread) ? o.thread : '3/4';
+  const siphon = o.siphon !== false;
+  const mat = valveBodyMat(), opMat = valveOpMat();
+  const g = new THREE.Group();
+  const tR = VMM(PG_THREAD_OD[th]) / 2;                 // 管の外半径＝ネジの呼び径
+  const coilR = VMM(PG_SIPHON_COIL) / 2;                // 渦の半径
+  const SL = siphon ? VMM(PG_SIPHON_LEN) : VMM(60);     // 接続口から計器取付までの高さ
+  // 接続ネジ（六角＋ネジ部）。y=0 が管への当たり面で、そこから上へ伸びる。
+  const nutH = VMM(14), nutR = tR * 1.45;
+  const nut = new THREE.Mesh(new THREE.CylinderGeometry(nutR, nutR, nutH, 6), opMat);
+  nut.position.y = nutH / 2; g.add(nut);
+  // 管の芯線：立ち上がり → 渦（1周・自分に当たらないようZへ管1本ぶんずらす）→ 計器までの立ち上がり
+  const dz = tR * 2.2;
+  const pts = [];
+  if (siphon) {
+    const y0 = (SL - 2 * coilR) / 2;                    // 渦の下端（全長200・渦100Φなら 50mm）
+    pts.push(new V3(0, 0, 0), new V3(0, y0 * 0.6, 0), new V3(0, y0, 0));
+    const N = 48;
+    for (let i = 1; i <= N; i++) {                      // 渦：中心(0, y0+coilR)まわりを下端から1周
+      const a = -Math.PI / 2 + (i / N) * Math.PI * 2;
+      pts.push(new V3(Math.cos(a) * coilR, y0 + coilR + Math.sin(a) * coilR, (i / N) * dz));
+    }
+    pts.push(new V3(0, y0 + (SL - y0) * 0.5, dz), new V3(0, SL, dz));
+  } else {
+    pts.push(new V3(0, 0, 0), new V3(0, SL * 0.5, 0), new V3(0, SL, 0));
+  }
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.0);
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, siphon ? 140 : 16, tR, 14, false), mat));
+  const topZ = siphon ? dz : 0;
+  // 計器本体（文字板の軸＝+Z＝バルブのハンドルと同じ向き。部品ごと回して読める向きへ向ける）
+  const caseR = VMM(dia) / 2, caseT = VMM(dia) * 0.26;
+  const cy = SL + caseR;                                 // ステムは計器の下から入る
+  const cas = new THREE.Mesh(new THREE.CylinderGeometry(caseR, caseR, caseT, 40), mat);
+  cas.rotation.x = Math.PI / 2; cas.position.set(0, cy, topZ); g.add(cas);
+  // 文字板・ベゼル・指針はケース前面より手前へ重ねる。
+  // ※ケース前面と同じ高さに置くとz-fightingで放射状のちらつきが出る（2026-07-27 修正）
+  const zF = topZ + caseT / 2;
+  const face = new THREE.Mesh(new THREE.CylinderGeometry(caseR * 0.90, caseR * 0.90, VMM(1.2), 36),
+    new THREE.MeshStandardMaterial({ color: 0xf2f4f7, metalness: 0.0, roughness: 0.85 }));
+  face.rotation.x = Math.PI / 2; face.position.set(0, cy, zF + VMM(0.8)); g.add(face);       // 文字板
+  const bez = new THREE.Mesh(new THREE.TorusGeometry(caseR * 0.96, caseR * 0.055, 10, 40), opMat);
+  bez.position.set(0, cy, zF + VMM(1.0)); g.add(bez);                                        // ベゼル（文字板を押さえる環）
+  const nd = new THREE.Mesh(new THREE.BoxGeometry(caseR * 0.055, caseR * 0.78, VMM(1.4)),
+    new THREE.MeshStandardMaterial({ color: 0x1e2530, metalness: 0.1, roughness: 0.6 }));
+  nd.position.set(caseR * 0.27, cy + caseR * 0.27, zF + VMM(2.4));
+  nd.rotation.z = -Math.PI / 4; g.add(nd);                                                   // 指針（右上向き）
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(tR * 0.85, tR * 0.85, caseR * 0.6, 14), opMat);
+  stem.position.set(0, SL + caseR * 0.35, topZ); g.add(stem);                                // 計器の取付ステム
+  // 機点＝接続ネジの口だけ（下向き）。キャップと同じく face/back を同位置に置く。
+  g.userData.faceLocal = new V3(0, 0, 0); g.userData.backLocal = new V3(0, 0, 0);
+  g.userData.faceNormal = new V3(0, -1, 0); g.userData.backNormal = new V3(0, -1, 0);
+  g.userData.gripLocal = g.userData.faceLocal;
+  g.userData.partType = 'pg';
+  g.userData.pg = { dia: Math.round(dia), thread: th, siphon };
+  return g;
+}
+
 // 突合せ溶接継手（エルボ・キャップ等）共通の選択仕様。デフォルトは BW / 25A / Sch10S。
 // 接続タイプ：BW=突合せ溶接（現状）。将来 SW(差込み溶接)・SCRD(ねじ込み) を追加予定。
 const FITTING_TYPES = ['BW'];   // ※準備中の SW / SCRD は規格データ整備後に追加
@@ -2153,7 +2331,14 @@ const TOOLS = [
     { t: '—', single: true, sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swgate', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
   { type: 'vSWglobe', name: 'グローブバルブ(800)', curType: '—', valve: true, vclasses: ['Class800'], build() { return famVariant(this).make(); }, variants: [
     { t: '—', single: true, sizes: SW800_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'swglobe', sizeA: clampValveSize(SW800_SIZE_TBL) }) } ] },
+  // 機器類（2026-07-27 社長要望）。継手・バルブの variant 方式ではなく専用のオプション欄を持つ。
+  { type: 'flex',  name: 'フレキシブル', equip: true, build: () => makeFlex(flexOpts) },
+  { type: 'sight', name: 'サイドグラス', equip: true, build: () => makeSightGlass(sightOpts) },
+  { type: 'pg',    name: 'PG(圧力計)',   build: () => makePG(pgOpts) },
 ];
+// 両端フランジ形の機器（フレキシブル・サイドグラス）＝呼び径・クラス・長さの共用オプション欄を使う
+const EQUIP_TYPES = ['flex', 'sight'];
+function equipOptsOf(type) { return type === 'sight' ? sightOpts : flexOpts; }
 // 突合せ溶接継手ツールか（パイプ・フランジ以外）／ツール検索／現在選択中のタイプ(variant)
 function isFittingType(type) { return type !== 'flange' && type !== 'pipe'; }
 function toolByType(type) { return TOOLS.find(t => t.type === type); }
@@ -2264,6 +2449,11 @@ function updateF2F() {
       const mm1 = v => { const t = (v * 1000).toFixed(1); return t.endsWith('.0') ? t.slice(0, -2) : t; };   // 小数第一位まで・.0は省略（2026-07-19 社長要望）
       if (u.partType === 'gasket') {
         lines.push(`厚み ${mm1(u.faceLocal.distanceTo(u.backLocal))}mm`);
+      } else if (u.partType === 'pg') {
+        // PGは接続口が1つ＝面間が無い。取付面からの全高と、サイフォン管の有無を出す。
+        const h = new THREE.Box3().setFromObject(obj).max.y;
+        lines.push(`全高 ${mm1(h)}mm`);
+        lines.push(u.pg && u.pg.siphon === false ? 'サイフォン管なし' : `サイフォン管 ${PG_SIPHON_LEN}mm・渦${PG_SIPHON_COIL}Φ`);
       } else if (u.partType === 'pipe') {
         // パイプは直径（外径）を表示。ジオメトリの管軸に直交する断面幅＝JIS外径そのもの
         const size = new THREE.Box3().setFromObject(obj).getSize(new THREE.Vector3());
@@ -2400,6 +2590,51 @@ function onGasketOptChange() {
   if (el) el.addEventListener('change', onGasketOptChange);
 });
 
+// ---- 機器類のオプションUI ----
+// フレキシブル／サイドグラス＝呼び径・クラス・長さ（1枚のパネルを共用し、値は種別ごとに持つ）
+let activeEquipType = 'flex';
+function buildEquipOptions() {
+  const o = equipOptsOf(activeEquipType);
+  fillSelect('optEqClass', VALVE_RATINGS, o.cls);
+  fillSelect('optEqSize', EQUIP_SIZES, o.sizeA);
+  const el = document.getElementById('optEqLen'); if (el) el.value = o.length;
+}
+function onEquipOptChange() {
+  const v = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  const o = equipOptsOf(activeEquipType);
+  o.sizeA = v('optEqSize') || o.sizeA;
+  o.cls = v('optEqClass') || o.cls;
+  const L = parseFloat(v('optEqLen'));
+  o.length = (L >= 60) ? Math.round(L) : 60;             // 短すぎると両端フランジがめり込む
+  buildEquipOptions();
+  refreshThumbs();
+  applyPaletteToSelected();
+}
+['optEqSize', 'optEqClass', 'optEqLen'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', onEquipOptChange);
+});
+// PG＝呼び径(文字板の径Φ・数値)・ネジ・サイフォン管
+function buildPgOptions() {
+  fillSelect('optPgThread', PG_THREADS, pgOpts.thread);
+  const d = document.getElementById('optPgDia'); if (d) d.value = pgOpts.dia;
+  const s = document.getElementById('optPgSiphon'); if (s) s.checked = pgOpts.siphon !== false;
+}
+function onPgOptChange() {
+  const el = id => document.getElementById(id);
+  const d = parseFloat(el('optPgDia') ? el('optPgDia').value : NaN);
+  pgOpts.dia = (d >= 25 && d <= 300) ? Math.round(d) : 100;
+  pgOpts.thread = (el('optPgThread') && PG_THREADS.includes(el('optPgThread').value)) ? el('optPgThread').value : pgOpts.thread;
+  pgOpts.siphon = el('optPgSiphon') ? !!el('optPgSiphon').checked : true;
+  buildPgOptions();
+  refreshThumbs();
+  applyPaletteToSelected();
+}
+['optPgDia', 'optPgThread', 'optPgSiphon'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', onPgOptChange);
+});
+
 // ---- 継手（エルボ・ティー・レジューサ・キャップ・カップリング等）のオプションUI ----
 // 「タイプ」ドロップダウン(optFitType)＝その形状の variant（BW(L)/BW(S)/SW/同心偏心 等）。
 let activeFittingType = 'elbow90';
@@ -2467,20 +2702,29 @@ function onFitOptChange() {
   if (el) el.addEventListener('change', onFitOptChange);
 });
 
-// 部品種別に応じてオプションパネルを出し分け（フランジ／ガスケット／パイプ／継手）
+// 部品種別に応じてオプションパネルを出し分け（フランジ／ガスケット／パイプ／機器類／継手）
 function setActivePartType(type) {
   const fl = document.getElementById('flangeOptsUI');
   const gk = document.getElementById('gasketOptsUI');
   const pi = document.getElementById('pipeOptsUI');
   const fi = document.getElementById('fittingOptsUI');
+  const eq = document.getElementById('eqOptsUI');
+  const pg = document.getElementById('pgOptsUI');
   const isPipe = (type === 'pipe');
   const isFlange = (type === 'flange');
   const isGasket = (type === 'gasket');
-  const fitting = isFittingType(type) && !isFlange && !isGasket;   // flange/gasket は専用UI
+  const isEquip = EQUIP_TYPES.includes(type);      // フレキシブル・サイドグラス
+  const isPG = (type === 'pg');
+  // 継手・バルブ（variant方式）＝専用UIを持つ種別を除いた残り
+  const fitting = isFittingType(type) && !isFlange && !isGasket && !isEquip && !isPG;
   if (fl) fl.style.display = isFlange ? '' : 'none';
   if (gk) gk.style.display = isGasket ? '' : 'none';
   if (pi) pi.style.display = isPipe ? '' : 'none';
+  if (eq) eq.style.display = isEquip ? '' : 'none';
+  if (pg) pg.style.display = isPG ? '' : 'none';
   if (fi) fi.style.display = (fitting && !isPipe) ? '' : 'none';
+  if (isEquip) { activeEquipType = type; buildEquipOptions(); }
+  if (isPG) buildPgOptions();
   if (fitting && !isPipe) { activeFittingType = type; rebuildFittingSize(); }
   updateF2F();   // 種別切替でも面間表示を更新
 }
@@ -2506,7 +2750,8 @@ function toolTypeOfPart(p) {
     const k = (u.valve && u.valve.kind) || '';
     return ({ ball: 'vBall', gate: 'vGate', globe: 'vGlobe', check: 'vCheck', strainer: 'vStrainer', butterfly: 'vButterfly', safety: 'vSafety', swgate: 'vSWgate', swglobe: 'vSWglobe' })[k] || null;
   }
-  return ({ flange: 'flange', gasket: 'gasket', pipe: 'pipe', tee: 'tee', reducer: 'reducer', cap: 'cap' })[u.partType] || null;
+  return ({ flange: 'flange', gasket: 'gasket', pipe: 'pipe', tee: 'tee', reducer: 'reducer', cap: 'cap',
+            flex: 'flex', sight: 'sight', pg: 'pg' })[u.partType] || null;
 }
 // 配置済み部品 → タイプ欄(variantのt)。partColumns と同じ対応。該当なし(フランジ/パイプ等)は null。
 function variantTOfPart(p) {
@@ -2536,6 +2781,13 @@ function syncPaletteToPart(p) {
     } else if (u.partType === 'pipe') {
       Object.assign(pipeOpts, u.pipe || {});
       buildPipeOptions();
+    } else if (u.partType === 'flex' || u.partType === 'sight') {
+      activeEquipType = u.partType;
+      Object.assign(equipOptsOf(u.partType), u[u.partType] || {});
+      buildEquipOptions();
+    } else if (u.partType === 'pg') {
+      Object.assign(pgOpts, u.pg || {});
+      buildPgOptions();
     } else {
       const tool = toolByType(t);
       const vt = variantTOfPart(p);
@@ -2741,6 +2993,33 @@ function rebuildPipe(part, lengthMm, keepEnd) {
   part.position.copy(keepPos).sub(newKeep.clone().applyQuaternion(part.quaternion));
   if (typeof setEmissive === 'function' && selectedParts.has(part)) setEmissive(part, SEL_COLOR);   // 作り直しで消えた選択発光を戻す
   if (typeof refreshItemList === 'function') refreshItemList();   // 長さ変更を一覧へ反映
+}
+// 機器類（フレキシブル・サイドグラス）の長さ（＝フランジ面間）を作り替える。
+// 起点（現在つかんでいる機点）の位置は動かさない＝相手の配管を押さない。パイプの rebuildPipe と同じ考え方。
+function rebuildEquipLength(part, lengthMm) {
+  const u = part.userData;
+  const spec = u[u.partType];
+  if (!spec || (u.partType !== 'flex' && u.partType !== 'sight')) return;
+  const L = Math.max(Number(lengthMm) || 0, 60);
+  const keepLocal = (u.gripLocal === u.backLocal) ? u.backLocal : u.faceLocal;   // つかんでいる端を保持
+  const keepIsBack = (keepLocal === u.backLocal);
+  const keepPos = connModelPos(part, keepLocal);
+  spec.length = Math.round(L);
+  while (part.children.length) {
+    const c = part.children.pop();
+    c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  const np = (u.partType === 'flex') ? makeFlex(spec) : makeSightGlass(spec);
+  while (np.children.length) part.add(np.children.pop());
+  const half = (spec.length / 1000) / 2;
+  u.faceLocal.set(0, half, 0);
+  u.backLocal.set(0, -half, 0);
+  if (u.extraLocals && u.extraLocals[0]) u.extraLocals[0].set(0, 0, 0);   // 面間の中央
+  const newKeep = keepIsBack ? u.backLocal : u.faceLocal;
+  part.position.copy(keepPos).sub(newKeep.clone().applyQuaternion(part.quaternion));
+  if (typeof setEmissive === 'function' && selectedParts.has(part)) setEmissive(part, SEL_COLOR);
+  if (typeof refreshItemList === 'function') refreshItemList();
+  if (window.__scheduleHistory) window.__scheduleHistory();
 }
 // 固定端 anchorW（modelローカル）を保持したまま、可動端 movingEnd を「軸 axis × sign 方向」へ lengthMm だけ伸ばす。
 // sign<0 のときは固定端を通り越して反対側へ伸びる＝パイプの向きが反転する（長さ調整で“通り抜け”を実現）。
@@ -3013,7 +3292,8 @@ function connsOf(p) {
 // 機点(connsOf)には含めない＝起点(grip)や回転基準・自動集計には影響しない。設定「四半円点」でON/OFF（既定ON）。
 function quadLocalsOf(p) {
   const u = p.userData, t = u.partType;
-  if (!u.faceLocal || t === 'gasket' || t === 'valve') return [];
+  // 機器類（バルブ・フレキシブル・サイドグラス・PG）は外形が管の円筒ではないので四半円点を出さない
+  if (!u.faceLocal || t === 'gasket' || t === 'valve' || t === 'flex' || t === 'sight' || t === 'pg') return [];
   const out = [];
   const ring = (center, nrm, R) => {
     const n = nrm.clone().normalize();
@@ -3089,6 +3369,21 @@ function isBoltLocal(p, local) { return !!(p.userData.boltLocals && p.userData.b
 // 自動で挟み、置いた側を厚みぶん押し出す。呼び径・クラスは相手のフランジから取るのでサイズ違いが起きない。
 // ・パイプ端×フランジのフェイス面は対象外（実物では背面へ溶接するため、ここで挟むと邪魔になる）
 // ・部品表の自動計上（accessoryRows）とまったく同じ判定条件を使う＝図と部品表が食い違わない
+// 「両端フランジ形の機器」か＝フランジ形バルブ／フレキシブル／サイドグラス。
+// これらの端はガスケット＋ボルトで留める＝溶接口として数えない（SW形バルブは溶接なので除く）。
+function isFlangedBody(u) {
+  if (!u) return false;
+  if (u.partType === 'flex' || u.partType === 'sight') return true;
+  if (u.partType === 'valve') return !['swgate', 'swglobe'].includes((u.valve && u.valve.kind) || '');
+  return false;
+}
+// その部品の接続クラス（ガスケット・ボルトの呼びに使う）
+function bodyRatingOf(u) {
+  if (u.partType === 'valve') return (u.valve && u.valve.rating) || '';
+  if (u.partType === 'flex') return (u.flex && u.flex.cls) || '';
+  if (u.partType === 'sight') return (u.sight && u.sight.cls) || '';
+  return '';
+}
 function connNormalOf(p, local) {
   const u = p.userData;
   let n = null;
@@ -3105,10 +3400,7 @@ function connNormalOf(p, local) {
 function gasketSideOf(p, local) {
   const u = p.userData;
   if (u.partType === 'flange') return (u.faceLocal && local === u.faceLocal) ? 'flange' : null;
-  if (u.partType === 'valve') {
-    const k = (u.valve && u.valve.kind) || '';
-    return ['swgate', 'swglobe'].includes(k) ? null : 'valve';   // ねじ込み/SW形はガスケット継手ではない
-  }
+  if (isFlangedBody(u)) return 'valve';   // フランジ形バルブ・フレキシブル・サイドグラスの端＝ガスケット面
   return null;
 }
 // ガスケットの厚みを作り替える（プロパティからの変更・2026-07-21 社長要望）。
@@ -4223,6 +4515,9 @@ function partColumns(p) {
     case 'reducer':{ const o = u.reducer || {};return { kind: 'レジューサ', type: o.ecc ? 'BW(E)' : 'BW(C)', size: `${o.sizeA || ''}×${o.sizeB || ''}`, cls: o.sch || '' }; }
     case 'sw':     { const o = u.sw || {}; const nm = {'90E':'90°エルボ','45E':'45°エルボ','T':'ティー','TR':'ティー','CROSS':'クロス','FC':'カップリング','HC':'カップリング','FCR':'カップリング','BOSS':'ボス','CAP':'キャップ','UNION':'ユニオン'}; const tp = {'FC':'FC','HC':'HC','FCR':'FCR','T':'SW(T)','TR':'SW(RT)'}[o.kind] || 'SW'; const rb = (o.sizeB && o.sizeB !== o.sizeA); return { kind: nm[o.kind] || 'SW継手', type: tp, size: rb ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: 'Sch80' }; }
     case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'ゲートバルブ(800)',swglobe:'グローブバルブ(800)'}; let tp = '', cls = '', sz = o.sizeA || ''; if (o.kind === 'butterfly') { tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); cls = o.rating || ''; } else if (o.kind === 'swgate' || o.kind === 'swglobe') { cls = 'Class800'; } else { cls = o.rating || ''; } if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls }; }
+    case 'flex':   { const o = u.flex || {};   return { kind: 'フレキシブル', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
+    case 'sight':  { const o = u.sight || {};  return { kind: 'サイドグラス', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
+    case 'pg':     { const o = u.pg || {};     return { kind: 'PG(圧力計)', type: `${o.thread || ''}${o.siphon === false ? '' : '＋サイフォン'}`, size: `${o.dia || 100}Φ`, cls: '' }; }
     default: return { kind: u.partType || 'アイテム', type: '', size: '', cls: '' };
   }
 }
@@ -4258,7 +4553,8 @@ function partTypeRank(p) {
 // あくまで拾い出しの下書き（参考値）。実数は検図のうえ確定する。
 function connPointsForStats(p) {
   const u = p.userData;
-  const spec = u.flange || u.gasket || u.pipe || u.elbow || u.cap || u.tee || u.reducer || u.sw || u.valve || {};
+  const spec = u.flange || u.gasket || u.pipe || u.elbow || u.cap || u.tee || u.reducer || u.sw || u.valve
+            || u.flex || u.sight || u.pg || {};
   const a = spec.sizeA || '', b = spec.sizeB || a;
   const out = [];
   if (u.faceLocal) out.push({ local: u.faceLocal, size: a, face: true });
@@ -4275,16 +4571,19 @@ function accessoryRows() {
     const isFlange = u.partType === 'flange';
     const isValve = u.partType === 'valve';
     const swValve = isValve && ['swgate', 'swglobe'].includes((u.valve && u.valve.kind) || '');
+    const flangedBody = isFlangedBody(u);                             // フランジ形バルブ／フレキシブル／サイドグラス
+    const isPG = u.partType === 'pg';                                 // PGはネジ接続＝溶接もガスケットも計上しない
     const swSide = u.partType === 'sw' || swValve || (isFlange && u.flange && u.flange.type === 'SW');
     for (const cp of connPointsForStats(p)) {
       pts.push({
         p, pos: connModelPos(p, cp.local), size: cp.size,
         gasketFace: isFlange && cp.face,                              // フランジのフェイス＝ガスケット面
-        valveFlanged: isValve && !swValve,                            // フランジ形バルブの接続端
-        // 溶接され得る端（フランジのフェイス・フランジ形バルブ・ガスケット部品は除外）
-        weldable: !(isFlange && cp.face) && (!isValve || swValve) && u.partType !== 'gasket',
+        valveFlanged: flangedBody,                                    // フランジ形機器の接続端
+        // 溶接され得る端（フランジのフェイス・フランジ形機器・ガスケット・PGのネジ口は除外）
+        weldable: !(isFlange && cp.face) && !flangedBody && u.partType !== 'gasket' && !isPG,
         sw: swSide,
-        cls: isFlange ? ((u.flange && u.flange.cls) || '') : (isValve ? ((u.valve && u.valve.rating) || (swValve ? 'Class800' : '')) : ''),
+        cls: isFlange ? ((u.flange && u.flange.cls) || '')
+           : (flangedBody ? bodyRatingOf(u) : (swValve ? 'Class800' : '')),
       });
     }
   }
@@ -4316,16 +4615,18 @@ function accessoryRows() {
       const qu = q.userData;
       if (q === p || qu.hidden || !qu.faceLocal) continue;
       const isFl = qu.partType === 'flange';
-      const vk = (qu.valve && qu.valve.kind) || '';
-      const isFlValve = qu.partType === 'valve' && !['swgate', 'swglobe'].includes(vk);
-      if (!isFl && !isFlValve) continue;
+      const isFlBody = isFlangedBody(qu);   // フランジ形バルブ／フレキシブル／サイドグラス
+      if (!isFl && !isFlBody) continue;
       const cand = isFl ? [qu.faceLocal] : connsOf(q);
       for (const l of cand) {
         if (!l) continue;
         const w = connModelPos(q, l);
         if (!faces.some(f => f.distanceTo(w) <= TOL)) continue;
         if (isFl) hit = { size: (qu.flange && qu.flange.sizeA) || '', cls: (qu.flange && qu.flange.cls) || '' };
-        else if (!hit) hit = { size: (qu.valve && qu.valve.sizeA) || '', cls: (qu.valve && qu.valve.rating) || '' };
+        else if (!hit) {
+          const spec = qu.valve || qu.flex || qu.sight || {};
+          hit = { size: spec.sizeA || '', cls: bodyRatingOf(qu) };
+        }
       }
     }
     if (hit) bump(bolts, `${hit.size}|${hit.cls}`);
@@ -5611,6 +5912,8 @@ function rebuildClassOptions() {
 syncOptionsUI();   // 起動時：アクティブ部品(フランジ)で初期化
 buildPipeOptions();   // パイプのオプション欄も用意（初期は非表示）
 buildGasketOptions(); // ガスケットのオプション欄も用意（初期は非表示）
+buildEquipOptions();  // フレキシブル・サイドグラスのオプション欄（初期は非表示）
+buildPgOptions();     // PGのオプション欄（初期は非表示）
 buildPartSelect();    // 部品種別ドロップダウンを用意
 setActivePart('flange');   // 初期表示はフランジ1つのみ
 refreshItemList();    // 設置アイテム一覧を初期化（空表示）
@@ -5625,7 +5928,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const V3 = THREE.Vector3;
 
   // ---- 部品仕様(userData)からメッシュを再生成（複製・読込・鏡で共用） ----
-  const SPEC_FIELD = { flange: 'flange', gasket: 'gasket', pipe: 'pipe', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve' };
+  const SPEC_FIELD = { flange: 'flange', gasket: 'gasket', pipe: 'pipe', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve', flex: 'flex', sight: 'sight', pg: 'pg' };
   function buildFromSpec(u) {
     switch (u.partType) {
       case 'flange':  return makeFlange(u.flange);
@@ -5637,6 +5940,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       case 'reducer': return makeReducer(u.reducer);
       case 'sw':      return makeSW(u.sw);
       case 'valve':   return makeValve(u.valve);
+      case 'flex':    return makeFlex(u.flex);
+      case 'sight':   return makeSightGlass(u.sight);
+      case 'pg':      return makePG(u.pg);
       default:        return null;
     }
   }
@@ -10707,6 +11013,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (u.partType === 'gasket' && u.gasket) {
         sec('ガスケット');
         edRow('厚み', { get: () => u.gasket.t, set: v => { if (v > 0) rebuildGasket(p, v); updateForm(); }, unit: 'mm', step: 0.5 });
+      }
+      // 機器類の長さ（＝フランジ面間）。パレットからも変えられるが、選んでその場で直せる方が速い。
+      if ((u.partType === 'flex' || u.partType === 'sight') && u[u.partType]) {
+        sec(u.partType === 'flex' ? 'フレキシブル' : 'サイドグラス');
+        edRow('長さ', { get: () => Math.round(u[u.partType].length), set: v => { if (v >= 60) rebuildEquipLength(p, v); updateForm(); }, unit: 'mm', step: 10 });
       }
       if (u.faceLocal) {
         sec('向き（フェイス面）');
