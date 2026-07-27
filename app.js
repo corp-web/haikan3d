@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-E';
+const APP_VER = 'v0727-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3872,18 +3872,24 @@ function valveShapeOf(part) {
 //   方位＝北 -Z ／ 南 +Z ／ 東 +X ／ 西 -X
 //   ・フランジ／パイプ／継手＝面を東へ（dir0＝既定）
 //   ・バルブ＝軸を東・ハンドルを上（dir0 + roll6）※従来は北向きだった
-//   ・エルボ（90/45/180）＝片方の口を真下、もう片方を東へ（dir2＝無回転。
+//   ・エルボ90/45＝片方の口を真下、もう片方を東へ（dir2＝無回転。
 //        エルボはローカル形状がそのまま「東＋真下」なので、回さないのが正解）
-//   ・ティー＝本管を横に寝かせ、枝を西へ（dir13 + roll6）。
-//        枝は本管と直角なので、枝を西にすると本管は必ず南北向きになる＝ここだけ東向きにできない
+//   ・180°エルボ＝両方の口を東へ向け、2つの口を縦に並べる（dir4）
+//   ・ティー＝本管を横に寝かせ、枝を東へ（dir13 + roll2）。
+//        枝は本管と直角なので、枝を東西に向けると本管は必ず南北向きになる＝ここだけ東向きにできない
+//   ・ボス＝縦（dir2＝無回転）
+//   ・SW形バルブ800（ゲート/グローブ）＝縦・ハンドルを東へ（dir2 + roll2）
 //   ・サイドグラス＝軸を東・のぞき窓を横（東西ではなく南北）へ（dir0 + roll2）
 //   ・PG＝立てる（dir2＝無回転。取付ネジが真下を向く）
 //   ・安全弁＝入口を下・出口を東（dir2。従来どおり）
 // ※ dir/roll の番号は DIR_QUATS（Z軸リング0-8／X軸リング9-17）と 45°×8 のひねり。
 //    総当りで「その向きになる組合せ」を求めて決めた値なので、DIR_QUATS を変えたら取り直すこと。
 const DEFAULT_POSE = {
-  elbow90: { dir: 2, roll: 0 }, elbow45: { dir: 2, roll: 0 }, return180: { dir: 2, roll: 0 },
-  tee: { dir: 13, roll: 6 },
+  elbow90: { dir: 2, roll: 0 }, elbow45: { dir: 2, roll: 0 },
+  return180: { dir: 4, roll: 0 },
+  tee: { dir: 13, roll: 2 },
+  boss: { dir: 2, roll: 0 },
+  vSWgate: { dir: 2, roll: 2 }, vSWglobe: { dir: 2, roll: 2 },
   sight: { dir: 0, roll: 2 },
   pg: { dir: 2, roll: 0 },
   vSafety: { dir: 2, roll: 0 },
@@ -5310,9 +5316,15 @@ renderer.domElement.addEventListener('pointerdown', () => {
 // ビュー上のクリック：配置中は配置／移動中は確定／それ以外は選択。
 // いずれも視点ドラッグと区別するため移動量をみる。
 let viewDown = null;
+// 配置・移動の最中か（＝画面タップが「確定」の意味を持つ状態）。
+// この間はCtrlのタップ処理（個別トグル）と取り合いにならないよう、両方でこの判定を使う。
+function inPlaceOrMove() { return !!(followTool || movingPart || (dirDrag && dirDrag.locked)); }
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0) { viewDown = null; return; }   // 左ボタンのみ（右=切替/中=パン は対象外）
-  if (e.ctrlKey || e.metaKey || touchCtrl) { viewDown = null; return; }   // Ctrl は窓選択/個別トグル側で一括処理
+  // Ctrl中は原則ここを通さない（窓選択／個別トグル側で一括処理）。
+  // ただし「配置追従中」「移動中」「方向移動の確定待ち」は、Ctrlが点いていてもタップで確定できるようにする。
+  // ※Ctrlボタンを点けたまま複数選択→移動すると、タップが記録されず確定できなかった（2026-07-27 社長報告）
+  if (!inPlaceOrMove() && (e.ctrlKey || e.metaKey || touchCtrl)) { viewDown = null; return; }
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) { viewDown = null; return; }  // ギズモ上は無視
   viewDown = { x: e.clientX, y: e.clientY };
@@ -5391,7 +5403,8 @@ function selectPartsInRect(x0, y0, x1, y1) {
 let _ctrlTapLast = { t: -1e9, x: 0, y: 0 };   // ダブルタップ検出（窓選択の起動）
 let _ctrlClickDown = null;                     // シングルタップの個別トグル用
 renderer.domElement.addEventListener('pointerdown', e => {
-  if (e.button !== 0 || followTool || movingPart) return;
+  // 配置・移動の最中はタップ＝確定なので、Ctrlの個別トグルは動かさない（確定タップと取り合わない）
+  if (e.button !== 0 || inPlaceOrMove()) return;
   if (!(e.ctrlKey || e.metaKey || touchCtrl)) return;
   const isDbl = (e.timeStamp - _ctrlTapLast.t < 350) && Math.hypot(e.clientX - _ctrlTapLast.x, e.clientY - _ctrlTapLast.y) < 12;
   _ctrlTapLast = { t: e.timeStamp, x: e.clientX, y: e.clientY };
