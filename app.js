@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-J';
+const APP_VER = 'v0727-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2941,6 +2941,7 @@ function setMoveMode(on) {
   if (moveMode) {
     stopFollow();                                       // 部品配置の追従を解除（排他）
     if (window.__exitDrawMode) window.__exitDrawMode(); // 作図ツールも解除（排他）
+    if (window.__clearPendingCmd) window.__clearPendingCmd();   // 複製・鏡・回転の待ち受けも解除（排他）
     if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
     const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);   // 部品＋線・寸法の選択数
     if (window.__toast) window.__toast(nSel
@@ -2962,6 +2963,32 @@ let movingRoll = 0;           // 移動中部品のひねり(roll) 0/45°
 let moveOrig = null;          // 取消用：掴む前の position
 let moveGroup = [];           // 集団移動：主選択と一緒に動かす他の選択部品 [{part, startPos}]
 let annFollowMove = false;    // 部品の集団移動に、窓選択した線も追従させるか
+// 線・寸法・文字だけを掴んで置く状態（部品が無いので movingPart が使えない）。
+// コマンドで作った物を複製したあとも、部品と同じように動かして置けるようにする（2026-07-27 社長要望）。
+let annPlaceMode = null;      // { ref: V3 }  掴んだ時点の選択中心
+function startAnnPlace() {
+  if (!(window.__annHasSel && window.__annHasSel())) return false;
+  const c = window.__annSelCenter && window.__annSelCenter();
+  if (!c) return false;
+  window.__annMoveStart();
+  annPlaceMode = { ref: c.clone() };
+  return true;
+}
+function moveAnnPlace(cx, cy) {
+  if (!annPlaceMode) return;
+  const hit = planeHitAt(cx, cy, annPlaceMode.ref.y);
+  if (!hit) return;
+  window.__annMoveApply(hit.x - annPlaceMode.ref.x, 0, hit.z - annPlaceMode.ref.z);   // 高さは変えず水平に置く
+}
+function dropAnnPlace() {
+  if (!annPlaceMode) return;
+  window.__annMoveEnd(); annPlaceMode = null;
+  if (window.__scheduleHistory) window.__scheduleHistory();
+}
+function cancelAnnPlace() {
+  if (!annPlaceMode) return;
+  window.__annMoveCancel(); annPlaceMode = null;
+}
 let touchShift = false;       // タッチ用の仮想Shift（画面のShiftボタンON）。e.shiftKey と OR して使う（Y方向作図・楕円化など）
 let touchCtrl = false;        // タッチ用の仮想Ctrl（画面のCtrlボタンON）。e.ctrlKey/metaKey と OR して使う（複数選択トグル）
 let movingByDrag = false;     // ダブルクリック→押したままドラッグで自由移動中か（pointerupで確定）
@@ -5182,6 +5209,7 @@ window.addEventListener('pointermove', e => {
     moveStarted = true;
     moveExistingPart(e.clientX, e.clientY);
   }
+  else if (annPlaceMode) { moveAnnPlace(e.clientX, e.clientY); }   // 線・寸法だけを掴んで置いている最中
   else if (dirDrag && !dirDrag.locked) {
     const moveTh = (e.pointerType !== 'mouse') ? 10 : 4;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらないように）
     if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > moveTh) dirDrag.started = true;
@@ -5323,7 +5351,7 @@ renderer.domElement.addEventListener('pointerdown', () => {
 let viewDown = null;
 // 配置・移動の最中か（＝画面タップが「確定」の意味を持つ状態）。
 // この間はCtrlのタップ処理（個別トグル）と取り合いにならないよう、両方でこの判定を使う。
-function inPlaceOrMove() { return !!(followTool || movingPart || (dirDrag && dirDrag.locked)); }
+function inPlaceOrMove() { return !!(followTool || movingPart || annPlaceMode || (dirDrag && dirDrag.locked)); }
 renderer.domElement.addEventListener('pointerdown', e => {
   if (e.button !== 0) { viewDown = null; return; }   // 左ボタンのみ（右=切替/中=パン は対象外）
   // Ctrl中は原則ここを通さない（窓選択／個別トグル側で一括処理）。
@@ -5351,6 +5379,9 @@ renderer.domElement.addEventListener('pointerup', e => {
     // タップで確定：タッチにはホバーが無いので、タップした位置へ置いてから確定する（2026-07-20 社長要望）
     if (!movingByDrag) moveExistingPart(e.clientX, e.clientY);
     dropMovingPart();                    // 移動モード：タップで確定（選択は継続）
+  } else if (annPlaceMode) {
+    moveAnnPlace(e.clientX, e.clientY);   // タップした位置へ置いてから確定（タッチはホバーが無いため）
+    dropAnnPlace();
   } else if (dirDrag && dirDrag.locked) {
     // 方向移動の確定待ち：タップで確定（位置はそのまま・距離入力は閉じる）。2026-07-20 社長要望
     const moved = dirDrag.part;
@@ -5451,6 +5482,7 @@ window.addEventListener('pointercancel', () => {
   if (pipeEndDrag) cancelPipeEndDrag();
   if (dirDrag && !dirDrag.locked) cancelDirDrag();
   if (movingPart && movingByDrag) dropMovingPart();
+  if (annPlaceMode) dropAnnPlace();
   if (boxSel) { boxSel = null; selBoxEl.style.display = 'none'; }
   _ctrlClickDown = null;             // Ctrlタップ判定も残さない
   touchSelOnly = false;              // 「選択のみタッチ」も残さない（pointerupが来ないと次のタップが1回空振りする）
@@ -5470,9 +5502,12 @@ window.addEventListener('keydown', e => {
     // フォーカスが無く rotAInput のEscハンドラを通らないので、ここで受ける（取消ボタン経由もここ）
     if (nudgeActive()) { endRotSpin(false); return; }
     if (hideArmed) { setHideArmed(false); if (window.__toast) window.__toast('非表示：取り消しました'); return; }   // Esc＝「非表示」コマンド取消
+    // 「複製・鏡・回転」を押して選択待ちの状態＝取消（進行中の操作より先に受ける）
+    if (window.__hasPendingCmd && window.__hasPendingCmd()) { window.__clearPendingCmd(); if (window.__toast) window.__toast('取り消しました'); return; }
     if (pipeEndDrag) cancelPipeEndDrag();
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
+    else if (annPlaceMode) cancelAnnPlace();
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
     if (moveMode) setMoveMode(false);   // Esc＝「移動」コマンドも取消（進行中の移動は上で取消済み）
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -6075,10 +6110,35 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
 
   // ================= 編集：複製 =================
+  // ===== 「選択してからコマンド」も「コマンドを押してから選択」もできるようにする =====
+  // 移動コマンドと同じ使い勝手にする（2026-07-27 社長要望）。何も選ばずに押したらボタンを点灯して待ち、
+  // そのあとアイテムを選んだ時点で実行する。判定は選択処理が全部終わってから（末尾の pointerup で呼ぶ）。
+  let pendingCmd = null;                          // 'dup' | 'mirror' | 'rotate' | null
+  const PENDING_BTN = { dup: 'cmdDup', mirror: 'cmdMirror', rotate: 'cmdRotate' };
+  function setPendingCmd(name, msg) {
+    pendingCmd = name || null;
+    for (const k of Object.keys(PENDING_BTN)) {
+      const b = $(PENDING_BTN[k]); if (b) b.classList.toggle('active', pendingCmd === k);
+    }
+    if (pendingCmd && msg && window.__toast) window.__toast(msg);
+  }
+  window.__clearPendingCmd = () => { if (pendingCmd) setPendingCmd(null); };
+  window.__hasPendingCmd = () => !!pendingCmd;
+  window.__runPendingCmd = () => {
+    if (!pendingCmd) return false;
+    const n = selectedParts.size + selAnns.size;
+    if (!n) return false;                          // まだ選ばれていない＝待ち続ける
+    const c = pendingCmd;
+    setPendingCmd(null);
+    if (c === 'dup') duplicate(); else if (c === 'mirror') mirror(); else if (c === 'rotate') rotateCmd();
+    return true;
+  };
+
   function duplicate() {
     const src = [...selectedParts];
     const annSrc = [...selAnns];                  // 線分・構築線・寸法線も複製対象（2026-06-13 社長指示）
-    if (!src.length && !annSrc.length) return;
+    if (!src.length && !annSrc.length) { setPendingCmd('dup', '複製：複製するアイテムをタップで選んでください'); return; }
+    setPendingCmd(null);
     const off = new V3(0.1, 0, 0.1);   // 100mm 斜めにずらして重ならないように
     const copies = [];
     for (const s of src) {
@@ -6113,6 +6173,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (copies.length) {
       startMovePart(copies[0], null, null);
       movingByDrag = false; moveHoldTap = false;   // ドラッグ確定ではなく「タップで確定」の流れにする
+      if (window.__toast) window.__toast('複製：置きたい位置をタップで確定（Escで取消）');
+    } else if (annCopies.length && startAnnPlace()) {
+      // 線分・構築線・円・寸法・文字だけを複製した場合＝掴む部品が無いので注釈だけを掴んで置く
       if (window.__toast) window.__toast('複製：置きたい位置をタップで確定（Escで取消）');
     }
   }
@@ -6168,8 +6231,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__rotateCancel = endRotateMode;
   function rotateCmd() {
     if (rotateMode) { endRotateMode(); return; }           // もう一度押す＝取消
+    if (pendingCmd === 'rotate') { setPendingCmd(null); return; }   // 待ち受け中にもう一度押す＝取消
     const parts = [...selectedParts], anns = [...selAnns];
-    if (!parts.length && !anns.length) { if (window.__toast) window.__toast('回転：先にアイテムを選んでください'); return; }
+    if (!parts.length && !anns.length) { setPendingCmd('rotate', '回転：回すアイテムをタップで選んでください'); return; }
+    setPendingCmd(null);
     rotateMode = { parts, anns, p1: null, ang: 0 };
     renderer.domElement.style.cursor = DRAW_CURSOR;
   }
@@ -6305,8 +6370,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }, true);
   function mirror() {
     if (mirrorMode) { endMirrorMode(); return; }          // もう一度押す＝取消
+    if (pendingCmd === 'mirror') { setPendingCmd(null); return; }   // 待ち受け中にもう一度押す＝取消
     const parts = [...selectedParts], anns = [...selAnns];
-    if (!parts.length && !anns.length) return;
+    if (!parts.length && !anns.length) { setPendingCmd('mirror', '鏡：反転するアイテムをタップで選んでください'); return; }
+    setPendingCmd(null);
     mirrorMode = { parts, anns, p1: null };
     renderer.domElement.style.cursor = DRAW_CURSOR;       // モード表示はカーソルのみ（メッセージ画面は出さない）
   }
@@ -9634,6 +9701,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return selAnns.size;
   };
   window.__annHasSel = () => selAnns.size > 0;
+  // 選択中の注釈の中心（掴んで置く時の基準点）
+  window.__annSelCenter = () => {
+    if (!selAnns.size) return null;
+    const c = new THREE.Vector3(); let n = 0;
+    for (const r of selAnns) { c.add(r.a); c.add(r.b); n += 2; }
+    return n ? c.multiplyScalar(1 / n) : null;
+  };
   // ---- グループ化用（注釈側） ----
   window.__annSelCount = () => selAnns.size;
   window.__annSetGroup = (gid) => { for (const r of selAnns) r.groupId = gid; };   // 選択中の注釈にグループID付与
@@ -10259,11 +10333,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   window.__pickDimTextAt = pickDimTextAt;
   // 値フォームを開いてフォーカス（文字クリック時）
+  // 空間をタップして文字・引出を置いた直後に、そのまま打てるようにする（2026-07-27 社長要望）。
+  // 要点は2つ：
+  //  ・iOSは「ユーザー操作と同じ処理の中」でfocusしないとキーボードが出ない
+  //    （以前は setTimeout(30) を挟んでいたため、入力欄をもう一度タップするまで出なかった）
+  //  ・かといって pointerdown の最中にfocusしても、直後の既定動作でcanvasへフォーカスが移り、
+  //    入力欄がblurされてしまう（blurハンドラが値フォームを閉じるので何も残らない）
+  // → 指を離した時（pointerup）にフォーカスする。pointerupもユーザー操作なのでキーボードは出る。
   window.__focusDimValueInput = () => {
-    setTimeout(() => {
+    dimValOpen = true;                       // 押した瞬間から値フォームは出しておく
+    const onUp = () => {
+      window.removeEventListener('pointerup', onUp);
+      dimValOpen = true;                     // 間に選択処理が走っても閉じない
       if (window.__positionDimValueForm) window.__positionDimValueForm();
       if (dimValForm.style.display !== 'none') focusSelectAll(dimValInput);
-    }, 30);
+    };
+    window.addEventListener('pointerup', onUp);
   };
   // 毎フレーム：選択中の寸法線の本体中点脇に「値」フォームを追従（スピナー表示中・未選択は隠す）
   window.__positionDimValueForm = () => {
@@ -10590,6 +10675,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (followTool || movingPart) return;                // 部品の配置/移動中は線分操作を横取りしない（スナップ先の線を掴んで配置を止める不具合対策）
     if (e.target !== renderer.domElement) return;        // 脚入力などUIは通す
     const ctrlish = e.ctrlKey || e.metaKey || touchCtrl;
+    if (annPlaceMode) return;                            // 複製した線を置いている最中＝掴み直さない
     if (ctrlish && !moveMode) return;                    // Ctrl＝部品の複数選択へ委ねる
     const rect = renderer.domElement.getBoundingClientRect();
     if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
@@ -10927,6 +11013,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (drawActive() || !lineSel) return;
     if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (e.key === 'Escape' && drawState.dimReadjust) { e.stopImmediatePropagation(); drawState.dimReadjust = null; clearLineGuide(); return; }   // 再調整だけ抜ける（選択は維持）
+    // 複製した線・寸法・文字を掴んで置いている最中＝置き直しを取り消す（選択解除より先に受ける）。
+    // ※ここはキャプチャ段なので、外側のEsc処理より先に走る（2026-07-27）
+    if (e.key === 'Escape' && annPlaceMode) { e.stopImmediatePropagation(); cancelAnnPlace(); return; }
     if (e.key === 'Escape' && typeof nudgeActive === 'function' && nudgeActive()) return;   // スピナー表示中＝グローバル側の取消に委ねる（選択は保つ）
     if (e.key === 'Escape') { e.stopImmediatePropagation(); clearDrawTemp(); deselectLine(); }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -11692,3 +11781,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     applyPal();
   }
 })();
+
+// ===================================================================
+//  「コマンドを押してから選択」の実行判定（2026-07-27 社長要望）
+//  複製・鏡・回転は、何も選ばずに押すとボタンが点灯して選択待ちになる。
+//  実行の判定は、部品・線の選択処理が全部終わってから行う必要があるため、
+//  ・このファイルの末尾で登録（イベントの登録順＝実行順）
+//  ・さらに setTimeout(0) で同期処理をすべて終わらせてから見る
+//  の二段で確実に「選択が確定したあと」に評価する。
+// ===================================================================
+window.addEventListener('pointerup', () => {
+  if (window.__hasPendingCmd && window.__hasPendingCmd()) setTimeout(() => { if (window.__runPendingCmd) window.__runPendingCmd(); }, 0);
+});
