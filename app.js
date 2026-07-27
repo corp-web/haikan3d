@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-D';
+const APP_VER = 'v0727-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2452,7 +2452,11 @@ const PAL_W = 128, PAL_H = 96, PAL_SS = 2;   // タイル表示寸法。PAL_SS=�
         c.traverse && c.traverse(n => { if (n.geometry) n.geometry.dispose(); });
       }
       const obj = tool.build();
-      obj.rotation.z = Math.PI / 2;      // 縦（立てた状態）で見せる
+      // パレットの絵は「置いたときの形」に合わせる（2026-07-27 社長要望）。
+      // ※このIIFEは読み込み途中に走るため、向きの表(DIR_QUATS)がまだ未初期化のことがある。
+      //   その時は仮の向きで描き、読み込み完了後の refreshThumbs() で本来の姿勢に描き直される。
+      try { const p = defaultPose(tool); orientRotation(obj, p.dir, p.roll); }
+      catch (e) { obj.rotation.z = Math.PI / 2; }
       // バウンディングから一定サイズに正規化（10A〜500Aで見た目が揃う）
       const box = new THREE.Box3().setFromObject(obj);
       const size = box.getSize(new THREE.Vector3());
@@ -3642,7 +3646,8 @@ function startFollow(tool, tile, x, y) {
   if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
   stopFollow();
   followTool = { tool, tile };
-  followOrient = valveDefaultOrient(tool); followRoll = 0; followQuat = null; resetPipeRotState();   // 初期は面を立てた状態（バルブはハンドル上/安全弁は立て）
+  { const _p = defaultPose(tool); followOrient = _p.dir; followRoll = _p.roll; }   // 挿入時の既定姿勢（DEFAULT_POSE）
+  followQuat = null; resetPipeRotState();
   setActivePartType(tool.type);     // パレット選択中の部品に応じてオプション欄を切替
   tile.classList.add('selected');
   // 半透明プレビュー（配置される物そのもの）
@@ -3863,9 +3868,32 @@ function valveShapeOf(part) {
   return (part && part.userData.partType === 'valve') ? 'flange' : null;
 }
 // バルブの挿入時の既定の向き：インライン弁=ハンドル上(index13=X270°でローカル+Z→世界+Y)／安全弁=立て(index2=identity)。
-function valveDefaultOrient(tool) {
-  if (!tool || !tool.valve) return DEFAULT_DIR;
-  return (tool.type === 'vSafety') ? 2 : 13;
+// 挿入時の既定の姿勢（2026-07-27 社長要望：アイテムごとにバラバラだった挿入方向を統一する）。
+//   方位＝北 -Z ／ 南 +Z ／ 東 +X ／ 西 -X
+//   ・フランジ／パイプ／継手＝面を東へ（dir0＝既定）
+//   ・バルブ＝軸を東・ハンドルを上（dir0 + roll6）※従来は北向きだった
+//   ・エルボ（90/45/180）＝片方の口を真下、もう片方を東へ（dir2＝無回転。
+//        エルボはローカル形状がそのまま「東＋真下」なので、回さないのが正解）
+//   ・ティー＝本管を横に寝かせ、枝を西へ（dir13 + roll6）。
+//        枝は本管と直角なので、枝を西にすると本管は必ず南北向きになる＝ここだけ東向きにできない
+//   ・サイドグラス＝軸を東・のぞき窓を横（東西ではなく南北）へ（dir0 + roll2）
+//   ・PG＝立てる（dir2＝無回転。取付ネジが真下を向く）
+//   ・安全弁＝入口を下・出口を東（dir2。従来どおり）
+// ※ dir/roll の番号は DIR_QUATS（Z軸リング0-8／X軸リング9-17）と 45°×8 のひねり。
+//    総当りで「その向きになる組合せ」を求めて決めた値なので、DIR_QUATS を変えたら取り直すこと。
+const DEFAULT_POSE = {
+  elbow90: { dir: 2, roll: 0 }, elbow45: { dir: 2, roll: 0 }, return180: { dir: 2, roll: 0 },
+  tee: { dir: 13, roll: 6 },
+  sight: { dir: 0, roll: 2 },
+  pg: { dir: 2, roll: 0 },
+  vSafety: { dir: 2, roll: 0 },
+};
+function defaultPose(tool) {
+  if (!tool) return { dir: DEFAULT_DIR, roll: 0 };
+  const p = DEFAULT_POSE[tool.type];
+  if (p) return { dir: p.dir, roll: p.roll };
+  if (tool.valve) return { dir: 0, roll: 6 };     // バルブ＝軸を東・ハンドルを上
+  return { dir: DEFAULT_DIR, roll: 0 };           // フランジ・パイプ・継手・フレキシブル＝面を東へ
 }
 // 回転・向き挙動上の実効partType（SW・バルブは対応BW形状へ読み替え／BW・パイプ等はそのまま）
 function behType(part) { return part ? (swShapeOf(part) || valveShapeOf(part) || part.userData.partType) : null; }
@@ -5968,6 +5996,7 @@ buildEquipOptions();  // フレキシブル・サイドグラスのオプショ�
 buildPgOptions();     // PGのオプション欄（初期は非表示）
 buildPartSelect();    // 部品種別ドロップダウンを用意
 setActivePart('flange');   // 初期表示はフランジ1つのみ
+refreshThumbs();      // パレットの絵を「挿入時の姿勢」で描き直す（読み込み途中は向きの表が未初期化のため）
 refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 
 // ===================================================================

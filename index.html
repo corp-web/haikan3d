@@ -3,12 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0727D — SKT-HD ♦</title>
-<!-- ホーム画面アイコン（2026-07-20 社長要望）：アイソメのエルボ＋フランジ＋寸法。iOSはapple-touch-iconを使う -->
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-<meta name="apple-mobile-web-app-title" content="配管3D v0727D">
+<title>配管3D v0727E — SKT-HD ♦</title>
+<!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
+     ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
+       古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
+       絵柄を差し替えたときは ?v= の日付を必ず上げること。 -->
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=20260727">
+<link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
+<meta name="apple-mobile-web-app-title" content="配管3D v0727E">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -622,8 +626,9 @@
     </div>
     <!-- PG（圧力計）＝呼び径は文字板の径Φ・ネジは接続ネジ・サイフォン管はON/OFF -->
     <div class="pal-opts" id="pgOptsUI" style="display:none">
-      <label>呼び径(Φ)<input id="optPgDia" type="number" step="5" min="25" max="300" value="100"></label>
+      <!-- ネジ＝接続の種類なので「タイプ」の位置。以下 呼び径→その他 の順（2026-07-27 社長要望） -->
       <label>ネジ<select id="optPgThread"></select></label>
+      <label>呼び径(Φ)<input id="optPgDia" type="number" step="5" min="25" max="300" value="100"></label>
       <label class="pal-chk"><input id="optPgSiphon" type="checkbox" checked><span>サイフォン管</span></label>
     </div>
     <div class="pal-opts" id="pipeOptsUI" style="display:none">
@@ -632,9 +637,10 @@
       <label>長さ(mm)<input id="optPipeLen" type="number" step="10" min="1"></label>
     </div>
     <div class="pal-opts" id="fittingOptsUI" style="display:none">
+      <!-- 並びは タイプ→呼び径→クラス で統一（2026-07-27 社長要望） -->
       <label id="optFitTypeWrap">タイプ<select id="optFitType"></select></label>
-      <label id="optFitClassWrap" style="display:none">クラス<select id="optFitClass"></select></label>
       <label>呼び径<select id="optFitSize"></select></label>
+      <label id="optFitClassWrap" style="display:none">クラス<select id="optFitClass"></select></label>
       <label id="optFitSizeBWrap" style="display:none"><span id="optFitSizeBLabel">小径</span><select id="optFitSizeB"></select></label>
       <label id="optFitSchWrap">Sch<select id="optFitSch"></select></label>
     </div>
