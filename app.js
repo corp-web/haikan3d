@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0728-C';
+const APP_VER = 'v0728-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2974,7 +2974,7 @@ function beginMoveAfterOrigin(cx, cy) {
     const sh = planeHitAt(cx, cy, o.y);
     dirDrag = {
       part, sx: cx, sy: cy, startOrigin: o.clone(), startHit: sh ? sh.clone() : o.clone(),
-      planeY: o.y, dir: null, dist: 0, started: true, locked: true, hover: true,
+      planeY: o.y, dir: null, dist: 0, started: false, locked: true, hover: true, touching: true,
       group: moveGroupFor(part), primaryStartPos: part.position.clone(), annFollow: false,
     };
     if (window.__annHasSel && window.__annHasSel()) { window.__annMoveStart(); dirDrag.annFollow = true; }
@@ -5273,6 +5273,10 @@ window.addEventListener('pointermove', e => {
     if (r && r.p) movePickParked = r.p.clone();
   }
   else if (dirDrag && (!dirDrag.locked || dirDrag.hover)) {
+    // 起点を決めたあとのスライドは「指が触れている間」だけ動かす。タッチにはホバーが無く、
+    // 確定のタップでも pointermove が届くため、ここを塞がないと確定した瞬間に
+    // タップした方向へ動いてしまう（2026-07-28 社長指摘）。マウスは従来どおりホバーで動かす。
+    if (dirDrag.hover && e.pointerType !== 'mouse' && !dirDrag.touching) return;
     const moveTh = (e.pointerType !== 'mouse') ? 10 : 4;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらないように）
     if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > moveTh) dirDrag.started = true;
     dirDrag.vert = !!(e.shiftKey || touchShift);           // Shift＝Y方向（鉛直）移動（途中切替も可）
@@ -5295,6 +5299,8 @@ renderer.domElement.addEventListener('pointerdown', e => {
     moveReady = false;
     e.stopImmediatePropagation();
     beginMoveAfterOrigin(e.clientX, e.clientY);
+    // 押した記録を残す。続けてもう一度タップすればダブルタップ＝自由移動になる（2026-07-28 社長指摘）
+    _lastDownT = e.timeStamp; _lastDownX = e.clientX; _lastDownY = e.clientY; _lastDownPart = selectedPart;
     return;
   }
   if (movePickOrigin) {
@@ -5324,10 +5330,14 @@ renderer.domElement.addEventListener('pointerdown', e => {
              && Math.hypot(e.clientX - _lastDownX, e.clientY - _lastDownY) < 6
              && _lastDownPart === dirDrag.part;
     _lastDownT = e.timeStamp; _lastDownX = e.clientX; _lastDownY = e.clientY; _lastDownPart = dirDrag.part;
+    // 一度スライドして離したあとの指では動かさない（この指は「確定のタップ」なので、
+    // 触れた場所へ寄っていってはいけない。2026-07-28 社長指摘）
+    if (!dirDrag.slid) dirDrag.touching = true;        // この指が離れるまでがスライド
     if (dbl) {                                         // ダブルタップ＝自由移動へ
       _lastDownT = 0; _lastDownPart = null;
+      const dp = dirDrag.part;                         // ここで控えないと dirDrag を消した後に読めない
       dirDrag = null; clearMarkers();
-      startMovePart(dirDrag.part, e.clientX, e.clientY);
+      startMovePart(dp, e.clientX, e.clientY);
       movingByDrag = true; controls.enabled = false;
       return;
     }
@@ -5456,7 +5466,7 @@ window.addEventListener('pointerup', e => {
     return;
   }
   if (!dirDrag) return;
-  if (dirDrag.hover) return;   // スライド式の直線移動＝離しても確定しない（タップで確定する）
+  if (dirDrag.hover) { dirDrag.touching = false; if (dirDrag.started) dirDrag.slid = true; return; }   // スライド式の直線移動＝離しても確定しない（位置は据え置き。タップで確定する）
   controls.enabled = true;
   if (dirDrag.annFollow) window.__annMoveEnd();                    // 追従した線を現在位置で確定（スナップ解放）
   if (dirDrag.started) { dirDrag.locked = true; updateForm(); finishMoveCommand(); }   // 方向ロック→距離入力可。移動1回で「移動」コマンド終了（距離入力は続けて使える）
@@ -5508,6 +5518,9 @@ renderer.domElement.addEventListener('pointerup', e => {
     moveAnnPlace(e.clientX, e.clientY);   // タップした位置へ置いてから確定（タッチはホバーが無いため）
     dropAnnPlace();
   } else if (dirDrag && dirDrag.locked) {
+    // まだ一度も動かしていない＝確定するものが無い。ここで終わらせないので、
+    // 続けてダブルタップ／長押しで「自由移動」へ移れる（2026-07-28 社長指摘）
+    if (dirDrag.hover && !dirDrag.started) return;
     // 方向移動の確定待ち：タップで確定（位置はそのまま・距離入力は閉じる）。2026-07-20 社長要望
     const moved = dirDrag.part;
     dirDrag = null; clearMarkers(); _idleSig = null; updateForm();
@@ -8809,9 +8822,31 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // 「起点をタップして選ぶ」時の十字カーソルと吸着印（鏡・回転・移動から使う。2026-07-27 社長要望）。
   // 作図の1点目と同じ見え方＝どこに吸着するかが動かしている最中に分かる。戻り値 {p, snapped}
+  // 起点選びでは、選んでいる部品自身の機点を優先して拾う。
+  // エルボの工作点は面の点と画面上で数pxしか離れておらず、指で隠れると狙えないため、
+  // 半径を広げ、その部品の既定の起点（エルボなら工作点）に少し優先を与える（2026-07-28 社長指摘）
+  function originOwnPoint(cx, cy) {
+    const part = (typeof selectedPart !== 'undefined') ? selectedPart : null;
+    if (!part || !snapOn || !part.userData || !part.userData.faceLocal) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    const cam = activeCam();
+    const home = part.userData.cornerLocal || null;    // エルボ等の工作点＝いつもの起点
+    let best = null, bestScore = SNAP_PX * 1.8;
+    for (const local of connsOf(part)) {
+      const ndc = modelGroup.localToWorld(connModelPos(part, local)).project(cam);
+      if (ndc.z >= 1) continue;
+      const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
+      const sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+      const score = Math.hypot(sx - cx, sy - cy) - (local === home ? SNAP_PX : 0);
+      if (score < bestScore) { bestScore = score; best = connModelPos(part, local); }
+    }
+    return best;
+  }
   window.__originPickCursor = (cx, cy) => {
     clearLineGuide();
-    const r = pickFirstPoint(cx, cy);
+    let r = pickFirstPoint(cx, cy);
+    const own = originOwnPoint(cx, cy);
+    if (own) r = { p: own, snapped: true };
     showDrawSnapMarkers(r.snapped ? r.p : null);
     if (r.p) guideCross(r.p, r.snapped ? 0x39ff8a : 0x49c5ff);
     if (r.p && r.snapped) snapDot(r.p);
