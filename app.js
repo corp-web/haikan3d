@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-C';
+const APP_VER = 'v0727-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1891,6 +1891,11 @@ function vHandwheel(R, mat) {
   nut.rotation.x = Math.PI / 2; nut.position.z = R * 0.22; g.add(nut);             // ステムナット（六角）
   return g;
 }
+// レバー式バルブ（ボール・バタフライ）の首（ステム）の高さ。
+// 社長指示（2026-07-27）＝「各フランジの高さよりほんの少し長いくらい」。
+// 軸からフランジの縁までの高さ＝フランジ外径Dの半分。そこへ呼び径に応じた小さな逃げを足す。
+// Dは呼び径とクラスで決まるので、どの呼び径・クラスでもレバーが必ずフランジを越える。
+function vLeverStemTop(D, sizeA) { return VMM(D) / 2 + VMM(8 + _vdn(sizeA) * 0.06); }
 // レバーハンドル（ボール弁・バタフライ弁 共通）。流れ軸(Y)と直角＝「閉」の姿勢で +X 側へ出す。
 //   D=フランジ外径(m) を目安に長さを決める／stemZ=ステム頂部のZ／rPipe=管半径(m)
 // ※流れ方向に寝かせると長さが面間を越えて両端フランジに食い込む（2026-07-27 社長指摘）
@@ -1972,7 +1977,8 @@ function makeValve(opts) {
       // ボール弁：レバーハンドル（平棒）＋短ステム。
       // レバーは流れ軸(Y)と直角＝「閉」の姿勢を既定にする（2026-07-27 社長指示）。
       // 従来は流れ方向に寝ていたため、長さが面間を越えて両端フランジに食い込んでいた。
-      const stemTop = bodyR + VMM(8 + od * 0.18);
+      // 首＝フランジの縁よりほんの少し上（2026-07-27 社長要望）。旧＝bodyR + VMM(8 + od*0.18)
+      const stemTop = Math.max(vLeverStemTop(D, sizeA), bodyR + VMM(10));
       g.add(vCylZ(rPipe * 0.28, bodyR * 0.7, stemTop, opMat));
       g.add(vLever(VMM(D), rPipe, stemTop, opMat));
     } else {
@@ -2021,7 +2027,8 @@ function makeValve(opts) {
     const disc = new THREE.Mesh(new THREE.CylinderGeometry(discR * 0.92, discR * 0.92, VMM(_vdn(sizeA) * 0.08 + 3), 36), opMat);
     g.add(disc);                                                                // ディスク（流れに直角＝閉。レバーの姿勢と合わせる）
     if (!wafer) { const f1 = valveEndFlange(cls, sizeA, bodyMat, true); f1.position.y = halfL; g.add(f1); const f2 = valveEndFlange(cls, sizeA, bodyMat, true); f2.position.y = -halfL; f2.rotation.x = Math.PI; g.add(f2); }   // ハブ無し（面間が短く大口径でハブが突き抜けるため）
-    const stemTop = discR + VMM(_vdn(sizeA) * 0.2 + 10);
+    // 首はボール弁と同じ＝フランジの縁よりほんの少し上（ウエハー形も相手フランジは同じ大きさなので揃える）
+    const stemTop = Math.max(vLeverStemTop(D, sizeA), discR + VMM(10));
     g.add(vCylZ(rPipe * 0.2, discR * 0.9, stemTop, opMat));
     // ハンドルはボール弁と同じレバー（流れに直角＝閉）。ギヤボックス＋ハンドル車は廃止（2026-07-27 社長指示）
     g.add(vLever(VMM(D), rPipe, stemTop, opMat));
