@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-K';
+const APP_VER = 'v0727-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -131,14 +131,11 @@ const SCREEN_EDGE_COLOR = 0x1a2029;   // 画面の外形線＝墨色（紙の真
 const SCREEN_EDGE_OPT = { edgeColor: SCREEN_EDGE_COLOR, edgeAlpha: 0.85, ao: 0.62, aoRadius: 5.0 };
 window.__edgeTune = (o) => Object.assign(SCREEN_EDGE_OPT, o);   // 見比べ・テスト用
 let screenSilhouette = null;
-let showEdges = true;                 // 既定ON。重い端末のために設定⚙で消せる
-try { showEdges = localStorage.getItem('p3d_show_edge') !== '0'; } catch (e) {}
+// 常時ON（2026-07-27 社長判断：切る場面が無いので設定から外した）。
+// 変数とフックは検証用に残す＝重い端末で切り分けたい時は __edgeSet(false) で消せる。
+let showEdges = true;
 window.__edgeOn = () => showEdges;
-window.__edgeSet = (v) => {
-  showEdges = !!v;
-  const cb = document.getElementById('setEdge'); if (cb) cb.checked = showEdges;
-  try { localStorage.setItem('p3d_show_edge', showEdges ? '1' : '0'); } catch (e) {}
-};
+window.__edgeSet = (v) => { showEdges = !!v; };
 
 // ---- モデル空間（配管はここに入れる） ----
 const modelGroup = new THREE.Group();
@@ -2933,20 +2930,27 @@ let followParked = null;      // タッチ：直近にドラッグして離し�
 // 1回の移動を終えるとコマンドは自動で終了する。作図ツール・部品配置を始めた時も自動解除（コマンドは排他）。
 // 対象は部品・線分・寸法・文字すべて（2026-07-16 線・寸法もゲート）。コマンド外ではドラッグしても動かない
 // （部品は視点操作になる。選択・起点選択・パイプ端/線端の伸縮・寸法の逃げ調整・円の半径変更・EL入力は常時可）。
+// リボンのコマンドは同時に1つだけ点灯させる（2026-07-27 社長要望）。
+// 別のコマンドを押したら前のコマンドは解除し、後から押した方へ切り替える。
+// keep には「今から入るコマンド」を渡す。ONにする時だけ呼ぶこと（OFF時に呼ぶと再帰する）。
+function clearOtherCommands(keep) {
+  if (keep !== 'place') stopFollow();
+  if (keep !== 'move' && typeof moveMode !== 'undefined' && moveMode) setMoveMode(false);
+  if (keep !== 'hide' && typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);
+  if (keep !== 'draw' && window.__exitDrawMode) window.__exitDrawMode();
+  if (keep !== 'pending' && window.__clearPendingCmd) window.__clearPendingCmd();
+  if (keep !== 'mirror' && window.__mirrorCancel) window.__mirrorCancel();
+  if (keep !== 'rotate' && window.__rotateCancel) window.__rotateCancel();
+  if (keep !== 'detail' && window.__detailFrameEnd) window.__detailFrameEnd();
+}
 let moveMode = false;   // true=「移動」コマンド実行待ち
 function setMoveMode(on) {
   moveMode = !!on;
   const b = document.getElementById('cmdMove');
   if (b) b.classList.toggle('active', moveMode);
   if (moveMode) {
-    stopFollow();                                       // 部品配置の追従を解除（排他）
-    if (window.__exitDrawMode) window.__exitDrawMode(); // 作図ツールも解除（排他）
-    if (window.__clearPendingCmd) window.__clearPendingCmd();   // 複製・鏡・回転の待ち受けも解除（排他）
-    if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
-    const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);   // 部品＋線・寸法の選択数
-    if (window.__toast) window.__toast(nSel
-      ? '移動：そのままドラッグで動かせます（1回動かすと終了）'
-      : '移動：動かすアイテムをタップで選び、ドラッグで動かしてください（1回で終了）');
+    clearOtherCommands('move');                         // 他のコマンドは解除（同時に光らせない）
+    if (window.__toast) window.__toast('移動：オブジェクトを選択してください。そのままドラッグで直線移動、長押し又はダブルタップで自由移動');
   } else {
     if (movingPart) dropMovingPart();                   // 進行中の自由移動は現在位置で確定
     if (dirDrag && !dirDrag.locked) { dirDrag = null; controls.enabled = true; clearMarkers(); updateForm(); }   // 距離入力(locked)中は生かす
@@ -2968,7 +2972,7 @@ let annFollowMove = false;    // 部品の集団移動に、窓選択した線�
 let annPlaceMode = null;      // { ref: V3 }  掴んだ時点の選択中心
 function startAnnPlace() {
   if (!(window.__annHasSel && window.__annHasSel())) return false;
-  const c = window.__annSelCenter && window.__annSelCenter();
+  const c = (window.__annSelGrip && window.__annSelGrip()) || (window.__annSelCenter && window.__annSelCenter());
   if (!c) return false;
   window.__annMoveStart();
   annPlaceMode = { ref: c.clone() };
@@ -2976,13 +2980,18 @@ function startAnnPlace() {
 }
 function moveAnnPlace(cx, cy) {
   if (!annPlaceMode) return;
-  const hit = planeHitAt(cx, cy, annPlaceMode.ref.y);
-  if (!hit) return;
-  window.__annMoveApply(hit.x - annPlaceMode.ref.x, 0, hit.z - annPlaceMode.ref.z);   // 高さは変えず水平に置く
+  // スナップONなら機点・交点などへ吸着させる（2026-07-27 社長要望：複製の移動でもスナップさせたい）。
+  // 基準は「選択した先頭の注釈の端点a」＝その点が吸着先に乗る。
+  const tgt = resolveTarget(cx, cy, null, annPlaceMode.ref.y);
+  if (!tgt) return;
+  const d = tgt.point.clone().sub(annPlaceMode.ref);
+  window.__annMoveApply(d.x, d.y, d.z);
+  clearMarkers();
+  if (tgt.snapped) addSnapMarker(tgt.point, markerRadiusFor(null, true));   // 吸着した点を見せる
 }
 function dropAnnPlace() {
   if (!annPlaceMode) return;
-  window.__annMoveEnd(); annPlaceMode = null;
+  window.__annMoveEnd(); annPlaceMode = null; clearMarkers();
   if (window.__scheduleHistory) window.__scheduleHistory();
 }
 function cancelAnnPlace() {
@@ -3673,9 +3682,7 @@ function orientRotation(obj, dirIdx, rollIdx) {
 
 // 追従開始：本物の3Dフランジを半透明でマウスに追従させる
 function startFollow(tool, tile, x, y) {
-  if (window.__exitDrawMode) window.__exitDrawMode();   // 部品配置を始めたら描画モードは解除
-  if (moveMode) setMoveMode(false);                     // 「移動」コマンドも解除（排他）
-  if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
+  clearOtherCommands('place');   // 他のコマンドは解除（同時に光らせない）
   stopFollow();
   followTool = { tool, tile };
   { const _p = defaultPose(tool); followOrient = _p.dir; followRoll = _p.roll; }   // 挿入時の既定姿勢（DEFAULT_POSE）
@@ -4508,6 +4515,7 @@ function groupSelection() {
   for (const p of parts) p.userData.groupId = gid;
   if (window.__annSetGroup) window.__annSetGroup(gid);
   refreshItemList();
+  if (window.__toast) window.__toast('グループにしました');
 }
 function ungroupSelection() {
   const gids = new Set();
@@ -4517,6 +4525,7 @@ function ungroupSelection() {
   for (const p of placedParts) if (gids.has(p.userData.groupId)) p.userData.groupId = null;
   if (window.__annClearGroupIds) window.__annClearGroupIds(gids);
   refreshItemList();
+  if (window.__toast) window.__toast('グループを解除しました');
 }
 // Ctrl+クリック：対象を選択集合に出し入れする（主選択 selectedPart も更新）
 function toggleSelect(obj) {
@@ -4601,9 +4610,7 @@ function hideCommand() {   // リボン「非表示」ボタン
     const n = hideSelectedObjects();
     if (window.__toast) window.__toast('非表示：' + n + '件を隠しました（「再表示」で戻せます）');
   } else {
-    stopFollow();                                        // 部品配置の追従を解除（コマンドは排他）
-    if (window.__exitDrawMode) window.__exitDrawMode();  // 作図ツールも解除
-    if (moveMode) setMoveMode(false);                    // 「移動」コマンドも解除
+    clearOtherCommands('hide');                          // 他のコマンドは解除（同時に光らせない）
     setHideArmed(true);
     if (window.__toast) window.__toast('非表示：隠すアイテムをタップしてください（1回で終了・Esc/再押下で取消）');
   }
@@ -5228,6 +5235,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (ctrlish && !moveMode) return;                     // Ctrl+クリックは複数選択トグル → pointerup で処理
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
+  if (annPlaceMode) return;   // 複製した線・寸法を置いている最中＝タップは「確定」なので部品を掴まない
   // パイプ端の優先掴み：選択中がパイプで、その端の近く(16px)を押したら、
   // 重なる他部品(フランジ等)より優先してパイプ端を掴む（起点が取れない問題の対策）。
   if (!ctrlish && selectedPart && selectedPart.userData.partType === 'pipe' && selectedParts.size <= 1) {
@@ -6116,6 +6124,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let pendingCmd = null;                          // 'dup' | 'mirror' | 'rotate' | null
   const PENDING_BTN = { dup: 'cmdDup', mirror: 'cmdMirror', rotate: 'cmdRotate' };
   function setPendingCmd(name, msg) {
+    if (name && typeof clearOtherCommands === 'function') clearOtherCommands('pending');   // 他のコマンドは解除
     pendingCmd = name || null;
     for (const k of Object.keys(PENDING_BTN)) {
       const b = $(PENDING_BTN[k]); if (b) b.classList.toggle('active', pendingCmd === k);
@@ -6196,6 +6205,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.domElement.style.cursor = '';
   }
   window.__mirrorActive = () => !!mirrorMode;   // 鏡モード中は各種入力フォームを隠す用
+  window.__mirrorCancel = () => { if (mirrorMode) endMirrorMode(); };   // 他コマンドへ切替える時の取消
   // 点 p を通り法線 n（単位・水平）の鉛直面で反転する行列
   function reflectMatrixAbout(p, n) {
     const m = new THREE.Matrix4().set(
@@ -6235,8 +6245,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const parts = [...selectedParts], anns = [...selAnns];
     if (!parts.length && !anns.length) { setPendingCmd('rotate', '回転：回すアイテムをタップで選んでください'); return; }
     setPendingCmd(null);
+    if (typeof clearOtherCommands === 'function') clearOtherCommands('rotate');   // 他のコマンドは解除
     rotateMode = { parts, anns, p1: null, ang: 0 };
     renderer.domElement.style.cursor = DRAW_CURSOR;
+    if (window.__toast) window.__toast('回転：回転の起点（中心）をタップしてください');
   }
   function rotAngleFrom(cx, cy, shift) {
     const p1 = rotateMode.p1;
@@ -6374,8 +6386,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const parts = [...selectedParts], anns = [...selAnns];
     if (!parts.length && !anns.length) { setPendingCmd('mirror', '鏡：反転するアイテムをタップで選んでください'); return; }
     setPendingCmd(null);
+    if (typeof clearOtherCommands === 'function') clearOtherCommands('mirror');   // 他のコマンドは解除
     mirrorMode = { parts, anns, p1: null };
-    renderer.domElement.style.cursor = DRAW_CURSOR;       // モード表示はカーソルのみ（メッセージ画面は出さない）
+    renderer.domElement.style.cursor = DRAW_CURSOR;
+    // 次に何をすればよいか分かるように案内する（2026-07-27 社長要望：起点を選ぶワンタップを明示）
+    if (window.__toast) window.__toast('鏡：反転の起点（基準点）をタップしてください');
   }
   // 鏡の変換行列を求める。カーソルが指す方向（45°刻み）へ反転（鉛直面での鏡映）。
   // ※Shift の特殊機能は廃止（2026-06-13 社長指示）
@@ -6427,7 +6442,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // 「オブジェクトを削除しますか？ はい／いいえ」の小パネル（オブジェクトの手元に表示）
   const mirrorAsk = document.createElement('div');
-  mirrorAsk.style.cssText = 'position:fixed;z-index:90;display:none;flex-direction:column;gap:6px;padding:8px 12px;font:13px Meiryo,sans-serif;color:#e8eef7;background:rgba(16,24,42,.95);border:1px solid #3a4a6e;border-radius:8px';
+  // 見た目は他の入力フォームに合わせる（2026-07-27 社長要望：濃い紺色をやめる）
+  mirrorAsk.className = 'valForm';
+  mirrorAsk.style.cssText = 'position:fixed;z-index:90;display:none;flex-direction:column;gap:6px;';
   const mirrorAskText = document.createElement('div');
   mirrorAskText.textContent = 'オブジェクトを削除しますか？';
   mirrorAsk.appendChild(mirrorAskText);
@@ -6436,7 +6453,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const mkAskBtn = (label) => {
     const b = document.createElement('button');
     b.textContent = label;
-    b.style.cssText = 'min-width:56px;padding:3px 10px;font:13px Meiryo,sans-serif;cursor:pointer;background:#22305a;color:#e8eef7;border:1px solid #41538a;border-radius:5px';
+    b.className = 'valBtn';
+    b.style.cssText = 'min-width:56px;';
     return b;
   };
   const mirrorAskYes = mkAskBtn('はい'), mirrorAskNo = mkAskBtn('いいえ');
@@ -6665,9 +6683,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function toast(msg) {
     if (!_toastEl) {
       _toastEl = document.createElement('div');
-      _toastEl.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:120;' +
-        'padding:7px 16px;font:bold 13px Meiryo,sans-serif;color:#fff;background:rgba(20,30,55,.92);' +
-        'border:1px solid #3c5a9e;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.35);pointer-events:none;display:none;white-space:nowrap';
+      _toastEl.id = '__toast';
+      // 案内（トースト）は詳細図のヒントと同じ配色に統一（2026-07-27 社長要望）。色は .hintBox に任せる
+      _toastEl.className = 'hintBox';
+      _toastEl.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:120;display:none;';
       document.body.appendChild(_toastEl);
     }
     _toastEl.textContent = msg;
@@ -7470,10 +7489,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   detailBoxEl.style.cssText = 'position:fixed;z-index:88;display:none;border:1.5px dashed #2f7bff;background:rgba(47,123,255,.10);pointer-events:none';
   document.body.appendChild(detailBoxEl);
   const detailHint = document.createElement('div');
-  detailHint.style.cssText = 'position:fixed;z-index:88;display:none;left:50%;top:54px;transform:translateX(-50%);padding:5px 14px;font:bold 12px Meiryo,sans-serif;color:#fff;background:rgba(31,90,180,.94);border-radius:8px;pointer-events:none;white-space:nowrap';
+  detailHint.className = 'hintBox';
+  detailHint.style.cssText = 'position:fixed;z-index:88;display:none;left:50%;top:54px;transform:translateX(-50%);';
   detailHint.textContent = '拡大したい所を枠で囲んでください（囲んだ形が拡大図になります）';
   document.body.appendChild(detailHint);
   function startDetailFrame() {
+    if (typeof clearOtherCommands === 'function') clearOtherCommands('detail');   // 他のコマンドは解除
     if (detailFrame) { endDetailFrame(); return; }
     detailFrame = { down: null };
     renderer.domElement.style.cursor = 'crosshair';
@@ -7490,6 +7511,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     updateDetailBtn();
   }
   window.__detailFrameActive = () => !!detailFrame;
+  window.__detailFrameEnd = () => { if (detailFrame) endDetailFrame(); };   // 他コマンドへ切替える時の取消
   window.addEventListener('pointerdown', e => {
     if (!detailFrame || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
@@ -8369,9 +8391,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof clearDrawTemp === 'function') clearDrawTemp();
     if (window.__resetDrawPointers) window.__resetDrawPointers();   // 開始/終了とも本数カウンタを白紙に（残留＝フリーズ）
     if (!turningOff) {
-      stopFollow();
-      if (typeof moveMode !== 'undefined' && moveMode) setMoveMode(false);   // 作図を始めたら「移動」コマンドは解除（排他）
-      if (typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);   // 「非表示」コマンドも解除（排他）
+      if (typeof clearOtherCommands === 'function') clearOtherCommands('draw');   // 他のコマンドは解除（同時に光らせない）
       selectPart(null);
       drawState.mode = mode;
       renderer.domElement.style.cursor = DRAW_CURSOR;
@@ -9702,6 +9722,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   window.__annHasSel = () => selAnns.size > 0;
   // 選択中の注釈の中心（掴んで置く時の基準点）
+  // 掴んで置く時の基準点＝選択した先頭の注釈の端点a（ここが吸着先に乗る）
+  window.__annSelGrip = () => { for (const r of selAnns) return r.a.clone(); return null; };
   window.__annSelCenter = () => {
     if (!selAnns.size) return null;
     const c = new THREE.Vector3(); let n = 0;
@@ -11373,8 +11395,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const cbG = document.getElementById('setGround');
     const cbB = document.getElementById('setBolt'), cbQ = document.getElementById('setQuad');
     const cbAG = document.getElementById('setAutoGsk');
-    const cbE = document.getElementById('setEdge');
-    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; if (cbB) cbB.checked = showBoltPts; if (cbQ) cbQ.checked = showQuadPts; if (cbE) cbE.checked = showEdges; if (cbAG) cbAG.checked = autoGasket; };
+    const syncSet = () => { if (cbS) cbS.checked = snapOn; if (cbN) cbN.checked = nearSnapOn; if (cbO) cbO.checked = showOriginPts; if (cbX) cbX.checked = showXpts; if (cbG) cbG.checked = showGround; if (cbB) cbB.checked = showBoltPts; if (cbQ) cbQ.checked = showQuadPts; if (cbAG) cbAG.checked = autoGasket; };
     const closeSet = () => { _setMenu.style.display = 'none'; _bSet.classList.remove('active'); };
     _bSet.onclick = () => {
       const open = _setMenu.style.display !== 'block';
@@ -11394,7 +11415,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbG) cbG.addEventListener('change', () => { showGround = cbG.checked; applyGround(); });
     if (cbB) cbB.addEventListener('change', () => { showBoltPts = cbB.checked; _idleSig = null; try { localStorage.setItem('p3d_show_boltpt', showBoltPts ? '1' : '0'); } catch (e) {} });
     if (cbQ) cbQ.addEventListener('change', () => { showQuadPts = cbQ.checked; _idleSig = null; try { localStorage.setItem('p3d_show_quad', showQuadPts ? '1' : '0'); } catch (e) {} });
-    if (cbE) cbE.addEventListener('change', () => { window.__edgeSet(cbE.checked); });   // 記憶も __edgeSet 側で行う
     if (cbAG) cbAG.addEventListener('change', () => { autoGasket = cbAG.checked; try { localStorage.setItem('p3d_auto_gasket', autoGasket ? '1' : '0'); } catch (e) {} });
     document.addEventListener('pointerdown', e => {
       if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
