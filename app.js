@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0728-A';
+const APP_VER = 'v0728-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2958,7 +2958,9 @@ function setGripFromPoint(part, pt) {
   if (part.userData.partType === 'pipe') { pipeEndSel = null; pipeLenSticky = false; }   // パイプの端指定より起点を優先
   return true;
 }
-let movePicking = false;           // 起点を選んでいる最中（指を置いてから離すまで）
+let movePicking = false;           // 起点の位置決め中（指を置いてから離すまで）
+let movePickAwait = false;         // 位置は決まり、確定のタップ待ち（カーソルは出したまま）
+let movePickParked = null;         // 離した所（＝これから起点にする点）
 let movePickCursorShown = false;   // 起点の十字を出したまま指を離すのを待っている
 // 起点が決まったら、そのまま「掴んだ状態」にする＝スライドで動かし、タップで確定（鏡・回転と同じ流れ）
 function beginMoveAfterOrigin(cx, cy) {
@@ -2982,7 +2984,7 @@ function beginMoveAfterOrigin(cx, cy) {
 }
 function endMovePickOrigin(keepCursor) {
   if (!movePickOrigin) return;
-  movePickOrigin = false;
+  movePickOrigin = false; movePickAwait = false; movePickParked = null;
   if (keepCursor) { movePickCursorShown = true; return; }   // 押している間はカーソルを残す
   if (window.__originPickClear) window.__originPickClear();
 }
@@ -5264,7 +5266,10 @@ window.addEventListener('pointermove', e => {
     moveExistingPart(e.clientX, e.clientY);
   }
   else if (annPlaceMode) { moveAnnPlace(e.clientX, e.clientY); }   // 線・寸法だけを掴んで置いている最中
-  else if (movePickOrigin && window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);   // 移動：起点を選んでいる最中
+  else if (movePickOrigin && window.__originPickCursor) {   // 移動：起点の位置決め中（確定待ちでも動かせる）
+    const r = window.__originPickCursor(e.clientX, e.clientY);
+    if (r && r.p) movePickParked = r.p.clone();
+  }
   else if (dirDrag && (!dirDrag.locked || dirDrag.hover)) {
     const moveTh = (e.pointerType !== 'mouse') ? 10 : 4;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらないように）
     if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > moveTh) dirDrag.started = true;
@@ -5285,11 +5290,47 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
   if (annPlaceMode) return;   // 複製した線・寸法を置いている最中＝タップは「確定」なので部品を掴まない
   if (movePickOrigin) {
-    // 移動：押した時は十字カーソルを見せるだけ。起点は指を離した所で決める（鏡・回転と同じ流れ）
-    movePicking = true;
-    if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+    // 移動：①指でカーソルの位置を決める（押す→動かす→離す。離した所にカーソルは残る）
+    //       ②もう一度タップで起点を確定（2026-07-28 社長指示）
     e.stopImmediatePropagation();
+    if (movePickAwait) {                       // ②確定のタップ
+      movePickAwait = false; movePicking = false;
+      const pt = movePickParked ? movePickParked.clone() : null;
+      endMovePickOrigin();
+      if (pt && selectedPart) setGripFromPoint(selectedPart, pt);
+      _idleSig = null; updateForm();
+      beginMoveAfterOrigin(e.clientX, e.clientY);
+      return;
+    }
+    movePicking = true;                        // ①位置決め開始
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    if (r && r.p) movePickParked = r.p.clone();
     return;
+  }
+  if (dirDrag && dirDrag.hover) {
+    // 起点を決めたあとのスライド移動中。押しただけでは位置をやり直さない
+    //（やり直すと、せっかく合わせた距離が押した瞬間に消える）。
+    // ここは isDbl の宣言より前なので、ダブルタップ判定は自前で行う
+    const dbl = (e.timeStamp - _lastDownT < 350)
+             && Math.hypot(e.clientX - _lastDownX, e.clientY - _lastDownY) < 6
+             && _lastDownPart === dirDrag.part;
+    _lastDownT = e.timeStamp; _lastDownX = e.clientX; _lastDownY = e.clientY; _lastDownPart = dirDrag.part;
+    if (dbl) {                                         // ダブルタップ＝自由移動へ
+      _lastDownT = 0; _lastDownPart = null;
+      dirDrag = null; clearMarkers();
+      startMovePart(dirDrag.part, e.clientX, e.clientY);
+      movingByDrag = true; controls.enabled = false;
+      return;
+    }
+    clearTimeout(freeHoldTimer);                       // 長押し（0.5秒）＝自由移動へ
+    const hx = e.clientX, hy = e.clientY, hp = dirDrag.part;
+    freeHoldTimer = setTimeout(() => {
+      if (!dirDrag || !dirDrag.hover || movingPart) return;
+      dirDrag = null; clearMarkers();
+      startMovePart(hp, hx, hy);
+      movingByDrag = true; moveHoldTap = true;         // 動かさず離したら「タップで確定」へ
+    }, 500);
+    return;                                            // 短いタップは pointerup 側で「確定」になる
   }
   // パイプ端の優先掴み：選択中がパイプで、その端の近く(16px)を押したら、
   // 重なる他部品(フランジ等)より優先してパイプ端を掴む（起点が取れない問題の対策）。
@@ -5327,26 +5368,6 @@ renderer.domElement.addEventListener('pointerdown', e => {
       resetPipeRotState();
       _idleSig = null; updateForm(); refreshItemList();
     }
-  }
-  if (dirDrag && dirDrag.hover) {
-    // 起点を決めたあとのスライド移動中。押しただけでは位置をやり直さない
-    //（やり直すと、せっかく合わせた距離が押した瞬間に消える）。
-    if (isDbl) {                                       // ダブルタップ＝自由移動へ
-      _lastDownT = 0; _lastDownPart = null;
-      dirDrag = null; clearMarkers();
-      startMovePart(part, e.clientX, e.clientY);
-      movingByDrag = true; controls.enabled = false;
-      return;
-    }
-    clearTimeout(freeHoldTimer);                       // 長押し（0.5秒）＝自由移動へ
-    const hx = e.clientX, hy = e.clientY, hp = part;
-    freeHoldTimer = setTimeout(() => {
-      if (!dirDrag || !dirDrag.hover || movingPart) return;
-      dirDrag = null; clearMarkers();
-      startMovePart(hp, hx, hy);
-      movingByDrag = true; moveHoldTap = true;         // 動かさず離したら「タップで確定」へ
-    }, 500);
-    return;                                            // 短いタップは pointerup 側で「確定」になる
   }
   if (isDbl && moveMode) {                             // 自由移動も「移動」コマンドON時のみ
     _lastDownT = 0; _lastDownPart = null;              // 3連クリックの誤検出を防ぐためリセット
@@ -5401,14 +5422,11 @@ renderer.domElement.addEventListener('pointerdown', e => {
 }, true);
 window.addEventListener('pointerup', e => {
   if (e.button !== 0) return;
-  if (movePicking) {             // 移動：離した所を起点にして、掴んだ状態へ進む
-    movePicking = false;
+  if (movePicking) {             // 移動：離した所にカーソルを残し、確定のタップを待つ
+    movePicking = false; movePickAwait = true;
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
-    const pt = r && r.p ? r.p.clone() : null;
-    endMovePickOrigin();
-    if (pt && selectedPart) setGripFromPoint(selectedPart, pt);
-    _idleSig = null; updateForm();
-    beginMoveAfterOrigin(e.clientX, e.clientY);
+    if (r && r.p) movePickParked = r.p.clone();
+    if (window.__toast) window.__toast('移動：この位置でよければタップして起点を確定してください');
     return;
   }
   if (movePickCursorShown) {     // 起点選びの十字を片付ける（ドラッグ中はガイド側が上書きする）
@@ -5606,7 +5624,7 @@ window.addEventListener('keydown', e => {
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
     else if (annPlaceMode) cancelAnnPlace();
-    else if (movePickOrigin || movePicking) { movePicking = false; endMovePickOrigin(); }
+    else if (movePickOrigin || movePicking) { movePicking = false; movePickAwait = false; endMovePickOrigin(); }
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
     if (moveMode) setMoveMode(false);   // Esc＝「移動」コマンドも取消（進行中の移動は上で取消済み）
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -6440,38 +6458,46 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 起点を選ぶ間は十字カーソルを出す（どこに吸着するか見える）。2026-07-27 社長要望
   window.addEventListener('pointermove', e => {
     if (!rotateMode || rotateMode.p1) return;
-    if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    if (r && r.p) rotateMode.parked = r.p.clone();
   });
   window.addEventListener('pointerdown', e => {
     if (!rotateMode || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
     e.stopImmediatePropagation(); e.preventDefault();
-    if (!rotateMode.p1) {                                  // ①回転の中心＝押した時点では十字カーソルを出すだけ
-      // タッチにはホバーが無く、押した瞬間に確定するとカーソルが一度も見えない。
-      // 「押して見せる → 指を動かして合わせる → 離して決める」にする（2026-07-27 社長要望）
+    if (!rotateMode.p1) {                                  // ①回転の中心
+      // ①指でカーソルの位置を決める（押す→動かす→離す。離した所にカーソルは残る）
+      // ②もう一度タップで起点を確定（2026-07-28 社長指示）
+      if (rotateMode.await) { commitRotateOrigin(e.clientX, e.clientY); return; }
       rotateMode.picking = true;
-      if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+      const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+      if (r && r.p) rotateMode.parked = r.p.clone();
     } else {                                               // ②角度を確定
       const deg = rotAngleFrom(e.clientX, e.clientY, e.shiftKey || touchShift);
       execRotate(deg == null ? (parseFloat(rotCmdA.value) || 0) : deg);
     }
   }, true);
-  // 起点は指を離した所で決める（押した時点ではカーソルを見せるだけ）
-  window.addEventListener('pointerup', e => {
-    if (!rotateMode || e.button !== 0 || rotateMode.p1 || !rotateMode.picking) return;
-    rotateMode.picking = false;
-    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
-    const p = r && r.p ? r.p.clone() : null;
+  // 起点＝カーソルを離した所に残し、次のタップで確定する
+  function commitRotateOrigin(cx, cy) {
+    const p = rotateMode.parked ? rotateMode.parked.clone() : null;
     if (!p) return;
+    rotateMode.await = false; rotateMode.picking = false;
     rotateMode.p1 = p;
     if (window.__originPickClear) window.__originPickClear();
-    const hit = planeHitAt(e.clientX, e.clientY, p.y);
+    const hit = planeHitAt(cx, cy, p.y);
     rotateMode.base = hit ? -Math.atan2(hit.z - p.z, hit.x - p.x) * 180 / Math.PI : 0;   // この向きを0°とする
     rotateMode.ang = 0;
     rotCmdA.value = '0';
     buildRotatePreview(0);
     showRotBox();
     if (window.__toast) window.__toast('回転：角度を決めてタップ（45°刻み・Shiftで5°／数値入力も可）');
+  }
+  window.addEventListener('pointerup', e => {
+    if (!rotateMode || e.button !== 0 || rotateMode.p1 || !rotateMode.picking) return;
+    rotateMode.picking = false; rotateMode.await = true;
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    if (r && r.p) rotateMode.parked = r.p.clone();
+    if (window.__toast) window.__toast('回転：この位置でよければタップして起点を確定してください');
   }, true);
   window.addEventListener('pointermove', e => {
     if (!rotateMode || !rotateMode.p1) return;
@@ -6642,32 +6668,40 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 鏡モード中のポインタ・キー操作（他のハンドラより先に捕捉して横取りを防ぐ）
   window.addEventListener('pointermove', e => {
     if (!mirrorMode || mirrorMode.p1) return;
-    if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    if (r && r.p) mirrorMode.parked = r.p.clone();
   });
   window.addEventListener('pointerdown', e => {
     if (!mirrorMode || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
     e.stopImmediatePropagation(); e.preventDefault();
-    if (!mirrorMode.p1) {                                  // ①起点＝押した時点では十字カーソルを出すだけ
+    if (!mirrorMode.p1) {                                  // ①起点（位置決め → もう一度タップで確定）
+      if (mirrorMode.await) { commitMirrorOrigin(); return; }
       mirrorMode.picking = true;
-      if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+      const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+      if (r && r.p) mirrorMode.parked = r.p.clone();
     } else {                                               // ②方向 → 実行
       const r = mirrorXformFrom(e.clientX, e.clientY);
       if (r) execMirror(r.M);
     }
   }, true);
-  window.addEventListener('pointerup', e => {
-    if (!mirrorMode || e.button !== 0 || mirrorMode.p1 || !mirrorMode.picking) return;
-    mirrorMode.picking = false;
-    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
-    const p = r && r.p ? r.p.clone() : null;
+  function commitMirrorOrigin() {
+    const p = mirrorMode.parked ? mirrorMode.parked.clone() : null;
     if (!p) return;
+    mirrorMode.await = false; mirrorMode.picking = false;
     mirrorMode.p1 = p;
     if (window.__originPickClear) window.__originPickClear();
     clearMirrorGuide();
     mirrorMode.previewKey = 'mir:1.000,0.000';
     buildMirrorPreview(reflectMatrixAbout(p, new V3(1, 0, 0)));   // 初期＝X方向へ反転
     if (window.__toast) window.__toast('鏡：反転する方向をタップしてください（45°刻み）');
+  }
+  window.addEventListener('pointerup', e => {
+    if (!mirrorMode || e.button !== 0 || mirrorMode.p1 || !mirrorMode.picking) return;
+    mirrorMode.picking = false; mirrorMode.await = true;
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    if (r && r.p) mirrorMode.parked = r.p.clone();
+    if (window.__toast) window.__toast('鏡：この位置でよければタップして起点を確定してください');
   }, true);
   window.addEventListener('pointermove', e => {
     if (!mirrorMode) return;
