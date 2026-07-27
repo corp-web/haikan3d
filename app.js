@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-N';
+const APP_VER = 'v0728-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2958,7 +2958,28 @@ function setGripFromPoint(part, pt) {
   if (part.userData.partType === 'pipe') { pipeEndSel = null; pipeLenSticky = false; }   // パイプの端指定より起点を優先
   return true;
 }
+let movePicking = false;           // 起点を選んでいる最中（指を置いてから離すまで）
 let movePickCursorShown = false;   // 起点の十字を出したまま指を離すのを待っている
+// 起点が決まったら、そのまま「掴んだ状態」にする＝スライドで動かし、タップで確定（鏡・回転と同じ流れ）
+function beginMoveAfterOrigin(cx, cy) {
+  const part = selectedPart;
+  if (part) {
+    // 押しっぱなしにしなくてもスライドで動かせる直線移動（hover）。
+    // 45°刻み・距離入力欄・Shiftの鉛直移動は従来どおり使える。タップで確定。
+    const o = originModelPos(part);
+    const sh = planeHitAt(cx, cy, o.y);
+    dirDrag = {
+      part, sx: cx, sy: cy, startOrigin: o.clone(), startHit: sh ? sh.clone() : o.clone(),
+      planeY: o.y, dir: null, dist: 0, started: true, locked: true, hover: true,
+      group: moveGroupFor(part), primaryStartPos: part.position.clone(), annFollow: false,
+    };
+    if (window.__annHasSel && window.__annHasSel()) { window.__annMoveStart(); dirDrag.annFollow = true; }
+    controls.enabled = false;
+    if (window.__toast) window.__toast('移動：スライドで方向と距離を決め、タップで確定してください（Shiftで鉛直・Escで取消）');
+  } else if (window.__annHasSel && window.__annHasSel() && typeof startAnnPlace === 'function' && startAnnPlace()) {
+    if (window.__toast) window.__toast('移動：スライドで動かし、タップで確定してください（Escで取消）');
+  }
+}
 function endMovePickOrigin(keepCursor) {
   if (!movePickOrigin) return;
   movePickOrigin = false;
@@ -5244,7 +5265,7 @@ window.addEventListener('pointermove', e => {
   }
   else if (annPlaceMode) { moveAnnPlace(e.clientX, e.clientY); }   // 線・寸法だけを掴んで置いている最中
   else if (movePickOrigin && window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);   // 移動：起点を選んでいる最中
-  else if (dirDrag && !dirDrag.locked) {
+  else if (dirDrag && (!dirDrag.locked || dirDrag.hover)) {
     const moveTh = (e.pointerType !== 'mouse') ? 10 : 4;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらないように）
     if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > moveTh) dirDrag.started = true;
     dirDrag.vert = !!(e.shiftKey || touchShift);           // Shift＝Y方向（鉛直）移動（途中切替も可）
@@ -5264,15 +5285,11 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
   if (annPlaceMode) return;   // 複製した線・寸法を置いている最中＝タップは「確定」なので部品を掴まない
   if (movePickOrigin) {
-    // 移動：押した点を起点にする。ここで処理を止めない＝そのままドラッグすれば続けて動かせる
-    // （止めると最初のドラッグが起点選びに吸われて動かない。2026-07-27）
-    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
-    const pt = r && r.p ? r.p : null;
-    endMovePickOrigin(true);   // 指を離すまで十字を残す（タッチはホバーが無く、消すと一度も見えない）
-    if (pt && selectedPart && setGripFromPoint(selectedPart, pt)) {
-      _idleSig = null;
-      if (window.__toast) window.__toast('移動：起点を決めました。ドラッグで直線移動、長押し又はダブルタップで自由移動');
-    }
+    // 移動：押した時は十字カーソルを見せるだけ。起点は指を離した所で決める（鏡・回転と同じ流れ）
+    movePicking = true;
+    if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+    e.stopImmediatePropagation();
+    return;
   }
   // パイプ端の優先掴み：選択中がパイプで、その端の近く(16px)を押したら、
   // 重なる他部品(フランジ等)より優先してパイプ端を掴む（起点が取れない問題の対策）。
@@ -5310,6 +5327,26 @@ renderer.domElement.addEventListener('pointerdown', e => {
       resetPipeRotState();
       _idleSig = null; updateForm(); refreshItemList();
     }
+  }
+  if (dirDrag && dirDrag.hover) {
+    // 起点を決めたあとのスライド移動中。押しただけでは位置をやり直さない
+    //（やり直すと、せっかく合わせた距離が押した瞬間に消える）。
+    if (isDbl) {                                       // ダブルタップ＝自由移動へ
+      _lastDownT = 0; _lastDownPart = null;
+      dirDrag = null; clearMarkers();
+      startMovePart(part, e.clientX, e.clientY);
+      movingByDrag = true; controls.enabled = false;
+      return;
+    }
+    clearTimeout(freeHoldTimer);                       // 長押し（0.5秒）＝自由移動へ
+    const hx = e.clientX, hy = e.clientY, hp = part;
+    freeHoldTimer = setTimeout(() => {
+      if (!dirDrag || !dirDrag.hover || movingPart) return;
+      dirDrag = null; clearMarkers();
+      startMovePart(hp, hx, hy);
+      movingByDrag = true; moveHoldTap = true;         // 動かさず離したら「タップで確定」へ
+    }, 500);
+    return;                                            // 短いタップは pointerup 側で「確定」になる
   }
   if (isDbl && moveMode) {                             // 自由移動も「移動」コマンドON時のみ
     _lastDownT = 0; _lastDownPart = null;              // 3連クリックの誤検出を防ぐためリセット
@@ -5364,6 +5401,16 @@ renderer.domElement.addEventListener('pointerdown', e => {
 }, true);
 window.addEventListener('pointerup', e => {
   if (e.button !== 0) return;
+  if (movePicking) {             // 移動：離した所を起点にして、掴んだ状態へ進む
+    movePicking = false;
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    const pt = r && r.p ? r.p.clone() : null;
+    endMovePickOrigin();
+    if (pt && selectedPart) setGripFromPoint(selectedPart, pt);
+    _idleSig = null; updateForm();
+    beginMoveAfterOrigin(e.clientX, e.clientY);
+    return;
+  }
   if (movePickCursorShown) {     // 起点選びの十字を片付ける（ドラッグ中はガイド側が上書きする）
     movePickCursorShown = false;
     if (!dirDrag && !movingPart && window.__originPickClear) window.__originPickClear();
@@ -5382,6 +5429,7 @@ window.addEventListener('pointerup', e => {
     return;
   }
   if (!dirDrag) return;
+  if (dirDrag.hover) return;   // スライド式の直線移動＝離しても確定しない（タップで確定する）
   controls.enabled = true;
   if (dirDrag.annFollow) window.__annMoveEnd();                    // 追従した線を現在位置で確定（スナップ解放）
   if (dirDrag.started) { dirDrag.locked = true; updateForm(); finishMoveCommand(); }   // 方向ロック→距離入力可。移動1回で「移動」コマンド終了（距離入力は続けて使える）
@@ -5558,7 +5606,7 @@ window.addEventListener('keydown', e => {
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
     else if (annPlaceMode) cancelAnnPlace();
-    else if (movePickOrigin) endMovePickOrigin();
+    else if (movePickOrigin || movePicking) { movePicking = false; endMovePickOrigin(); }
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
     if (moveMode) setMoveMode(false);   // Esc＝「移動」コマンドも取消（進行中の移動は上で取消済み）
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -7562,7 +7610,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const detailHint = document.createElement('div');
   detailHint.className = 'hintBox';
   detailHint.style.cssText = 'position:fixed;z-index:88;display:none;left:50%;top:54px;transform:translateX(-50%);';
-  detailHint.textContent = '拡大したい所を枠で囲んでください（囲んだ形が拡大図になります）';
+  detailHint.textContent = 'ダブルタップしてから、拡大したい所を枠で囲んでください（囲んだ形が拡大図になります）';
   document.body.appendChild(detailHint);
   function startDetailFrame() {
     if (typeof clearOtherCommands === 'function') clearOtherCommands('detail');   // 他のコマンドは解除
@@ -7587,6 +7635,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!detailFrame || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
     e.stopImmediatePropagation(); e.preventDefault();
+    // 枠はダブルタップから始める（2026-07-28 社長要望）。1回目のタップでは枠を作らず、
+    // 続けて素早くもう一度触れた時だけ枠のドラッグを始める＝視点操作と取り違えない。
+    const isDbl = (e.timeStamp - (detailFrame.tapT || -1e9) < 350)
+               && Math.hypot(e.clientX - (detailFrame.tapX || 0), e.clientY - (detailFrame.tapY || 0)) < 12;
+    detailFrame.tapT = e.timeStamp; detailFrame.tapX = e.clientX; detailFrame.tapY = e.clientY;
+    if (!isDbl) {
+      if (window.__toast) window.__toast('詳細図：もう一度タップして、そのまま囲んでください（ダブルタップで枠開始）');
+      return;
+    }
     detailFrame.down = { x: e.clientX, y: e.clientY };
     Object.assign(detailBoxEl.style, { display: 'block', left: e.clientX + 'px', top: e.clientY + 'px', width: '0px', height: '0px' });
   }, true);
