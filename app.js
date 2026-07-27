@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-G';
+const APP_VER = 'v0727-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3885,7 +3885,7 @@ function valveShapeOf(part) {
 //   ・ボス＝縦（dir2＝無回転）
 //   ・SW形バルブ800（ゲート/グローブ）＝縦・ハンドルを東へ（dir2 + roll2）
 //   ・サイドグラス＝軸を東・のぞき窓を横（東西ではなく南北）へ（dir0 + roll2）
-//   ・PG＝立てる（dir2＝無回転。取付ネジが真下を向く）
+//   ・PG＝立てる（取付ネジが真下）・文字板を東へ（dir2 + roll2）
 //   ・安全弁＝入口を下・出口を東（dir2。従来どおり）
 // ※ dir/roll の番号は DIR_QUATS（Z軸リング0-8／X軸リング9-17）と 45°×8 のひねり。
 //    総当りで「その向きになる組合せ」を求めて決めた値なので、DIR_QUATS を変えたら取り直すこと。
@@ -3896,7 +3896,7 @@ const DEFAULT_POSE = {
   boss: { dir: 2, roll: 0 },
   vCompact: { dir: 2, roll: 2 },
   sight: { dir: 0, roll: 2 },
-  pg: { dir: 2, roll: 6 },
+  pg: { dir: 2, roll: 2 },
   vSafety: { dir: 2, roll: 0 },
 };
 function defaultPose(tool) {
