@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0727L — SKT-HD ♦</title>
+<title>配管3D v0727M — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0727L">
+<meta name="apple-mobile-web-app-title" content="配管3D v0727M">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -395,11 +395,10 @@
   @media (hover: hover) and (pointer: fine) {
     body.light #ribbon button:hover, body.light #topBar button:hover { background: rgba(31,111,208,.12); border-color: #aebcd6; }
   }
-  /* 実行待ちのコマンドは、ひと目で分かるようはっきり点灯させる（2026-07-27 社長要望：光って見えない）。
+  /* 実行待ちのコマンドの点灯。青い太枠は使わず、地色と文字で示す（2026-07-27 社長要望）。
      同時に光るのは常に1つだけ（app.js の clearOtherCommands が他を解除する）。 */
   body.light #ribbon button.active, body.light #topBar button.active {
-    background: #cfe2ff; border-color: #2f7bff; color: #123a78;
-    box-shadow: inset 0 0 0 2px #2f7bff; font-weight: 700; }
+    background: #cfe2ff; border-color: #9dc2f5; color: #123a78; font-weight: 700; }
   body.light #ribbon .brand { border-right-color: #c2cad8; }
   /* パネル（パレット・アイテム一覧・ヘルプ） */
   body.light #palette, body.light #itemList, body.light #helpPanel,

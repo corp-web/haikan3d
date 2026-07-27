@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-L';
+const APP_VER = 'v0727-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2936,6 +2936,7 @@ let followParked = null;      // タッチ：直近にドラッグして離し�
 function clearOtherCommands(keep) {
   if (keep !== 'place') stopFollow();
   if (keep !== 'move' && typeof moveMode !== 'undefined' && moveMode) setMoveMode(false);
+  if (keep !== 'move' && typeof movePickOrigin !== 'undefined' && movePickOrigin) endMovePickOrigin();
   if (keep !== 'hide' && typeof hideArmed !== 'undefined' && hideArmed) setHideArmed(false);
   if (keep !== 'draw' && window.__exitDrawMode) window.__exitDrawMode();
   if (keep !== 'pending' && window.__clearPendingCmd) window.__clearPendingCmd();
@@ -2944,14 +2945,37 @@ function clearOtherCommands(keep) {
   if (keep !== 'detail' && window.__detailFrameEnd) window.__detailFrameEnd();
 }
 let moveMode = false;   // true=「移動」コマンド実行待ち
+// 「移動」コマンドで、動かす前に起点（基準にする機点）をタップで選ぶ段階（2026-07-27 社長要望）。
+// 起点が決まると、以降は従来どおり ドラッグ＝直線移動／長押し・ダブルタップ＝自由移動。
+let movePickOrigin = false;
+// 掴んだ点にいちばん近い機点を、その部品の起点にする（4mm以内に無ければ変えない）
+function setGripFromPoint(part, pt) {
+  if (!part || !pt) return false;
+  let best = null, bd = 0.004;
+  for (const l of connsOf(part)) { const d = connModelPos(part, l).distanceTo(pt); if (d < bd) { bd = d; best = l; } }
+  if (!best) return false;
+  part.userData.gripLocal = best;
+  if (part.userData.partType === 'pipe') { pipeEndSel = null; pipeLenSticky = false; }   // パイプの端指定より起点を優先
+  return true;
+}
+function endMovePickOrigin() {
+  if (!movePickOrigin) return;
+  movePickOrigin = false;
+  if (window.__originPickClear) window.__originPickClear();
+}
 function setMoveMode(on) {
   moveMode = !!on;
   const b = document.getElementById('cmdMove');
   if (b) b.classList.toggle('active', moveMode);
   if (moveMode) {
     clearOtherCommands('move');                         // 他のコマンドは解除（同時に光らせない）
-    if (window.__toast) window.__toast('移動：オブジェクトを選択してください。そのままドラッグで直線移動、長押し又はダブルタップで自由移動');
+    const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);
+    movePickOrigin = nSel > 0;                          // 選択済みなら、まず起点を選んでもらう
+    if (window.__toast) window.__toast(movePickOrigin
+      ? '移動：起点をタップして選んでください（そのあと ドラッグで直線移動、長押し又はダブルタップで自由移動）'
+      : '移動：オブジェクトを選択してください。そのままドラッグで直線移動、長押し又はダブルタップで自由移動');
   } else {
+    endMovePickOrigin();
     if (movingPart) dropMovingPart();                   // 進行中の自由移動は現在位置で確定
     if (dirDrag && !dirDrag.locked) { dirDrag = null; controls.enabled = true; clearMarkers(); updateForm(); }   // 距離入力(locked)中は生かす
   }
@@ -5217,6 +5241,7 @@ window.addEventListener('pointermove', e => {
     moveExistingPart(e.clientX, e.clientY);
   }
   else if (annPlaceMode) { moveAnnPlace(e.clientX, e.clientY); }   // 線・寸法だけを掴んで置いている最中
+  else if (movePickOrigin && window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);   // 移動：起点を選んでいる最中
   else if (dirDrag && !dirDrag.locked) {
     const moveTh = (e.pointerType !== 'mouse') ? 10 : 4;   // タッチは指ブレが大きいのでしきい値を上げる（タップで移動が始まらないように）
     if (!dirDrag.started && Math.hypot(e.clientX - dirDrag.sx, e.clientY - dirDrag.sy) > moveTh) dirDrag.started = true;
@@ -5236,6 +5261,17 @@ renderer.domElement.addEventListener('pointerdown', e => {
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
   if (annPlaceMode) return;   // 複製した線・寸法を置いている最中＝タップは「確定」なので部品を掴まない
+  if (movePickOrigin) {
+    // 移動：押した点を起点にする。ここで処理を止めない＝そのままドラッグすれば続けて動かせる
+    // （止めると最初のドラッグが起点選びに吸われて動かない。2026-07-27）
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    const pt = r && r.p ? r.p : null;
+    endMovePickOrigin();
+    if (pt && selectedPart && setGripFromPoint(selectedPart, pt)) {
+      _idleSig = null;
+      if (window.__toast) window.__toast('移動：起点を決めました。ドラッグで直線移動、長押し又はダブルタップで自由移動');
+    }
+  }
   // パイプ端の優先掴み：選択中がパイプで、その端の近く(16px)を押したら、
   // 重なる他部品(フランジ等)より優先してパイプ端を掴む（起点が取れない問題の対策）。
   if (!ctrlish && selectedPart && selectedPart.userData.partType === 'pipe' && selectedParts.size <= 1) {
@@ -5516,6 +5552,7 @@ window.addEventListener('keydown', e => {
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
     else if (annPlaceMode) cancelAnnPlace();
+    else if (movePickOrigin) endMovePickOrigin();
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
     if (moveMode) setMoveMode(false);   // Esc＝「移動」コマンドも取消（進行中の移動は上で取消済み）
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -6346,6 +6383,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   });
   ['pointerdown', 'click'].forEach(ev => rotBox.addEventListener(ev, e => e.stopPropagation()));
   // 回転モード中のポインタ操作（他のハンドラより先に捕捉）
+  // 起点を選ぶ間は十字カーソルを出す（どこに吸着するか見える）。2026-07-27 社長要望
+  window.addEventListener('pointermove', e => {
+    if (!rotateMode || rotateMode.p1) return;
+    if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+  });
   window.addEventListener('pointerdown', e => {
     if (!rotateMode || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
@@ -6355,6 +6397,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!p) { const t = resolveTarget(e.clientX, e.clientY, null, 0); p = t ? t.point.clone() : null; }
       if (!p) return;
       rotateMode.p1 = p;
+      if (window.__originPickClear) window.__originPickClear();
       const hit = planeHitAt(e.clientX, e.clientY, p.y);
       rotateMode.base = hit ? -Math.atan2(hit.z - p.z, hit.x - p.x) * 180 / Math.PI : 0;   // この向きを0°とする
       rotateMode.ang = 0;
@@ -6534,6 +6577,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     endMirrorMode();
   }
   // 鏡モード中のポインタ・キー操作（他のハンドラより先に捕捉して横取りを防ぐ）
+  window.addEventListener('pointermove', e => {
+    if (!mirrorMode || mirrorMode.p1) return;
+    if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
+  });
   window.addEventListener('pointerdown', e => {
     if (!mirrorMode || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
@@ -6543,6 +6590,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!p) { const t = resolveTarget(e.clientX, e.clientY, null, 0); p = t ? t.point.clone() : null; }
       if (!p) return;
       mirrorMode.p1 = p;
+      if (window.__originPickClear) window.__originPickClear();
       mirrorMode.previewKey = 'mir:1.000,0.000';
       buildMirrorPreview(reflectMatrixAbout(p, new V3(1, 0, 0)));   // 初期＝X方向へ反転
     } else {                                               // ②方向 → 実行
@@ -8629,6 +8677,18 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     clearMarkers();
     if (snapPoint) addSnapMarker(snapPoint, markerRadiusFor(null, true));   // 吸着点＝緑（四半円点=赤◇・ボルト穴=赤＋・交点=黄）
   }
+  // 「起点をタップして選ぶ」時の十字カーソルと吸着印（鏡・回転・移動から使う。2026-07-27 社長要望）。
+  // 作図の1点目と同じ見え方＝どこに吸着するかが動かしている最中に分かる。戻り値 {p, snapped}
+  window.__originPickCursor = (cx, cy) => {
+    clearLineGuide();
+    const r = pickFirstPoint(cx, cy);
+    showDrawSnapMarkers(r.snapped ? r.p : null);
+    if (r.p) guideCross(r.p, r.snapped ? 0x39ff8a : 0x49c5ff);
+    if (r.p && r.snapped) snapDot(r.p);
+    return r;
+  };
+  window.__originPickClear = () => { clearLineGuide(); clearMarkers(); };
+  window.__lineGuideCount = () => lineGuideGroup.children.length;   // 検証用：十字カーソル等が出ているか
   // 起点 P1 から水平面上の点に角度刻み angleStep を適用（0=自由）
   function applyAngleSnap(P1, pt) {
     if (!angleStep) return pt;
