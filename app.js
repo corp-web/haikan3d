@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0728-D';
+const APP_VER = 'v0728-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2984,9 +2984,14 @@ function beginMoveAfterOrigin(cx, cy) {
     if (window.__toast) window.__toast('移動：スライドで動かし、タップで確定してください（Escで取消）');
   }
 }
+// 起点選びを始める（選択済みの状態で「移動」に入った時と、「移動」を押してから選んだ時の両方から呼ぶ）
+function beginMovePickOrigin() {
+  movePickOrigin = true; movePickAwait = false; movePicking = false; movePickParked = null; moveReady = false;
+  if (window.__toast) window.__toast('移動：起点をタップして選んでください（そのあと ドラッグで直線移動、長押し又はダブルタップで自由移動）');
+}
 function endMovePickOrigin(keepCursor) {
   if (!movePickOrigin) return;
-  movePickOrigin = false; movePickAwait = false; movePickParked = null;
+  movePickOrigin = false; movePickAwait = false; movePicking = false; movePickParked = null;
   if (keepCursor) { movePickCursorShown = true; return; }   // 押している間はカーソルを残す
   if (window.__originPickClear) window.__originPickClear();
 }
@@ -2997,10 +3002,8 @@ function setMoveMode(on) {
   if (moveMode) {
     clearOtherCommands('move');                         // 他のコマンドは解除（同時に光らせない）
     const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);
-    movePickOrigin = nSel > 0;                          // 選択済みなら、まず起点を選んでもらう
-    if (window.__toast) window.__toast(movePickOrigin
-      ? '移動：起点をタップして選んでください（そのあと ドラッグで直線移動、長押し又はダブルタップで自由移動）'
-      : '移動：オブジェクトを選択してください。そのままドラッグで直線移動、長押し又はダブルタップで自由移動');
+    if (nSel > 0) beginMovePickOrigin();                // 選択済みなら、まず起点を選んでもらう
+    else if (window.__toast) window.__toast('移動：オブジェクトを選択してください。そのあと起点をタップして選んでください');
   } else {
     endMovePickOrigin();
     if (movingPart) dropMovingPart();                   // 進行中の自由移動は現在位置で確定
@@ -5268,7 +5271,8 @@ window.addEventListener('pointermove', e => {
     moveExistingPart(e.clientX, e.clientY);
   }
   else if (annPlaceMode) { moveAnnPlace(e.clientX, e.clientY); }   // 線・寸法だけを掴んで置いている最中
-  else if (movePickOrigin && window.__originPickCursor) {   // 移動：起点の位置決め中（確定待ちでも動かせる）
+  else if (movePickOrigin && window.__originPickCursor) {   // 移動：起点の位置決め中
+    if (e.pointerType !== 'mouse' && !movePicking) return;  // 指が触れている間だけ（確定のタップで起点が飛ばないように）
     const r = window.__originPickCursor(e.clientX, e.clientY);
     if (r && r.p) movePickParked = r.p.clone();
   }
@@ -5301,6 +5305,19 @@ renderer.domElement.addEventListener('pointerdown', e => {
     beginMoveAfterOrigin(e.clientX, e.clientY);
     // 押した記録を残す。続けてもう一度タップすればダブルタップ＝自由移動になる（2026-07-28 社長指摘）
     _lastDownT = e.timeStamp; _lastDownX = e.clientX; _lastDownY = e.clientY; _lastDownPart = selectedPart;
+    // この指をそのまま押し続けても自由移動へ入れるようにする。
+    // 起点確定後の最初のタッチには長押しの待ちが張られておらず、押し続けても何も起きなかった（2026-07-28 社長指摘）
+    if (dirDrag) {
+      clearTimeout(freeHoldTimer);
+      const fx = e.clientX, fy = e.clientY, fp = dirDrag.part;
+      freeHoldTimer = setTimeout(() => {
+        if (!dirDrag || !dirDrag.hover || dirDrag.started || movingPart) return;
+        dirDrag = null; clearMarkers();
+        startMovePart(fp, fx, fy);
+        movingByDrag = true; moveHoldTap = true; controls.enabled = false;
+        if (window.__toast) window.__toast('自由移動：ドラッグして離す／そのまま離せばタップで確定');
+      }, 500);
+    }
     return;
   }
   if (movePickOrigin) {
@@ -5453,7 +5470,12 @@ window.addEventListener('pointerup', e => {
     if (!dirDrag && !movingPart && window.__originPickClear) window.__originPickClear();
   }
   clearTimeout(freeHoldTimer);   // 長押し（自由移動切替）の待ちを解除
-  if (touchSelOnly) { touchSelOnly = false; controls.enabled = true; return; }   // 選択のみタッチ：視点を戻して終了（移動しない）
+  if (touchSelOnly) {            // 選択のみタッチ：視点を戻して終了（移動しない）
+    touchSelOnly = false; controls.enabled = true;
+    // 「移動」を先に押していたら、選んだ直後に起点選びへ進む（2026-07-28 社長指摘）
+    if (moveMode && !movePickOrigin && !movingPart && selectedParts.size > 0) beginMovePickOrigin();
+    return;
+  }
   if (movingPart && movingByDrag) {
     // 長押しで自由移動に入り、そのまま動かさず離した＝「タップで確定」モードへ（すぐ確定しない）
     if (moveHoldTap && !moveStarted) { moveHoldTap = false; movingByDrag = false; if (window.__toast) window.__toast('移動：置きたい位置をタップで確定'); return; }
@@ -5470,7 +5492,13 @@ window.addEventListener('pointerup', e => {
   controls.enabled = true;
   if (dirDrag.annFollow) window.__annMoveEnd();                    // 追従した線を現在位置で確定（スナップ解放）
   if (dirDrag.started) { dirDrag.locked = true; updateForm(); finishMoveCommand(); }   // 方向ロック→距離入力可。移動1回で「移動」コマンド終了（距離入力は続けて使える）
-  else { dirDrag = null; clearMarkers(); _idleSig = null; }       // ドラッグせず＝選択のみ（補助線消去・端表示は再判定・コマンドは継続）
+  else {
+    dirDrag = null; clearMarkers(); _idleSig = null;               // ドラッグせず＝選択のみ（補助線消去・端表示は再判定・コマンドは継続）
+    // 「移動」を先に押して、あとからオブジェクトを選んだ場合も起点選びへ進む
+    //（選択済みで押した時と手順を揃える。2026-07-28 社長指摘）
+    const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);
+    if (moveMode && !movePickOrigin && !movingPart && nSel > 0) beginMovePickOrigin();
+  }
 });
 
 // iPad：3Dビューに触れたら、開いている入力欄を確定してフォーカスを外す（＝キーボードを閉じる）。
@@ -6481,6 +6509,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 起点を選ぶ間は十字カーソルを出す（どこに吸着するか見える）。2026-07-27 社長要望
   window.addEventListener('pointermove', e => {
     if (!rotateMode || rotateMode.p1) return;
+    if (e.pointerType !== 'mouse' && !rotateMode.picking) return;   // 指が触れている間だけ（確定のタップで起点が飛ばないように）
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     if (r && r.p) rotateMode.parked = r.p.clone();
   });
@@ -6496,11 +6525,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
       if (r && r.p) rotateMode.parked = r.p.clone();
     } else if (!rotateMode.aiming) {                       // ②最初のタッチ＝角度を決め始める（まだ実行しない）
-      rotateMode.aiming = true;
+      rotateMode.aiming = true; rotateMode.touching = true;
       if (window.__toast) window.__toast('回転：スライドで角度を決め、離してからタップで確定してください');
     } else {                                               // ③タップで確定
-      const deg = rotAngleFrom(e.clientX, e.clientY, e.shiftKey || touchShift);
-      execRotate(deg == null ? (parseFloat(rotCmdA.value) || 0) : deg);
+      // 決めた角度で回す。タップした位置から角度を取り直すと、確定のタップの方向へ回ってしまう
+      //（2026-07-28 社長指摘）
+      const deg = isFinite(rotateMode.ang) ? rotateMode.ang : (parseFloat(rotCmdA.value) || 0);
+      execRotate(deg);
     }
   }, true);
   // 起点＝カーソルを離した所に残し、次のタップで確定する
@@ -6519,7 +6550,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (window.__toast) window.__toast('回転：角度を決めてタップ（45°刻み・Shiftで5°／数値入力も可）');
   }
   window.addEventListener('pointerup', e => {
-    if (!rotateMode || e.button !== 0 || rotateMode.p1 || !rotateMode.picking) return;
+    if (!rotateMode || e.button !== 0) return;
+    rotateMode.touching = false;                           // 指を離した＝角度はこの値で据え置き
+    if (rotateMode.p1 || !rotateMode.picking) return;
     rotateMode.picking = false; rotateMode.await = true;
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     if (r && r.p) rotateMode.parked = r.p.clone();
@@ -6527,6 +6560,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }, true);
   window.addEventListener('pointermove', e => {
     if (!rotateMode || !rotateMode.p1) return;
+    if (e.pointerType !== 'mouse' && !rotateMode.touching) return;   // 指が触れている間だけ角度を変える
     if (document.activeElement === rotCmdA) return;        // 数値入力中はカーソルで上書きしない
     const deg = rotAngleFrom(e.clientX, e.clientY, e.shiftKey || touchShift);
     if (deg == null || deg === rotateMode.ang) return;
@@ -6694,6 +6728,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 鏡モード中のポインタ・キー操作（他のハンドラより先に捕捉して横取りを防ぐ）
   window.addEventListener('pointermove', e => {
     if (!mirrorMode || mirrorMode.p1) return;
+    if (e.pointerType !== 'mouse' && !mirrorMode.picking) return;   // 指が触れている間だけ（確定のタップで起点が飛ばないように）
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     if (r && r.p) mirrorMode.parked = r.p.clone();
   });
@@ -6707,11 +6742,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
       if (r && r.p) mirrorMode.parked = r.p.clone();
     } else if (!mirrorMode.aiming) {                       // ②最初のタッチ＝方向を決め始める（まだ実行しない）
-      mirrorMode.aiming = true;
+      mirrorMode.aiming = true; mirrorMode.touching = true;
       if (window.__toast) window.__toast('鏡：スライドで方向を決め、離してからタップで確定してください');
     } else {                                               // ③タップで確定
-      const r = mirrorXformFrom(e.clientX, e.clientY);
-      if (r) execMirror(r.M);
+      // 決めた方向で返す。タップした位置から取り直すと、確定のタップの方向へ返ってしまう
+      //（2026-07-28 社長指摘）
+      const M = mirrorMode.aimM || (mirrorXformFrom(e.clientX, e.clientY) || {}).M;
+      if (M) execMirror(M);
     }
   }, true);
   function commitMirrorOrigin() {
@@ -6726,7 +6763,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (window.__toast) window.__toast('鏡：反転する方向をタップしてください（45°刻み）');
   }
   window.addEventListener('pointerup', e => {
-    if (!mirrorMode || e.button !== 0 || mirrorMode.p1 || !mirrorMode.picking) return;
+    if (!mirrorMode || e.button !== 0) return;
+    mirrorMode.touching = false;                           // 指を離した＝方向はこの値で据え置き
+    if (mirrorMode.p1 || !mirrorMode.picking) return;
     mirrorMode.picking = false; mirrorMode.await = true;
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     if (r && r.p) mirrorMode.parked = r.p.clone();
@@ -6745,7 +6784,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
       return;
     }
+    if (e.pointerType !== 'mouse' && !mirrorMode.touching) return;   // 指が触れている間だけ方向を変える
     const r = mirrorXformFrom(e.clientX, e.clientY);
+    if (r) mirrorMode.aimM = r.M;                          // 離しても確定まで保つ（タップで返す向き）
     if (r && mirrorMode.previewKey !== r.key) {            // 変換が変わった時だけプレビューを作り直す（45°刻み）
       mirrorMode.previewKey = r.key;
       buildMirrorPreview(r.M);
