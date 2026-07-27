@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0727-M';
+const APP_VER = 'v0727-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2958,9 +2958,11 @@ function setGripFromPoint(part, pt) {
   if (part.userData.partType === 'pipe') { pipeEndSel = null; pipeLenSticky = false; }   // パイプの端指定より起点を優先
   return true;
 }
-function endMovePickOrigin() {
+let movePickCursorShown = false;   // 起点の十字を出したまま指を離すのを待っている
+function endMovePickOrigin(keepCursor) {
   if (!movePickOrigin) return;
   movePickOrigin = false;
+  if (keepCursor) { movePickCursorShown = true; return; }   // 押している間はカーソルを残す
   if (window.__originPickClear) window.__originPickClear();
 }
 function setMoveMode(on) {
@@ -5266,7 +5268,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
     // （止めると最初のドラッグが起点選びに吸われて動かない。2026-07-27）
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     const pt = r && r.p ? r.p : null;
-    endMovePickOrigin();
+    endMovePickOrigin(true);   // 指を離すまで十字を残す（タッチはホバーが無く、消すと一度も見えない）
     if (pt && selectedPart && setGripFromPoint(selectedPart, pt)) {
       _idleSig = null;
       if (window.__toast) window.__toast('移動：起点を決めました。ドラッグで直線移動、長押し又はダブルタップで自由移動');
@@ -5362,6 +5364,10 @@ renderer.domElement.addEventListener('pointerdown', e => {
 }, true);
 window.addEventListener('pointerup', e => {
   if (e.button !== 0) return;
+  if (movePickCursorShown) {     // 起点選びの十字を片付ける（ドラッグ中はガイド側が上書きする）
+    movePickCursorShown = false;
+    if (!dirDrag && !movingPart && window.__originPickClear) window.__originPickClear();
+  }
   clearTimeout(freeHoldTimer);   // 長押し（自由移動切替）の待ちを解除
   if (touchSelOnly) { touchSelOnly = false; controls.enabled = true; return; }   // 選択のみタッチ：視点を戻して終了（移動しない）
   if (movingPart && movingByDrag) {
@@ -6392,23 +6398,32 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!rotateMode || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
     e.stopImmediatePropagation(); e.preventDefault();
-    if (!rotateMode.p1) {                                  // ①回転の中心
-      let p = drawSnapPoint(e.clientX, e.clientY);
-      if (!p) { const t = resolveTarget(e.clientX, e.clientY, null, 0); p = t ? t.point.clone() : null; }
-      if (!p) return;
-      rotateMode.p1 = p;
-      if (window.__originPickClear) window.__originPickClear();
-      const hit = planeHitAt(e.clientX, e.clientY, p.y);
-      rotateMode.base = hit ? -Math.atan2(hit.z - p.z, hit.x - p.x) * 180 / Math.PI : 0;   // この向きを0°とする
-      rotateMode.ang = 0;
-      rotCmdA.value = '0';
-      buildRotatePreview(0);
-      showRotBox();
-      if (window.__toast) window.__toast('回転：角度を決めてタップ（45°刻み・Shiftで5°／数値入力も可）');
+    if (!rotateMode.p1) {                                  // ①回転の中心＝押した時点では十字カーソルを出すだけ
+      // タッチにはホバーが無く、押した瞬間に確定するとカーソルが一度も見えない。
+      // 「押して見せる → 指を動かして合わせる → 離して決める」にする（2026-07-27 社長要望）
+      rotateMode.picking = true;
+      if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
     } else {                                               // ②角度を確定
       const deg = rotAngleFrom(e.clientX, e.clientY, e.shiftKey || touchShift);
       execRotate(deg == null ? (parseFloat(rotCmdA.value) || 0) : deg);
     }
+  }, true);
+  // 起点は指を離した所で決める（押した時点ではカーソルを見せるだけ）
+  window.addEventListener('pointerup', e => {
+    if (!rotateMode || e.button !== 0 || rotateMode.p1 || !rotateMode.picking) return;
+    rotateMode.picking = false;
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    const p = r && r.p ? r.p.clone() : null;
+    if (!p) return;
+    rotateMode.p1 = p;
+    if (window.__originPickClear) window.__originPickClear();
+    const hit = planeHitAt(e.clientX, e.clientY, p.y);
+    rotateMode.base = hit ? -Math.atan2(hit.z - p.z, hit.x - p.x) * 180 / Math.PI : 0;   // この向きを0°とする
+    rotateMode.ang = 0;
+    rotCmdA.value = '0';
+    buildRotatePreview(0);
+    showRotBox();
+    if (window.__toast) window.__toast('回転：角度を決めてタップ（45°刻み・Shiftで5°／数値入力も可）');
   }, true);
   window.addEventListener('pointermove', e => {
     if (!rotateMode || !rotateMode.p1) return;
@@ -6585,18 +6600,26 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!mirrorMode || e.button !== 0) return;
     if (e.target !== renderer.domElement) return;
     e.stopImmediatePropagation(); e.preventDefault();
-    if (!mirrorMode.p1) {                                  // ①起点（各アイテムの機点・線端点・交点へ吸着）
-      let p = drawSnapPoint(e.clientX, e.clientY);
-      if (!p) { const t = resolveTarget(e.clientX, e.clientY, null, 0); p = t ? t.point.clone() : null; }
-      if (!p) return;
-      mirrorMode.p1 = p;
-      if (window.__originPickClear) window.__originPickClear();
-      mirrorMode.previewKey = 'mir:1.000,0.000';
-      buildMirrorPreview(reflectMatrixAbout(p, new V3(1, 0, 0)));   // 初期＝X方向へ反転
+    if (!mirrorMode.p1) {                                  // ①起点＝押した時点では十字カーソルを出すだけ
+      mirrorMode.picking = true;
+      if (window.__originPickCursor) window.__originPickCursor(e.clientX, e.clientY);
     } else {                                               // ②方向 → 実行
       const r = mirrorXformFrom(e.clientX, e.clientY);
       if (r) execMirror(r.M);
     }
+  }, true);
+  window.addEventListener('pointerup', e => {
+    if (!mirrorMode || e.button !== 0 || mirrorMode.p1 || !mirrorMode.picking) return;
+    mirrorMode.picking = false;
+    const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
+    const p = r && r.p ? r.p.clone() : null;
+    if (!p) return;
+    mirrorMode.p1 = p;
+    if (window.__originPickClear) window.__originPickClear();
+    clearMirrorGuide();
+    mirrorMode.previewKey = 'mir:1.000,0.000';
+    buildMirrorPreview(reflectMatrixAbout(p, new V3(1, 0, 0)));   // 初期＝X方向へ反転
+    if (window.__toast) window.__toast('鏡：反転する方向をタップしてください（45°刻み）');
   }, true);
   window.addEventListener('pointermove', e => {
     if (!mirrorMode) return;
