@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-C';
+const APP_VER = 'v0729-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2200,6 +2200,140 @@ function makeFlex(opts) {
   return g;
 }
 // サイドグラス（のぞき窓形）。opts={sizeA, cls, length[mm]=フランジ面間}
+// ===== CSG（メッシュのブーリアン演算）＝BSP方式・csg.jsのアルゴリズム（2026-07-29 提案3） =====
+// 「本当に穴を開ける」ための道具。まずはサイドグラスののぞき窓に使う（今後：分岐管台・開先など）。
+// 提供は A−B（差）のみ。両ジオメトリは同じローカル座標系・閉じた立体で渡すこと。
+// 頂点法線は補間して保つ＝曲面の滑らかさが消えない。切り口の面は削る側の面（反転）が残る。
+const CSG = (() => {
+  const EPS = 1e-6;
+  class CVert {
+    constructor(pos, normal) { this.pos = pos; this.normal = normal; }
+    clone() { return new CVert(this.pos.clone(), this.normal.clone()); }
+    flip() { this.normal.negate(); }
+    interpolate(o, t) { return new CVert(this.pos.clone().lerp(o.pos, t), this.normal.clone().lerp(o.normal, t)); }
+  }
+  class CPlane {
+    constructor(normal, w) { this.normal = normal; this.w = w; }
+    clone() { return new CPlane(this.normal.clone(), this.w); }
+    flip() { this.normal.negate(); this.w = -this.w; }
+    static fromPoints(a, b, c) {
+      const n = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+      return new CPlane(n, n.dot(a));
+    }
+    splitPolygon(poly, coFront, coBack, front, back) {
+      const COPLANAR = 0, FRONT = 1, BACK = 2, SPANNING = 3;
+      let type = 0; const types = [];
+      for (const v of poly.vertices) {
+        const t = this.normal.dot(v.pos) - this.w;
+        const ty = (t < -EPS) ? BACK : (t > EPS) ? FRONT : COPLANAR;
+        type |= ty; types.push(ty);
+      }
+      switch (type) {
+        case COPLANAR: (this.normal.dot(poly.plane.normal) > 0 ? coFront : coBack).push(poly); break;
+        case FRONT: front.push(poly); break;
+        case BACK: back.push(poly); break;
+        case SPANNING: {
+          const f = [], b = [];
+          for (let i = 0; i < poly.vertices.length; i++) {
+            const j = (i + 1) % poly.vertices.length;
+            const ti = types[i], tj = types[j];
+            const vi = poly.vertices[i], vj = poly.vertices[j];
+            if (ti !== BACK) f.push(vi);
+            if (ti !== FRONT) b.push(ti !== BACK ? vi.clone() : vi);
+            if ((ti | tj) === SPANNING) {
+              const t = (this.w - this.normal.dot(vi.pos)) / this.normal.dot(vj.pos.clone().sub(vi.pos));
+              const v = vi.interpolate(vj, t);
+              f.push(v); b.push(v.clone());
+            }
+          }
+          if (f.length >= 3) front.push(new CPoly(f));
+          if (b.length >= 3) back.push(new CPoly(b));
+          break;
+        }
+      }
+    }
+  }
+  class CPoly {
+    constructor(vertices) { this.vertices = vertices; this.plane = CPlane.fromPoints(vertices[0].pos, vertices[1].pos, vertices[2].pos); }
+    clone() { return new CPoly(this.vertices.map(v => v.clone())); }
+    flip() { this.vertices.reverse().forEach(v => v.flip()); this.plane.flip(); }
+  }
+  class CNode {
+    constructor(polys) { this.plane = null; this.front = null; this.back = null; this.polygons = []; if (polys) this.build(polys); }
+    invert() {
+      for (const p of this.polygons) p.flip();
+      if (this.plane) this.plane.flip();
+      if (this.front) this.front.invert();
+      if (this.back) this.back.invert();
+      const t = this.front; this.front = this.back; this.back = t;
+    }
+    clipPolygons(polys) {
+      if (!this.plane) return polys.slice();
+      let front = [], back = [];
+      for (const p of polys) this.plane.splitPolygon(p, front, back, front, back);
+      if (this.front) front = this.front.clipPolygons(front);
+      back = this.back ? this.back.clipPolygons(back) : [];
+      return front.concat(back);
+    }
+    clipTo(bsp) {
+      this.polygons = bsp.clipPolygons(this.polygons);
+      if (this.front) this.front.clipTo(bsp);
+      if (this.back) this.back.clipTo(bsp);
+    }
+    allPolygons() { let p = this.polygons.slice(); if (this.front) p = p.concat(this.front.allPolygons()); if (this.back) p = p.concat(this.back.allPolygons()); return p; }
+    build(polys) {
+      if (!polys.length) return;
+      if (!this.plane) this.plane = polys[0].plane.clone();
+      const front = [], back = [];
+      for (const p of polys) this.plane.splitPolygon(p, this.polygons, this.polygons, front, back);
+      if (front.length) { if (!this.front) this.front = new CNode(); this.front.build(front); }
+      if (back.length) { if (!this.back) this.back = new CNode(); this.back.build(back); }
+    }
+  }
+  function geoToPolys(geo) {
+    const g = geo.index ? geo.toNonIndexed() : geo;
+    const pos = g.attributes.position, nor = g.attributes.normal;
+    const polys = [];
+    for (let i = 0; i < pos.count; i += 3) {
+      const vs = [];
+      for (let k = 0; k < 3; k++) {
+        vs.push(new CVert(new THREE.Vector3().fromBufferAttribute(pos, i + k),
+                          nor ? new THREE.Vector3().fromBufferAttribute(nor, i + k) : new THREE.Vector3(0, 1, 0)));
+      }
+      const ab = vs[1].pos.clone().sub(vs[0].pos), ac = vs[2].pos.clone().sub(vs[0].pos);
+      if (ab.cross(ac).lengthSq() < 1e-20) continue;             // 退化三角形は捨てる
+      polys.push(new CPoly(vs));
+    }
+    if (g !== geo) g.dispose();
+    return polys;
+  }
+  function polysToGeo(polys) {
+    const pos = [], nor = [];
+    for (const p of polys) {
+      for (let i = 2; i < p.vertices.length; i++) {              // 扇形分割
+        for (const v of [p.vertices[0], p.vertices[i - 1], p.vertices[i]]) {
+          pos.push(v.pos.x, v.pos.y, v.pos.z);
+          nor.push(v.normal.x, v.normal.y, v.normal.z);
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    return geo;
+  }
+  return { geoToPolys, polysToGeo, CNode };
+})();
+// A−B（差）＝csg.jsの手順どおり。戻り値は新しいBufferGeometry。
+function csgSubtractGeo(geoA, geoB) {
+  const a = new CSG.CNode(CSG.geoToPolys(geoA));
+  const b = new CSG.CNode(CSG.geoToPolys(geoB));
+  a.invert(); a.clipTo(b); b.clipTo(a); b.invert(); b.clipTo(a); b.invert();
+  a.build(b.allPolygons()); a.invert();
+  return CSG.polysToGeo(a.allPolygons());
+}
+window.__csgSubtractGeo = csgSubtractGeo;   // e2e検証用
+
 function makeSightGlass(opts) {
   const o = Object.assign({ sizeA: '50A', cls: 'JIS 10K', length: 150 }, opts || {});
   const sizeA = EQUIP_SIZES.includes(o.sizeA) ? o.sizeA : '50A';
@@ -2212,14 +2346,25 @@ function makeSightGlass(opts) {
   const yIn = equipFlangedEnds(g, cls, sizeA, halfL, mat);
   const bodyR = rPipe * 1.34;                                  // 金属の胴体
   const boreR = VMM(od * 0.42);
-  g.add(new THREE.Mesh(ringGeo(bodyR, boreR, 2 * yIn), mat));  // 中空＝フランジ面から穴が見える（のぞきガラスも中が抜ける）
-  // 左右(±X)の丸のぞき窓：座＋ガラス円板＋押えボルト。ガラスは半透明。
+  // 左右(±X)の丸のぞき窓＝CSGで胴体（外壁・内壁とも）へ本当に穴を開ける（2026-07-29 提案3）。
+  // 従来は部品を重ねて窓に見せていた＝穴は開いていなかった。実穴なので向こう側が見通せ、印刷の線も正しく出る。
   const winR = Math.min(bodyR * 0.60, Math.max(yIn, 0.001) * 0.70);
+  {
+    const bodyGeo = ringGeo(bodyR, boreR, 2 * yIn);
+    const cutter = new THREE.CylinderGeometry(winR, winR, bodyR * 2 + VMM(10), 28);
+    cutter.rotateZ(Math.PI / 2);                               // 軸をXへ＝左右へ貫通
+    const holed = csgSubtractGeo(bodyGeo, cutter);
+    bodyGeo.dispose(); cutter.dispose();
+    const bmat = mat.clone(); bmat.side = THREE.DoubleSide;    // 穴から中が見えるので両面
+    const body = new THREE.Mesh(holed, bmat);
+    body.name = 'sightBody';                                    // e2e検証用（実穴の確認）
+    g.add(body);
+  }
   const glassMat = new THREE.MeshStandardMaterial({
     color: 0xbfe4f0, metalness: 0.0, roughness: 0.05, transparent: true, opacity: 0.34, side: THREE.DoubleSide });
   for (const sx of [1, -1]) {
-    const seat = new THREE.Mesh(new THREE.CylinderGeometry(winR * 1.30, winR * 1.30, VMM(7), 26), mat);
-    seat.rotation.z = Math.PI / 2; seat.position.x = sx * bodyR; g.add(seat);                    // 座（胴体から出っ張る）
+    const seat = new THREE.Mesh(ringGeo(winR * 1.30, winR, VMM(7)), mat);                        // 座＝環（実穴を塞がない）
+    seat.rotation.z = Math.PI / 2; seat.position.x = sx * bodyR; g.add(seat);
     const glass = new THREE.Mesh(new THREE.CylinderGeometry(winR, winR, VMM(8), 28), glassMat);
     glass.rotation.z = Math.PI / 2; glass.position.x = sx * (bodyR + VMM(1.5)); g.add(glass);    // のぞきガラス
     const ring = new THREE.Mesh(new THREE.TorusGeometry(winR * 1.06, winR * 0.10, 8, 26), opMat);
