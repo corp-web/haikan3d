@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0728F — SKT-HD ♦</title>
+<title>配管3D v0729A — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0728F">
+<meta name="apple-mobile-web-app-title" content="配管3D v0729A">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -528,6 +528,7 @@
       <div class="rb-btns">
         <button id="cmdXline" title="構築線（レーザー）を引く（2点で方向指定・無限長）"><span class="ic">⌁</span>構築線</button>
         <button id="cmdLine"  title="線分を引く（2点クリック）"><span class="ic">／</span>線分</button>
+        <button id="cmdSweep" title="配管化：線分で描いたルート（芯線）を選んで押すと、呼び径・Schを指定してパイプとエルボを一括配置する。90°/45°は規格エルボ、その他の角度は切断エルボ、入らない区間は自動でショートに切替。線分1本を選べば、つながった線分を自動でたどる"><span class="ic">⏦</span>配管化</button>
         <button id="cmdCircle" title="円を描く（中心をクリック→半径まで広げて確定）"><span class="ic">◯</span>円</button>
         <button id="cmdDim"   title="寸法（右クリックで 長さ/平行/角度/半径/直径/引出 を選択）"><span class="ic">↔</span>寸法</button>
         <button id="cmdText"  title="文字を配置（点をクリック→そのまま入力）"><span class="ic">Ｔ</span>文字</button>

@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0728-F';
+const APP_VER = 'v0729-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1370,7 +1370,9 @@ function makeBendCore(R, angleDeg, ro, ri, mat) {
   return g;
 }
 
-// エルボ生成。opts={sizeA, sch, kind:'90L'|'90S'|'45L'|'45S'|'180L'|'180S'}
+// エルボ生成。opts={sizeA, sch, kind:'90L'|'90S'|'45L'|'45S'|'180L'|'180S', cutAngle}
+// cutAngle(度・kindの角度未満)＝「切断エルボ」。実際の施工と同じく母材(kind)を切って使う想定で、
+// 曲げ半径Rは母材のまま弧の角度だけ変える（中心-端は R·tan(角/2) になり、工作点も正しく出る）。
 function makeElbow(opts) {
   const o = Object.assign({ sizeA: '50A', sch: 'Sch40', kind: '90L' }, opts || {});
   const ro = (FLG_BORE[o.sizeA] || 114) / 2 / 1000;
@@ -1385,6 +1387,7 @@ function makeElbow(opts) {
     const cE = (tbl[o.sizeA] || 76) / 1000;
     R = cE / Math.tan(angle / 2 * Math.PI / 180);    // 中心-端 → 中心線半径
   }
+  if (o.cutAngle > 0 && o.cutAngle < angle) angle = o.cutAngle;   // 切断エルボ（180°母材の切断にも対応）
   const g = makeBendCore(R, angle, ro, ri, mat);
   g.userData.partType = 'elbow';
   g.userData.elbow = { ...o };
@@ -2943,6 +2946,7 @@ function clearOtherCommands(keep) {
   if (keep !== 'pending' && window.__clearPendingCmd) window.__clearPendingCmd();
   if (keep !== 'mirror' && window.__mirrorCancel) window.__mirrorCancel();
   if (keep !== 'rotate' && window.__rotateCancel) window.__rotateCancel();
+  if (keep !== 'sweep' && window.__sweepCancel) window.__sweepCancel();
   if (keep !== 'detail' && window.__detailFrameEnd) window.__detailFrameEnd();
 }
 let moveMode = false;   // true=「移動」コマンド実行待ち
@@ -4000,7 +4004,7 @@ function defaultPose(tool) {
 function behType(part) { return part ? (swShapeOf(part) || valveShapeOf(part) || part.userData.partType) : null; }
 function isFreeRotPart(part) { return !!(part && ['pipe', 'elbow', 'cap', 'tee', 'reducer'].includes(behType(part))); }   // 短押し右クリック45°の対象（レデューサーはキャップと同じ）
 function isSpinRotPart(part) { return !!(part && ['pipe', 'elbow', 'cap', 'tee', 'reducer', 'flange', 'gasket'].includes(behType(part))); }      // 長押し角度スピナーの対象（レデューサー・ガスケット追加）
-function is180Elbow(part) { return !!(part && part.userData.partType === 'elbow' && part.userData.elbow && String(part.userData.elbow.kind || '').startsWith('180')); }
+function is180Elbow(part) { return !!(part && part.userData.partType === 'elbow' && part.userData.elbow && String(part.userData.elbow.kind || '').startsWith('180') && !(part.userData.elbow.cutAngle > 0)); }   // 180°母材の切断エルボは180°扱いしない
 // 180°エルボは右クリックとShiftの回転を入れ替える
 function rotShift(part, shift) { return is180Elbow(part) ? !shift : shift; }
 function partRotPivotDir(part) {     // {pivot, dirRef}：起点（grip）の位置と、起点→最も離れた機点の向き
@@ -4690,7 +4694,7 @@ function partColumns(p) {
     case 'flange': { const o = u.flange || {}; return { kind: 'フランジ', type: o.type || '', size: o.sizeA || '', cls: o.cls || '' }; }
     case 'gasket': { const o = u.gasket || {}; return { kind: 'ガスケット', type: `t${o.t != null ? o.t : 3}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'pipe':   { const o = u.pipe || {};   return { kind: 'パイプ', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.sch || '' }; }
-    case 'elbow':  { const o = u.elbow || {};  const nm = {'90L':'90°エルボ','90S':'90°エルボ','45L':'45°エルボ','45S':'45°エルボ','180L':'180°エルボ','180S':'180°エルボ'}; const tp = (o.kind && o.kind.endsWith('S')) ? 'BW(S)' : 'BW(L)'; return { kind: nm[o.kind] || 'エルボ', type: tp, size: o.sizeA || '', cls: o.sch || '' }; }
+    case 'elbow':  { const o = u.elbow || {};  const nm = {'90L':'90°エルボ','90S':'90°エルボ','45L':'45°エルボ','45S':'45°エルボ','180L':'180°エルボ','180S':'180°エルボ'}; let tp = (o.kind && o.kind.endsWith('S')) ? 'BW(S)' : 'BW(L)'; if (o.cutAngle > 0) tp += `切${Math.round(o.cutAngle * 10) / 10}°`; return { kind: nm[o.kind] || 'エルボ', type: tp, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'cap':    { const o = u.cap || {};    return { kind: 'キャップ', type: 'BW', size: o.sizeA || '', cls: o.sch || '' }; }
     case 'tee':    { const o = u.tee || {};    const rt = (o.sizeB && o.sizeB !== o.sizeA); return { kind: 'ティー', type: rt ? 'BW(RT)' : 'BW(T)', size: rt ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: o.sch || '' }; }
     case 'reducer':{ const o = u.reducer || {};return { kind: 'レジューサ', type: o.ecc ? 'BW(E)' : 'BW(C)', size: `${o.sizeA || ''}×${o.sizeB || ''}`, cls: o.sch || '' }; }
@@ -6288,13 +6292,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ===== 「選択してからコマンド」も「コマンドを押してから選択」もできるようにする =====
   // 移動コマンドと同じ使い勝手にする（2026-07-27 社長要望）。何も選ばずに押したらボタンを点灯して待ち、
   // そのあとアイテムを選んだ時点で実行する。判定は選択処理が全部終わってから（末尾の pointerup で呼ぶ）。
-  let pendingCmd = null;                          // 'dup' | 'mirror' | 'rotate' | null
-  const PENDING_BTN = { dup: 'cmdDup', mirror: 'cmdMirror', rotate: 'cmdRotate' };
+  let pendingCmd = null;                          // 'dup' | 'mirror' | 'rotate' | 'sweep' | null
+  const PENDING_BTN = { dup: 'cmdDup', mirror: 'cmdMirror', rotate: 'cmdRotate', sweep: 'cmdSweep' };
   // リボンの光り方は「実行中」も「待ち受け中」も光る＝移動ボタンと同じ扱いにする（2026-07-28 社長指摘）
   function syncCmdLights() {
     const on = { dup: pendingCmd === 'dup',
                  mirror: !!mirrorMode || pendingCmd === 'mirror',
-                 rotate: !!rotateMode || pendingCmd === 'rotate' };
+                 rotate: !!rotateMode || pendingCmd === 'rotate',
+                 sweep: !!sweepMode || pendingCmd === 'sweep' };
     for (const k of Object.keys(PENDING_BTN)) {
       const b = $(PENDING_BTN[k]); if (b) b.classList.toggle('active', !!on[k]);
     }
@@ -6314,7 +6319,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!n) return false;                          // まだ選ばれていない＝待ち続ける
     const c = pendingCmd;
     setPendingCmd(null);
-    if (c === 'dup') duplicate(); else if (c === 'mirror') mirror(); else if (c === 'rotate') rotateCmd();
+    if (c === 'dup') duplicate(); else if (c === 'mirror') mirror(); else if (c === 'rotate') rotateCmd(); else if (c === 'sweep') sweepCmd();
     return true;
   };
 
@@ -6590,6 +6595,241 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!rotateMode) return;
     if (e.key === 'Escape') { e.stopImmediatePropagation(); endRotateMode(); }
   }, true);
+
+  // ===== 配管化コマンド（2026-07-29 社長要望）＝線分ルートをパイプ＋エルボへ自動展開（スイープ） =====
+  // 線分で描いた芯線ルートを選んで実行すると、呼び径・Schを指定してパイプとエルボを一括配置する。
+  // ・線分1本だけ選ぶと、端点がつながる線分（1mm以内）を自動でたどってルート全体を対象にする。
+  // ・角＝90°/45°は規格エルボ（ロング既定）。その他の角度は実際の施工と同じく母材を切った「切断エルボ」
+  //   （45°以下→45°母材、90°まで→90°母材、90°超→180°ベンド母材。165°超は中止）。
+  // ・エルボが入らない短い区間は自動でショートエルボへ切替。それでも入らなければ中止して理由を出す。
+  // ・パイプ長＝芯々からエルボの中心-端(cE=R·tan(角/2))を差し引いた値＝線分の寸法がそのまま芯々寸法。
+  // ・線分（芯線）は消さずに残す（採寸の記録。不要なら選んで削除）。
+  let sweepMode = null;   // { pts:V3[], lineCount }
+  let sweepBox = null, sweepSize = null, sweepSch = null;
+  const SWEEP_TOL = 0.001;        // 端点一致 1mm（構築線交点の endTol と同じ）
+  const SWEEP_ANG_TOL = 0.25;     // 90°/45°ちょうどとみなす角度差
+  function endSweepMode() {
+    sweepMode = null;
+    if (sweepBox) sweepBox.style.display = 'none';
+    syncCmdLights();
+  }
+  window.__sweepActive = () => !!sweepMode;
+  window.__sweepCancel = endSweepMode;
+  // 選んだ線分からルート（点列）を組み立てる。1本選択なら全線分から連結をたどる。
+  function sweepTrace(seed) {
+    const pool = seed.length >= 2 ? seed : annStore.filter(r => r.type === 'line' && !r.hidden);
+    const used = new Set([seed[0]]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const r of pool) {
+        if (used.has(r)) continue;
+        for (const u of used) {
+          if (u.a.distanceTo(r.a) < SWEEP_TOL || u.a.distanceTo(r.b) < SWEEP_TOL ||
+              u.b.distanceTo(r.a) < SWEEP_TOL || u.b.distanceTo(r.b) < SWEEP_TOL) { used.add(r); grew = true; break; }
+        }
+      }
+    }
+    if (seed.length >= 2) {
+      const miss = seed.filter(r => !used.has(r));
+      if (miss.length) return { err: `配管化：選んだ線分がつながっていません（${miss.length}本が離れています。端点は1mm以内で合わせてください）` };
+    }
+    // 端点をノードにまとめ、枝分かれ・輪を検査してから端から順にたどる
+    const nodes = [];
+    const nodeOf = (p) => {
+      for (const n of nodes) if (n.p.distanceTo(p) < SWEEP_TOL) return n;
+      const n = { p: p.clone(), edges: [] };
+      nodes.push(n); return n;
+    };
+    for (const r of used) {
+      if (r.a.distanceTo(r.b) < SWEEP_TOL) continue;                 // ゼロ長は無視
+      const na = nodeOf(r.a), nb = nodeOf(r.b);
+      if (na === nb) continue;
+      na.edges.push({ rec: r, to: nb }); nb.edges.push({ rec: r, to: na });
+    }
+    if (nodes.some(n => n.edges.length > 2)) return { err: '配管化：ルートが枝分かれしています。1本の連続したルートにしてください' };
+    const ends = nodes.filter(n => n.edges.length === 1);
+    if (ends.length !== 2) return { err: '配管化：ルートが輪になっています。始点と終点のあるルートにしてください' };
+    const pts = [ends[0].p.clone()];
+    let cur = ends[0], prevRec = null;
+    while (true) {
+      const e = cur.edges.find(x => x.rec !== prevRec);
+      if (!e) break;
+      pts.push(e.to.p.clone());
+      prevRec = e.rec; cur = e.to;
+      if (cur.edges.length === 1) break;
+    }
+    // まっすぐ続く継ぎ目（角度0.5°未満）は間引く＝1本の直管として扱う
+    for (let i = pts.length - 2; i >= 1; i--) {
+      const d1 = pts[i].clone().sub(pts[i - 1]).normalize();
+      const d2 = pts[i + 1].clone().sub(pts[i]).normalize();
+      if (d1.angleTo(d2) * 180 / Math.PI < 0.5) pts.splice(i, 1);
+    }
+    return { pts, count: used.size };
+  }
+  // 点列→部品割り付け（エルボの種類・切断角・パイプ長）。err か {elbows, pipes} を返す。
+  function sweepPlan(pts, sizeA) {
+    const D2R = Math.PI / 180;
+    const corners = [];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const dIn = pts[i].clone().sub(pts[i - 1]).normalize();
+      const dOut = pts[i + 1].clone().sub(pts[i]).normalize();
+      const th = dIn.angleTo(dOut) * 180 / Math.PI;
+      if (th > 165) return { err: `配管化：${Math.round(th)}°曲がる角があります（対応は165°まで。折返しは配管化できません）` };
+      const base = th <= 45 + SWEEP_ANG_TOL ? '45' : th <= 90 + SWEEP_ANG_TOL ? '90' : '180';
+      const exact = base !== '180' && Math.abs(th - (base === '45' ? 45 : 90)) <= SWEEP_ANG_TOL;
+      corners.push({ i, th, base, exact, short: false, dIn, dOut });
+    }
+    // 中心-端 cE(m)＝母材の曲げ半径R×tan(角/2)。規格表に無い径は null。
+    function cEof(c) {
+      let R;
+      if (c.base === '180') { const tb = c.short ? RETURN_180S : RETURN_180L; if (tb[sizeA] == null) return null; R = tb[sizeA] / 2 / 1000; }
+      else {
+        const tb = { '45L': ELBOW_45L, '45S': ELBOW_45S, '90L': ELBOW_90L, '90S': ELBOW_90S }[c.base + (c.short ? 'S' : 'L')];
+        if (!tb || tb[sizeA] == null) return null;
+        R = tb[sizeA] / 1000 / Math.tan((c.base === '45' ? 45 : 90) / 2 * D2R);
+      }
+      return R * Math.tan(c.th / 2 * D2R);
+    }
+    for (const c of corners) if (cEof(c) == null) return { err: `配管化：${sizeA} の ${c.base}°エルボは規格表にありません` };
+    // 各区間に収まるか。収まらない区間は両端の角をショートへ→それでも駄目なら中止
+    for (let pass = 0; ; pass++) {
+      let bad = null;
+      for (let s = 0; s < pts.length - 1 && !bad; s++) {
+        const cPrev = corners.find(c => c.i === s), cNext = corners.find(c => c.i === s + 1);
+        const ceP = cPrev ? cEof(cPrev) : 0, ceN = cNext ? cEof(cNext) : 0;
+        if (ceP == null || ceN == null) return { err: `配管化：${sizeA} のショートエルボは規格表にありません（区間${s + 1}が短すぎます）` };
+        const L = pts[s].distanceTo(pts[s + 1]) - ceP - ceN;
+        if (L < -1e-6) bad = { s, L, cPrev, cNext };
+      }
+      if (!bad) break;
+      let changed = false;
+      for (const c of [bad.cPrev, bad.cNext]) if (c && !c.short) { c.short = true; changed = true; }
+      if (!changed || pass >= 3) return { err: `配管化：区間${bad.s + 1}（${Math.round(pts[bad.s].distanceTo(pts[bad.s + 1]) * 1000)}mm）が短すぎてエルボが入りません（あと${Math.ceil(-bad.L * 1000)}mm）` };
+    }
+    const elbows = corners.map(c => ({
+      i: c.i, th: c.th, dIn: c.dIn, dOut: c.dOut,
+      kind: c.base + (c.short ? 'S' : 'L'),
+      cutAngle: c.exact ? 0 : Math.round(c.th * 100) / 100,
+      cE: cEof(c),
+    }));
+    const pipes = [];
+    for (let s = 0; s < pts.length - 1; s++) {
+      const cPrev = elbows.find(c => c.i === s), cNext = elbows.find(c => c.i === s + 1);
+      const a = pts[s].clone(), b = pts[s + 1].clone();
+      const d = b.clone().sub(a).normalize();
+      if (cPrev) a.addScaledVector(d, cPrev.cE);
+      if (cNext) b.addScaledVector(d, -cNext.cE);
+      const L = a.distanceTo(b) * 1000;
+      if (L >= 0.5) pipes.push({ a, b, d, L });   // 0.5mm未満＝エルボどうしの直付け（パイプなし）
+    }
+    return { elbows, pipes };
+  }
+  // 実行＝計画どおりに一括配置（Undoは1回でまとめて戻る）
+  function execSweep() {
+    if (!sweepMode) return;
+    const sizeA = sweepSize.value, sch = sweepSch.value;
+    const plan = sweepPlan(sweepMode.pts, sizeA);
+    if (plan.err) { if (window.__toast) window.__toast(plan.err); return; }   // 箱は開けたまま＝径を変えて再実行できる
+    const yAxis = new V3(0, 1, 0);
+    for (const e of plan.elbows) {
+      const o = makeElbow(Object.assign({ sizeA, sch, kind: e.kind }, e.cutAngle ? { cutAngle: e.cutAngle } : {}));
+      computeConns(o);
+      // 向き＝ローカルの背脚(0,-1,0)を入り側の逆へ、面脚(sinθ,cosθ,0)を出側へ。
+      // ローカル法線(0,0,-1)が世界の dIn×dOut に対応するので、基底 y=dIn / z=-(dIn×dOut) / x=y×z で決まる。
+      const n = e.dIn.clone().cross(e.dOut).normalize();
+      const y = e.dIn.clone(), z = n.clone().negate(), x = y.clone().cross(z);
+      o.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+      o.userData.orient = 0; o.userData.roll = 0;
+      setPartByOrigin(o, sweepMode.pts[e.i]);      // 起点＝工作点(角)を線分の折れ点へ
+      registerPart(o);
+    }
+    for (const p of plan.pipes) {
+      const o = makePipe({ sizeA, sch, length: p.L });
+      computeConns(o);
+      o.quaternion.setFromUnitVectors(yAxis, p.d);
+      o.position.copy(p.a).add(p.b).multiplyScalar(0.5);   // 中心＝区間の中点
+      o.userData.orient = 0; o.userData.roll = 0;
+      registerPart(o);
+    }
+    if (window.__annClearSel) window.__annClearSel();
+    selectPart(null);
+    refreshItemList();
+    if (typeof updateForm === 'function') updateForm();
+    if (typeof _idleSig !== 'undefined') _idleSig = null;
+    if (window.__recordHistory) window.__recordHistory();
+    if (window.__toast) window.__toast(`配管化：パイプ${plan.pipes.length}本・エルボ${plan.elbows.length}個を配置しました（${sizeA} ${sch}）`);
+    endSweepMode();
+  }
+  function ensureSweepBox() {
+    if (sweepBox) return;
+    sweepBox = document.createElement('div');
+    sweepBox.id = 'sweepCmdBox';
+    sweepBox.style.cssText = 'position:fixed;z-index:90;display:none;align-items:center;gap:6px;padding:6px 9px;font:12px Meiryo,sans-serif;' +
+      'color:#33405c;background:rgba(248,250,253,.97);border:1px solid #7fa8e8;border-radius:8px;box-shadow:0 4px 14px rgba(20,40,80,.20);white-space:nowrap';
+    const sel = 'background:#fff;color:#2a3550;border:1px solid #c4ccda;border-radius:5px;padding:3px 5px;font-size:12px';
+    const btn = 'border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer';
+    sweepBox.innerHTML =
+      '<span style="font-weight:bold">配管化</span><span id="swpInfo" style="opacity:.72"></span>' +
+      `<select id="swpSize" title="呼び径" style="${sel}"></select>` +
+      `<select id="swpSch" title="スケジュール" style="${sel}"></select>` +
+      `<button id="swpGo" style="${btn};background:#2f6fd8;color:#fff">実行</button>` +
+      `<button id="swpNo" style="${btn};background:#e2e7f0;color:#33405c">取消</button>`;
+    document.body.appendChild(sweepBox);
+    sweepSize = sweepBox.querySelector('#swpSize');
+    sweepSch = sweepBox.querySelector('#swpSch');
+    for (const s of FLANGE_SIZES) if (ELBOW_90L[s] != null) sweepSize.add(new Option(s, s));
+    for (const s of PIPE_SCHEDULES) sweepSch.add(new Option(s, s));
+    sweepBox.querySelector('#swpGo').onclick = execSweep;
+    sweepBox.querySelector('#swpNo').onclick = endSweepMode;
+    ['pointerdown', 'click'].forEach(ev => sweepBox.addEventListener(ev, e => e.stopPropagation()));
+  }
+  function showSweepBox() {
+    ensureSweepBox();
+    if (ELBOW_90L[pipeOpts.sizeA] != null) sweepSize.value = pipeOpts.sizeA;   // パレットのパイプ設定を既定にする
+    if (PIPE_SCHEDULES.includes(pipeOpts.sch)) sweepSch.value = pipeOpts.sch;
+    let total = 0;
+    for (let i = 1; i < sweepMode.pts.length; i++) total += sweepMode.pts[i].distanceTo(sweepMode.pts[i - 1]);
+    sweepBox.querySelector('#swpInfo').textContent = `線分${sweepMode.lineCount}本・曲り${sweepMode.pts.length - 2}箇所・芯々${Math.round(total * 1000)}mm`;
+    const c = sweepMode.pts.reduce((s, p) => s.add(p), new V3()).multiplyScalar(1 / sweepMode.pts.length);
+    const rect = renderer.domElement.getBoundingClientRect();
+    const ndc = modelGroup.localToWorld(c.clone()).project(activeCam());
+    const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+    sweepBox.style.display = 'flex';
+    sweepBox.style.left = Math.round(Math.min(Math.max(sx - 210, rect.left + 8), Math.max(rect.left + 8, rect.right - 430))) + 'px';
+    sweepBox.style.top = Math.round(Math.min(Math.max(sy - 52, rect.top + 8), rect.bottom - 46)) + 'px';
+  }
+  function sweepCmd() {
+    if (sweepMode) { endSweepMode(); return; }             // もう一度押す＝取消
+    if (pendingCmd === 'sweep') { setPendingCmd(null); return; }   // 待ち受け中にもう一度押す＝取消
+    const seed = [...selAnns].filter(r => r.type === 'line' && !r.hidden);
+    if (!seed.length) { setPendingCmd('sweep', '配管化：ルートの線分をタップで選んでください（1本選べば、つながった線分を自動でたどります）'); return; }
+    setPendingCmd(null);
+    if (typeof clearOtherCommands === 'function') clearOtherCommands('sweep');   // 他のコマンドは解除
+    const tr = sweepTrace(seed);
+    if (tr.err) { if (window.__toast) window.__toast(tr.err); return; }
+    if (tr.pts.length < 2) { if (window.__toast) window.__toast('配管化：ルートの長さがありません'); return; }
+    sweepMode = { pts: tr.pts, lineCount: tr.count };
+    syncCmdLights();
+    showSweepBox();
+    if (window.__toast) window.__toast('配管化：呼び径とSchを確認して「実行」を押してください');
+  }
+  window.addEventListener('keydown', e => {
+    if (!sweepMode) return;
+    if (e.key === 'Escape') { e.stopImmediatePropagation(); endSweepMode(); }
+  }, true);
+  // e2e検証用フック
+  window.__sweepCmd = sweepCmd;
+  window.__sweepExec = execSweep;
+  window.__sweepSet = (sizeA, sch) => { ensureSweepBox(); if (sizeA) sweepSize.value = sizeA; if (sch) sweepSch.value = sch; };
+  window.__sweepState = () => sweepMode ? { pts: sweepMode.pts.map(p => p.toArray()), lines: sweepMode.lineCount } : null;
+  window.__sweepPlanFor = (sizeA) => {
+    if (!sweepMode) return null;
+    const pl = sweepPlan(sweepMode.pts, sizeA);
+    if (pl.err) return { err: pl.err };
+    return { elbows: pl.elbows.map(e => ({ i: e.i, th: e.th, kind: e.kind, cutAngle: e.cutAngle, cE: e.cE })), pipes: pl.pipes.map(p => ({ L: p.L })) };
+  };
+
   function mirror() {
     if (mirrorMode) { endMirrorMode(); return; }          // もう一度押す＝取消
     if (pendingCmd === 'mirror') { setPendingCmd(null); return; }   // 待ち受け中にもう一度押す＝取消
@@ -10102,6 +10342,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
              a: [r.a.x, r.a.y, r.a.z], b: [r.b.x, r.b.y, r.b.z],
              measured: r.type === 'dim' ? dimMeasuredStr(r.a, r.b, r.style) : null };
   };
+  // 線分をプログラムから追加（配管化などのe2e検証用。a/b=[x,y,z]・単位m）
+  window.__annAddLine = (a, b) => { addAnnotation('line', new V3(a[0], a[1], a[2]), new V3(b[0], b[1], b[2]), null); return annStore.length - 1; };
   // ---- プロパティパネル用（単一選択の注釈の値の取得・適用。2026-07-18 社長要望） ----
   window.__annPropsGet = () => {
     if (selAnns.size !== 1 || !lineSel) return null;
@@ -11709,6 +11951,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   $('cmdPrint').onclick = printSheet;
   $('cmdPng').onclick = exportPng;
   $('cmdLine').onclick = () => setDrawMode('line');
+  { const b = $('cmdSweep'); if (b) b.onclick = sweepCmd; }   // 配管化コマンド（2026-07-29 社長要望）
   $('cmdXline').onclick = () => setDrawMode('xline');
   $('cmdCircle').onclick = () => setDrawMode('circle');
   $('cmdDim').onclick = () => setDrawMode('dim');
