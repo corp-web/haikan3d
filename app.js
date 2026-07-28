@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-D';
+const APP_VER = 'v0729-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2774,7 +2774,7 @@ function onOptChange(srcId) {
   o.sch   = v('optSch');
   updateOptVisibility();
   refreshThumbs();
-  applyPaletteToSelected();   // 配置済みフランジを選択中なら、その部品を新仕様で作り替え
+  // パレットの変更は配置済みへは効かせない（2026-07-29 社長指示。仕様変更はプロパティで）
 }
 
 // ---- パイプのオプションUI（呼び径・Sch・長さ mm） ----
@@ -2790,7 +2790,7 @@ function onPipeOptChange() {
   pipeOpts.sch = v('optPipeSch');
   const len = parseFloat(v('optPipeLen')); pipeOpts.length = (len > 0 ? len : 1000);
   refreshThumbs();
-  applyPaletteToSelected();   // 配置済みパイプを選択中なら、その部品を新仕様で作り替え
+  // パレットの変更は配置済みへは効かせない（2026-07-29 社長指示）
 }
 ['optPipeSize', 'optPipeSch', 'optPipeLen'].forEach(id => {
   const el = document.getElementById(id);
@@ -2813,7 +2813,7 @@ function onGasketOptChange() {
   gasketOpts.t = (tt > 0) ? tt : 3;                 // 不正値は既定3mmへ
   buildGasketOptions();                              // クラス変更でサイズ一覧を組み直し
   refreshThumbs();
-  applyPaletteToSelected();                          // 配置済みガスケットを選択中なら作り替え
+  // パレットの変更は配置済みへは効かせない（2026-07-29 社長指示）
 }
 ['optGskSize', 'optGskClass', 'optGskT'].forEach(id => {
   const el = document.getElementById(id);
@@ -2838,7 +2838,6 @@ function onEquipOptChange() {
   o.length = (L >= 60) ? Math.round(L) : 60;             // 短すぎると両端フランジがめり込む
   buildEquipOptions();
   refreshThumbs();
-  applyPaletteToSelected();
 }
 ['optEqSize', 'optEqClass', 'optEqLen'].forEach(id => {
   const el = document.getElementById(id);
@@ -2858,7 +2857,6 @@ function onPgOptChange() {
   pgOpts.siphon = el('optPgSiphon') ? !!el('optPgSiphon').checked : true;
   buildPgOptions();
   refreshThumbs();
-  applyPaletteToSelected();
 }
 ['optPgDia', 'optPgThread', 'optPgSiphon'].forEach(id => {
   const el = document.getElementById(id);
@@ -2925,7 +2923,7 @@ function onFitOptChange() {
   const cl = v('optFitClass'); if (cl !== undefined && VALVE_RATINGS.includes(cl)) valveOpts.cls = cl;   // クラスは多クラスvalveのみ記憶（Class800は無視）
   rebuildFittingSize();   // タイプ/クラス/sizeA 変更で 呼び径/Sch/sizeB 候補が変わるため作り直し
   refreshThumbs();
-  applyPaletteToSelected();   // 配置済みの継手・バルブを選択中なら、その部品を新仕様で作り替え
+  // パレットの変更は配置済みへは効かせない（2026-07-29 社長指示）
 }
 ['optFitType', 'optFitClass', 'optFitSize', 'optFitSch', 'optFitSizeB'].forEach(id => {
   const el = document.getElementById(id);
@@ -3982,16 +3980,13 @@ function updateFollowPreview(clientX, clientY) {
 function moveFollow(x, y) { updateFollowPreview(x, y); }
 
 // 追従中：右クリック＝方向(dir)送り、Shift+右クリック＝ひねり(roll)切替。起点は保つ。
-function cycleFollowOrientation(shift) {
+function cycleFollowOrientation(mode) {
   if (!followTool || !followPreview) return;
   const keep = originModelPos(followPreview);
-  if (isFreeRotPart(followPreview)) {            // パイプ・エルボ・キャップは再選択時と同じ線分式回転（起点まわり45°／Shift鉛直／垂直クロス）
-    if (followQuat) followPreview.quaternion.copy(followQuat);
-    else orientRotation(followPreview, followOrient, followRoll);
-    lineRotate45(followPreview, shift);
-    followQuat = followPreview.quaternion.clone();
-  } else if (shift) { followRoll = (followRoll + 1) % ROLL_COUNT; orientRotation(followPreview, followOrient, followRoll); }
-  else { followOrient = (followOrient + 1) % DIR_COUNT; orientRotation(followPreview, followOrient, followRoll); }
+  if (followQuat) followPreview.quaternion.copy(followQuat);
+  else orientRotation(followPreview, followOrient, followRoll);
+  stepPartRotate(followPreview, mode);           // 3軸45°送り（配置済みと同じ操作感）
+  followQuat = followPreview.quaternion.clone(); // 以後は自由姿勢として毎フレーム維持
   setPartByOrigin(followPreview, keep);
   showInteractionMarkers(followPreview, null);
 }
@@ -4311,37 +4306,14 @@ function stepFreePose(p, shift) {
   p.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, ang));
 }
 // 移動中：右クリック＝方向送り、Shift+右クリック＝回転（旧ひねり）切替。起点は保つ。
-function cycleMoveOrientation(shift) {
+function cycleMoveOrientation(mode) {   // 自由移動中の3軸45°送り（2026-07-29 3軸化）
   if (!movingPart) return;
-  const kl = rotGripLocalOf(movingPart);   // ボルト穴起点でも回転はフェイス中心基準
-  const kw = connModelPos(movingPart, kl);
-  if (!poseNearTable(movingPart, movingOrient, movingRoll)) {
-    stepFreePose(movingPart, shift);
-  } else {
-    if (shift) movingRoll = (movingRoll + 1) % ROLL_COUNT;
-    else movingOrient = (movingOrient + 1) % DIR_COUNT;
-    orientRotation(movingPart, movingOrient, movingRoll);
-  }
-  movingPart.position.add(kw.sub(connModelPos(movingPart, kl)));
+  stepPartRotate(movingPart, mode);
   showInteractionMarkers(movingPart, null);
+  _idleSig = null; updateForm();
 }
-// 配置済み（選択中）：右クリック＝方向送り、Shift+右クリック＝ひねり切替。起点は保つ。
-function cycleSelectedOrientation(shift) {
-  const p = selectedPart;
-  if (!p || !p.userData.faceLocal) return;
-  const kl = rotGripLocalOf(p);       // ボルト穴起点でも回転はフェイス中心基準（穴を中心に振り回さない）
-  const kw = connModelPos(p, kl);
-  if (!poseNearTable(p, p.userData.orient || 0, p.userData.roll || 0)) {
-    stepFreePose(p, shift);           // 自由回転済み＝今の姿勢から45°（テーブルへ巻き戻さない）
-  } else {
-    if (shift) p.userData.roll = ((p.userData.roll || 0) + 1) % ROLL_COUNT;
-    else p.userData.orient = ((p.userData.orient || 0) + 1) % DIR_COUNT;
-    orientRotation(p, p.userData.orient || 0, p.userData.roll || 0);
-  }
-  p.position.add(kw.sub(connModelPos(p, kl)));   // 基準機点をその場に保つ
-  _idleSig = null;                    // パイプ端マーカー等を更新
-  updateForm();                       // 向きでCOP↔ELが変わるのでラベル更新
-}
+// 配置済み（選択中）＝3軸45°送りへ統一。旧名はテスト・他呼び出しの互換で残す。
+function cycleSelectedOrientation(mode) { pipeRotate(mode); }
 // ---- パイプ・エルボの回転：線分と同じ仕様（起点まわりに45°／Shift=鉛直／垂直時クロス／長押しで角度スピナー） ----
 let _pipeRotAxis = null, _pipeTipAxis = null, _pipeTipMode = false;
 function resetPipeRotState() { _pipeRotAxis = null; _pipeTipAxis = null; _pipeTipMode = false; }
@@ -4461,31 +4433,56 @@ function partRotAxis(part, shift, dirRef) {   // エルボ/ティー：右クリ
   }
   return pipeRotAxisFor(rotShift(part, shift), dirRef);                 // パイプ
 }
+// ===== 方位角・立面角・回転の3軸45°送り（2026-07-29 社長要望） =====
+// 従来の「向き（Z/X軸リング送り）＋回転（Shift）」を、プロパティと同じ3軸へ再編：
+//  ・方位角＝世界の鉛直軸まわり45°（北→東まわり＝平面図での向き直し）
+//  ・立面角＝フェイス方位の水平直交軸まわり45°（起こす・寝かす）
+//  ・回転　＝フェイス法線（部品ローカル+Y）まわり45°（ひねり）
+// ピボットは従来どおり起点（grip・パイプは選択端）。姿勢の真実はquaternionなので、
+// 送りテーブル(orient/roll)には依存しない＝どんな姿勢からでも同じ向きに効く。
+// 互換：mode に従来の boolean が来たら false='az'（旧・向き）／true='roll'（旧・回転）と読む。
+function rotModeOf(m) { return m === true ? 'roll' : m === false ? 'az' : (m || 'az'); }
+function partAxisFor(part, mode) {
+  const n = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // フェイス法線
+  if (mode === 'roll') return n;
+  // 立面角＝n×Y（方位の水平直交軸。+45°で起きる）。真上/真下はローカルXで代用
+  const a = new THREE.Vector3(-n.z, 0, n.x);
+  if (a.lengthSq() > 1e-12) return a.normalize();
+  return new THREE.Vector3(1, 0, 0).applyQuaternion(part.quaternion).normalize();
+}
+function stepPartRotate(part, mode) {
+  mode = rotModeOf(mode);
+  const { pivot } = partRotPivotDir(part);
+  let axis, ang = Math.PI / 4;
+  if (mode === 'az') { axis = new THREE.Vector3(0, 1, 0); ang = -Math.PI / 4; }   // 世界Yの−45°＝方位角+45°（北→東）
+  else axis = partAxisFor(part, mode);
+  rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, ang));
+}
 function lineRotate45(part, shift) {   // 起点(grip)まわりに45°回す核（パイプ・エルボ・キャップ・ティー共通。追従中も再利用）
   const { pivot, dirRef } = partRotPivotDir(part);
   const q = new THREE.Quaternion().setFromAxisAngle(partRotAxis(part, shift, dirRef), Math.PI / 4);
   rotatePipeAround(part, pivot, q);
 }
-function pipeRotate(shift) {
-  const part = selectedPart; if (!isFreeRotPart(part)) return;
-  lineRotate45(part, shift);
+function pipeRotate(mode) {   // 選択中の部品を3軸45°送り（全部品共通。旧名はテスト互換で残す）
+  const part = selectedPart; if (!part || !part.userData.faceLocal) return;
+  stepPartRotate(part, mode);
   if (selectedParts.has(part)) setEmissive(part, SEL_COLOR);
   _idleSig = null; updateForm();
 }
 let _pipeSpin = null;
-function pipeRotateSpinStart(shift) {
+function pipeRotateSpinStart(mode) {
+  mode = rotModeOf(mode);
   const part = selectedPart; if (!isSpinRotPart(part)) return false;
-  const { pivot, dirRef } = partRotPivotDir(part);
-  let axis;
-  let baseDeg = 0;   // スピナーの初期表示角（プロパティの「回転」と同じ絶対角。2026-07-19 社長要望）
-  if (part.userData.partType === 'flange' || part.userData.partType === 'gasket') {   // フランジ・ガスケットは従来の向き/ひねりと同じ軸で連続回転
-    if (shift) {
-      axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // ひねり送り＝フェイス法線(ローカル+Y)
-      if (window.__partFaceRoll) baseDeg = window.__partFaceRoll(part);   // 回転（フェイス軸まわり）＝プロパティの角度から開始
-    }
-    else { const di = part.userData.orient || 0; axis = (di < DIR_COUNT / 2) ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0); }   // 向き送り＝方向リング軸(世界Z or X)
+  const { pivot } = partRotPivotDir(part);
+  const n360 = v => ((v % 360) + 360) % 360;
+  let axis, baseDeg = 0;   // スピナーの初期表示角＝プロパティの方位角/立面角/回転と同じ絶対角
+  if (mode === 'az') {
+    axis = new THREE.Vector3(0, -1, 0);   // スピナー＋方向＝方位角＋（北→東）
+    if (window.__partFaceBearing) baseDeg = n360(window.__partFaceBearing(part));
   } else {
-    axis = partRotAxis(part, shift, dirRef);   // パイプ・エルボ・キャップは線分式／ティーのShiftは端面(本管軸)まわり
+    axis = partAxisFor(part, mode);
+    if (mode === 'el' && window.__partFaceElev) baseDeg = n360(window.__partFaceElev(part));
+    else if (mode === 'roll' && window.__partFaceRoll) baseDeg = n360(window.__partFaceRoll(part));
   }
   _pipeSpin = { part, pivot: pivot.clone(), axis: axis.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg };
   return true;
@@ -4952,8 +4949,8 @@ function selectPart(obj, additive = false) {
   }
   updateForm();
   refreshItemList();   // 3D空間での選択/解除を一覧へ反映
-  // 配置済み部品を単独選択＝パレットへその仕様を映す（パレットの変更でこの部品を編集できる）
-  if (obj && obj.userData && obj.userData.placed && selectedParts.size === 1 && !_syncingPalette) syncPaletteToPart(obj);
+  // 選択してもパレットへは映さない（2026-07-29 社長指示：パレットは新規配置の設定専用。
+  // 配置済みの編集は空間内の操作かプロパティで行う＝syncPaletteToPart は呼ばない）
 }
 // グループ化／解除（リボン編集グループ）。部品＋注釈にまたがる
 let groupSeq = 0;
@@ -6092,7 +6089,7 @@ let rDownPos = null, rLongTimer = null, rLongFired = false;
 function clearRLong() { if (rLongTimer) { clearTimeout(rLongTimer); rLongTimer = null; } }
 // 角度スピナーの対象を「選択中パイプ」か「選択中の線」に振り分ける
 function pipeRotTarget() { return isSpinRotPart(selectedPart); }   // 長押しスピナーの対象（パイプ・エルボ・フランジ）
-function rotSpinStart(shift) { return pipeRotTarget() ? pipeRotateSpinStart(shift) : !!(window.__annRotateSpinStart && window.__annRotateSpinStart(shift)); }
+function rotSpinStart(mode) { return pipeRotTarget() ? pipeRotateSpinStart(mode) : !!(window.__annRotateSpinStart && window.__annRotateSpinStart(rotModeOf(mode) !== 'az')); }
 // スピナーの初期表示角（絶対角で表示する部品＝フランジ等の回転。無ければ0＝従来の相対表示）
 function rotSpinBaseDeg() { return (pipeRotateSpinActive() && _pipeSpin.baseDeg) || 0; }
 function rotSpinApply(deg) { if (pipeRotateSpinActive()) pipeRotateSpinApply(deg); else if (window.__annRotateSpinApply) window.__annRotateSpinApply(deg); }
@@ -6206,25 +6203,26 @@ function positionRotForm(cx, cy) {
   rotForm.style.left = Math.round(Math.max(rect.left + 4, Math.min(sx + 16, rect.right - fw - 4))) + 'px';
   rotForm.style.top = Math.round(Math.max(rect.top + 4, Math.min(sy - fh - 10, rect.bottom - fh - 4))) + 'px';
 }
-function startRotSpin(shift, cx, cy, noKbd) {
-  // 寸法線（単独選択）の長押し＝数値フォーム：無シフト＝逃げ／シフト＝回転
+function startRotSpin(mode, cx, cy, noKbd) {
+  const m = rotModeOf(mode), shiftLike = (m !== 'az');   // 旧boolean互換：false='az'／true='roll'
+  // 寸法線（単独選択）の長押し＝数値フォーム：回転＝逃げ回転／それ以外＝逃げ量
   //（タップ・45°送りではフォームを出さない＝長押しの時だけ・2026-07-19 社長要望）
   if (!selectedPart && window.__annSelIsSingleDim && window.__annSelIsSingleDim()) {
     const recD = window.__dimValueSel ? window.__dimValueSel() : null;
     if (recD) {
-      if (shift) { _spinNoKbd = !!noKbd; startDimRollSpin(recD); }
+      if (m === 'roll') { _spinNoKbd = !!noKbd; startDimRollSpin(recD); }
       else startDimOffSpin(recD, 'none', noKbd);
       return;
     }
   }
-  // 構築線を選択中：無Shift＝1mm平行移動スピナー、Shift＝方位角スピナー。それ以外（パイプ等）＝従来の角度スピナー
+  // 構築線を選択中：方位角＝1mm平行移動スピナー（従来の無Shift）、立面角・回転＝方位角スピナー（従来のShift）
   const xlineSel = !selectedPart && window.__annSelIsXline && window.__annSelIsXline();
-  if (xlineSel) _nudgeMode = shift ? 'heading' : 'move';
+  if (xlineSel) _nudgeMode = shiftLike ? 'heading' : 'move';
   else _nudgeMode = 'angle';
   let ok;
   if (_nudgeMode === 'move') ok = !!(window.__annMoveSpinStart && window.__annMoveSpinStart());
   else if (_nudgeMode === 'heading') ok = !!(window.__annHeadingSpinStart && window.__annHeadingSpinStart());
-  else ok = rotSpinStart(shift);
+  else ok = rotSpinStart(m);
   if (!ok) { _nudgeMode = 'angle'; return; }
   _spinNoKbd = !!noKbd;   // タッチ起動＝キーボードを出さず▲▼で操作（3D画面タップで確定）
   setNudgeLabel();
@@ -6280,7 +6278,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
   rDownPos = { x: e.clientX, y: e.clientY }; rLongFired = false; clearRLong();
   if (canRotSpin()) {                          // 線またはパイプを選択中＝長押しで角度スピナー
     const sh = e.shiftKey || touchShift, cx = e.clientX, cy = e.clientY;
-    rLongTimer = setTimeout(() => { rLongFired = true; startRotSpin(sh, cx, cy); }, 350);
+    rLongTimer = setTimeout(() => { rLongFired = true; startRotSpin(sh ? 'roll' : 'az', cx, cy); }, 350);   // 右長押し＝方位角／Shift＋長押し＝回転
   }
 });
 window.addEventListener('pointermove', e => { if (rLongTimer && rDownPos && Math.hypot(e.clientX - rDownPos.x, e.clientY - rDownPos.y) > 6) clearRLong(); });
@@ -6292,24 +6290,23 @@ renderer.domElement.addEventListener('contextmenu', e => {
   rDownPos = null;
   if (rLongFired) { rLongFired = false; return; }   // 長押しで角度スピナーを出した → 45°回転はしない
   if (moved > 6) return;              // 右ドラッグ＝視点パン → 回転しない
-  orientStep(e.shiftKey || touchShift);             // Shift+右クリック＝ひねり(roll)切替
+  orientStep((e.shiftKey || touchShift) ? 'el' : 'az');   // 右クリック＝方位角45°／Shift+右＝立面角45°（回転は左下ボタン・長押し・プロパティ）
 });
-// 向きの送り（右クリック相当）。タッチのコントローラーからも同じ処理を呼ぶ。
-function orientStep(shift) {
-  if (followTool) cycleFollowOrientation(shift);
-  else if (movingPart) cycleMoveOrientation(shift);
-  else if (isFreeRotPart(selectedPart)) pipeRotate(shift);   // パイプ・エルボは線分と同じ回転（起点まわり45°）
-  else if (selectedPart) cycleSelectedOrientation(shift);   // その他の部品は従来の向き送り
+// 3軸45°送りの入口（mode='az'|'el'|'roll'。旧booleanも可）。右クリック＝方位角／Shift+右＝立面角。
+// タッチの左下ボタン（方位角・立面角・回転）からも同じ処理を呼ぶ（2026-07-29 社長要望で3軸に分離）。
+function orientStep(mode) {
+  const m = rotModeOf(mode);
+  if (followTool) cycleFollowOrientation(m);
+  else if (movingPart) cycleMoveOrientation(m);
+  else if (selectedPart && selectedPart.userData.faceLocal) pipeRotate(m);   // 全部品共通の3軸送り
   else if (window.__annHasSel && window.__annHasSel()) {
-    // 寸法線（単独選択）：右クリック＝スライド寸法（+45°→−45°→0°→繰返し）／Shift+右クリック＝逃げ方向をAB軸まわりに45°回転
+    // 寸法線（単独選択）：回転＝逃げ方向をAB軸まわりに45°／方位角・立面角＝スライド寸法の切替
     if (window.__annSelIsSingleDim && window.__annSelIsSingleDim()) {
-      // 45°送りはフォームを出さずに実行（数値フォームは長押しの時だけ・2026-07-19 社長要望）
-      if (shift) { window.__dimRollStep && window.__dimRollStep(); }
+      if (m === 'roll') { window.__dimRollStep && window.__dimRollStep(); }
       else { window.__dimSkewToggle && window.__dimSkewToggle(); }
     }
-    // 構築線も向き/回転ボタン・右クリックで45°回転できる（2026-07-19 社長要望で解禁。
-    // 微調整は従来どおり右クリック長押し＝平行移動/Shiftで方位角スピナー）
-    else window.__annRotate(shift);
+    // 線・構築線：方位角＝水平45°／立面角・回転＝従来のShift挙動（鉛直へ）
+    else window.__annRotate(m !== 'az');
   }
 }
 if (rotAInput) {
@@ -6405,7 +6402,7 @@ function zoomStep(factor) {
   // ※タップの実行を離した時(pointerup)に遅らせる方式は、指でしっかり押す(0.35秒超の)タップが全部
   //   長押し扱いになり「ひねりが効かない」と誤認される（2026-07-12 iPad指摘）ため廃止。
   const ORIENT_HOLD_MS = 600;   // リボンのアイコン長押し(500ms)より長め＝タップ意図を長押しに誤判定しない
-  const bindOrientHold = (id, shift) => {
+  const bindOrientHold = (id, mode) => {
     const btn = document.getElementById(id);
     if (!btn) return;
     let to = null, tapOnUp = false;
@@ -6417,7 +6414,7 @@ function zoomStep(factor) {
       const r = btn.getBoundingClientRect();
       if (part) {
         const snap = { pos: part.position.clone(), quat: part.quaternion.clone(), orient: part.userData.orient || 0, roll: part.userData.roll || 0 };
-        orientStep(shift);                               // まず即45°送り（タップの体感は従来どおり）
+        orientStep(mode);                                // まず即45°送り（タップの体感は従来どおり）
         tapOnUp = false;
         to = setTimeout(() => {                          // 押し続けた＝長押し：45°を戻してからスピナーへ
           to = null;
@@ -6426,21 +6423,22 @@ function zoomStep(factor) {
             part.userData.orient = snap.orient; part.userData.roll = snap.roll;
             _idleSig = null;
             if (typeof updateForm === 'function') updateForm();
-            startRotSpin(shift, r.right, r.top, true);
+            startRotSpin(mode, r.right, r.top, true);
           }
         }, ORIENT_HOLD_MS);
       } else if (canRotSpin()) {                         // 線・寸法の選択中：従来どおり離した時にタップ判定
         tapOnUp = true;
-        to = setTimeout(() => { to = null; tapOnUp = false; startRotSpin(shift, r.right, r.top, true); }, ORIENT_HOLD_MS);
-      } else orientStep(shift);                          // 追従中・移動中など＝即送り
+        to = setTimeout(() => { to = null; tapOnUp = false; startRotSpin(mode, r.right, r.top, true); }, ORIENT_HOLD_MS);
+      } else orientStep(mode);                           // 追従中・移動中など＝即送り
     });
-    btn.addEventListener('pointerup', () => { if (to) { const tap = tapOnUp; clear(); if (tap) orientStep(shift); } });
+    btn.addEventListener('pointerup', () => { if (to) { const tap = tapOnUp; clear(); if (tap) orientStep(mode); } });
     btn.addEventListener('pointerleave', clear);
     btn.addEventListener('pointercancel', clear);
     btn.addEventListener('contextmenu', e => e.preventDefault());
   };
-  bindOrientHold('tcOrient', false);
-  bindOrientHold('tcTwist',  true);
+  bindOrientHold('tcAz',   'az');    // 方位角：水平に45°（長押し＝方位角スピナー）
+  bindOrientHold('tcElev', 'el');    // 立面角：起こす・寝かす45°（長押し＝立面角スピナー）
+  bindOrientHold('tcRoll', 'roll');  // 回転：フェイス法線まわり45°（長押し＝回転スピナー）
   // 取消＝完全リセット（2026-07-20 社長指示：シフト・コントロール・コマンド選択も全部クリア）
   // Escは段階的（スピナー→描画中の点→モード→選択）なので3回叩いて確実に空へ戻し、修飾トグルも消灯する
   function tcCancelAll() {
@@ -6464,7 +6462,7 @@ function zoomStep(factor) {
         wrap.classList.toggle('collapsed', folded);
         if (lb) lb.textContent = folded ? '操作' : '取消';
         if (ic) ic.textContent = folded ? '≡' : '⎋';
-        btn.title = folded ? 'タップでボタンを展開（向き・回転・Shift・Ctrl・削除・取消）'
+        btn.title = folded ? 'タップでボタンを展開（方位角・立面角・回転・Shift・Ctrl・削除・取消）'
                            : '取消・選択解除（長押しでボタンをたたむ）';
         try { localStorage.setItem('p3d_tc_fold', folded ? '1' : '0'); } catch (e) {}
       };
@@ -12154,6 +12152,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(faceN(p), d));
     };
     window.__partFaceRoll = faceRoll;   // 回転スピナーの初期角（プロパティの「回転」と同じ値から開始）用
+    window.__partFaceBearing = faceBearing;   // 方位角スピナーの初期角（3軸ボタンの長押し用）
+    window.__partFaceElev = faceElev;         // 立面角スピナーの初期角（同上）
     const setFaceElev = (p, v) => {
       const n = faceN(p);
       const phi0 = Math.asin(Math.max(-1, Math.min(1, n.y)));
@@ -12168,11 +12168,91 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     function partHeightLabel(p) {
       return 'EL';   // 高さ表記はELに統一（2026-07-19 社長要望。旧：起点機点の軸でEL/COP切替）
     }
+    // 配置済み部品を仕様から作り替える（プロパティの仕様編集用。2026-07-29 社長指示＝パレットと切り離し）。
+    // フェイス面の位置・姿勢・材質・グループ・アイテムリストの並びを保つ（旧applyPaletteToSelectedと同じ流儀）。
+    function rebuildPartFromSpec(p, patch) {
+      const u = p.userData, field = SPEC_FIELD[u.partType];
+      if (!field || !u[field]) return null;
+      const spec = Object.assign({}, u[field], patch);
+      const obj = makeSpecPart({ partType: u.partType, [field]: spec });
+      if (!obj) return null;
+      const anchorLocal = u.faceLocal || gripLocalOf(p);
+      const anchor = connModelPos(p, anchorLocal);
+      obj.quaternion.copy(p.quaternion); obj.scale.copy(p.scale);
+      obj.userData.placed = true;
+      obj.userData.orient = u.orient || 0; obj.userData.roll = u.roll || 0;
+      if (u.mat) obj.userData.mat = u.mat;
+      if (u.groupId != null) obj.userData.groupId = u.groupId;
+      obj.position.copy(anchor).sub((obj.userData.faceLocal || gripLocalOf(obj)).clone().applyQuaternion(obj.quaternion));
+      modelGroup.add(obj);
+      const i = placedParts.indexOf(p);
+      if (i >= 0) placedParts[i] = obj; else placedParts.push(obj);
+      modelGroup.remove(p); disposePartDeep(p);
+      selectPart(obj);
+      _idleSig = null;
+      if (window.__scheduleHistory) window.__scheduleHistory();
+      return obj;
+    }
+    window.__rebuildPartFromSpec = rebuildPartFromSpec;   // e2e検証用
     function buildPart(p) {
       const u = p.userData, c = partColumns(p);
       sec('部品');
       roRow('種別', () => `${c.kind} ${c.type}`.trim());
       roRow('サイズ', () => `${c.size}${c.cls && c.cls !== '—' ? ' / ' + c.cls : ''}`);
+      // ---- 仕様の編集（パレットとは切り離し。呼び径などはここで変える）----
+      {
+        const field = SPEC_FIELD[u.partType];
+        if (field && u[field]) {
+          const spec = () => p.userData[field];
+          const selSpec = (label, key, listFn) => edRow(label, {
+            options: listFn().map(x => [x, x]),
+            get: () => spec()[key],
+            set: v => { rebuildPartFromSpec(p, { [key]: v }); },
+          });
+          sec('仕様');
+          switch (u.partType) {
+            case 'flange':
+              selSpec('タイプ', 'type', () => typesForClass(spec().cls).map(t => t.code));
+              selSpec('呼び径', 'sizeA', () => flangeAvailableSizes(spec().cls, spec().type));
+              selSpec('クラス', 'cls', () => classesForType(spec().type));
+              selSpec('Sch', 'sch', () => SCHEDULES);
+              break;
+            case 'pipe':
+              selSpec('呼び径', 'sizeA', () => FLANGE_SIZES);
+              selSpec('Sch', 'sch', () => PIPE_SCHEDULES);
+              break;
+            case 'gasket':
+              selSpec('呼び径', 'sizeA', () => FLANGE_SIZES);
+              selSpec('クラス', 'cls', () => FLANGE_CLASSES);
+              break;
+            case 'elbow': case 'cap':
+              selSpec('呼び径', 'sizeA', () => Object.keys(ELBOW_90L));
+              selSpec('Sch', 'sch', () => FITTING_SCHEDULES);
+              break;
+            case 'tee': case 'reducer':
+              selSpec('呼び径', 'sizeA', () => Object.keys(ELBOW_90L));
+              selSpec('小径', 'sizeB', () => Object.keys(ELBOW_90L));
+              selSpec('Sch', 'sch', () => FITTING_SCHEDULES);
+              break;
+            case 'sw':
+              selSpec('呼び径', 'sizeA', () => Object.keys(SW_S));
+              break;
+            case 'valve':
+              selSpec('呼び径', 'sizeA', () => FLANGE_SIZES);
+              selSpec('クラス', 'rating', () => VALVE_RATINGS);
+              break;
+            case 'flex': case 'sight':
+              selSpec('呼び径', 'sizeA', () => EQUIP_SIZES);
+              selSpec('クラス', 'cls', () => VALVE_RATINGS);
+              break;
+            case 'pg':
+              selSpec('ネジ', 'thread', () => PG_THREADS);
+              edRow('径(Φ)', { get: () => spec().dia, set: v => { rebuildPartFromSpec(p, { dia: Math.min(Math.max(v, 25), 300) }); }, unit: 'mm', step: 5 });
+              edRow('サイフォン', { options: [['1', 'あり'], ['0', 'なし']], get: () => (spec().siphon === false ? '0' : '1'), set: v => { rebuildPartFromSpec(p, { siphon: v === '1' }); } });
+              break;
+          }
+        }
+      }
       sec('位置（起点）');
       edRow(partHeightLabel(p), { get: () => mmv(heightRefModelPos(p).y), set: v => { setPartByHeight(p, v / 1000); updateForm(); }, unit: 'mm', step: 1 });
       if (u.partType === 'pipe' && u.pipe) {

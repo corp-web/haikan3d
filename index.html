@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0729D — SKT-HD ♦</title>
+<title>配管3D v0729E — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0729D">
+<meta name="apple-mobile-web-app-title" content="配管3D v0729E">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -589,8 +589,8 @@
       <h3>タッチ操作（iPad / iPhone）</h3>
       <ul>
         <li><b>1本指ドラッグ＝回転</b>／<b>2本指ドラッグ＝画面移動</b>／<b>ピンチ＝拡大縮小</b>／<b>タップ＝選択</b></li>
-        <li>左下の<b>コントローラー</b>でマウス専用の操作を代替：<b>＋／−＝拡大縮小</b>、<b>向き＝向きを送る</b>（右クリック相当）、<b>回転</b>（Shift＋右クリック相当・旧ひねり）、<b>取消</b>（Esc相当）</li>
-        <li>配置済みの部品や線を選択中は<b>向き／回転ボタンを長押し（0.35秒）＝角度スピナー</b>（右クリック長押し相当）。<b>▲▼で0.5°刻み</b>（長押しで連続）、<b>3D画面タップで確定</b>、<b>取消ボタンで取消</b></li>
+        <li>左下の<b>コントローラー</b>でマウス専用の操作を代替：<b>方位角＝水平に45°</b>（北→東まわり）、<b>立面角＝45°ずつ起こす・寝かす</b>、<b>回転＝部品の軸まわりに45°</b>、<b>取消</b>（Esc相当）</li>
+        <li>配置済みの部品や線を選択中は<b>方位角／立面角／回転ボタンを長押し（0.6秒）＝角度スピナー</b>（その軸の任意角）。<b>▲▼で0.5°刻み</b>（長押しで連続）、<b>3D画面タップで確定</b>、<b>取消ボタンで取消</b></li>
         <li>細かい採寸作業は<b>Bluetoothマウスを接続</b>するとPCと同じく右クリック・カーソル吸着が使えます</li>
       </ul>
       <h3>部品を置く（パレット）</h3>
@@ -608,9 +608,9 @@
       <ul>
         <li>部品を<b>ドラッグ＝45°方向へ測って移動</b>（距離が脇に表示・数値入力可）</li>
         <li><b>長押し（0.5秒）またはダブルクリック＝自由移動</b>（機点スナップあり。押したままドラッグ→離して確定）</li>
-        <li><b>右クリック＝向きを送る</b>（Z軸45°×8→X軸45°×8）／<b>Shift＋右クリック＝回転</b>（旧ひねり・45°×8）</li>
+        <li><b>右クリック＝方位角45°</b>（水平にくるり）／<b>Shift＋右クリック＝立面角45°</b>（起こす・寝かす）。<b>回転（軸まわりのひねり）</b>は左下の回転ボタン・右クリック長押しのスピナー・プロパティで</li>
         <li>パイプ＝選択して端の点をクリックで起点選択 → 「長さ」入力かドラッグで伸縮（選んだ端が固定）</li>
-        <li><b>仕様の変更</b>＝配置済みの部品を選択すると<b>左のパレットにその部品の仕様が表示</b>され、パレットで<b>呼び径・タイプ・クラス・Sch・長さなどを変えるとその部品が置いたまま作り替え</b>られます（位置・向き・材質・グループは保持。「元に戻す」対応）</li>
+        <li><b>仕様の変更</b>＝配置済みの部品を選択し、<b>プロパティの「仕様」欄で呼び径・タイプ・クラス・Schを変えるとその場で作り替え</b>られます（位置・向き・材質・グループは保持。「元に戻す」対応）。<b>パレットは新しく置く部品の設定専用</b>で、選択しても変わりません</li>
         <li><kbd>Esc</kbd>＝取消／<kbd>Del</kbd>＝削除</li>
       </ul>
       <h3>まとめて選ぶ</h3>
@@ -776,8 +776,9 @@
   <div id="lnDBox" class="legBox">L<input id="lnD" type="number" step="1" min="0">mm</div>
   <!-- タッチ用オンスクリーン・コントローラー（右クリック/ホイール/Escの代替・左側） -->
   <div id="touchCtrl">
-    <button id="tcOrient"  title="向きを送る（右クリック相当）"><span class="ic">➤</span><span class="lb">向き</span></button>
-    <button id="tcTwist"   title="回転（Shift＋右クリック相当・フェイス軸まわり45°）"><span class="ic">↻</span><span class="lb">回転</span></button>
+    <button id="tcAz"      title="方位角：水平に45°回す（北→東まわり。長押し＝角度スピナー）"><span class="ic">➤</span><span class="lb">方位角</span></button>
+    <button id="tcElev"    title="立面角：45°ずつ起こす・寝かす（長押し＝角度スピナー）"><span class="ic">⤢</span><span class="lb">立面角</span></button>
+    <button id="tcRoll"    title="回転：部品の軸（フェイス法線）まわりに45°ひねる（長押し＝角度スピナー）"><span class="ic">↻</span><span class="lb">回転</span></button>
     <button id="tcShift"   title="Shift（ON中＝PCのShift押下と同じ。線をY方向に引く・楕円化など）"><span class="ic">S</span><span class="lb">Shift</span></button>
     <button id="tcCtrl"    title="Ctrl（ON中＝PCのCtrl押下と同じ。クリックで複数選択・ドラッグで窓選択）"><span class="ic">Ｃ</span><span class="lb">Ctrl</span></button>
     <button id="tcDel"     title="選択中のアイテムを削除（Deleteキー相当）"><span class="ic">🗑</span><span class="lb">削除</span></button>
