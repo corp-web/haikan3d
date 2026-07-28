@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-B';
+const APP_VER = 'v0729-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -780,6 +780,33 @@ function pipeWall(sizeA, sch) {
 // SCHEDULES（ステンレス系Sch）は据え置き。フランジは従来どおり SCHEDULES を使う。
 const PIPE_SCHEDULES = [...SCHEDULES, 'SGP'];
 const FITTING_SCHEDULES = [...SCHEDULES, 'FSGP'];
+
+// ===== 配管化③：溶接の控え・ルートギャップ（切寸計算用）2026-07-29 社長要望 =====
+// SOP控え＝差し込んだ管の先端をフランジのフェイス面から何mm控えるか（内側の溶接しろ）。
+// ルートギャップ＝BW突合せの開先の隙間。どちらも呼び径×Schで設定できる（⚙設定→溶接・切寸の設定）。
+// 既定値＝肉厚から：SOP控え＝肉厚+3mm／ルートギャップ＝肉厚<4→2.5・<8→3.0・以上→4.0（0.1mm丸め）。
+// 設定した値は localStorage p3d_weld_tbl（既定と違う分だけ）に記憶する。
+let weldTbl = {};
+try { weldTbl = JSON.parse(localStorage.getItem('p3d_weld_tbl') || '{}') || {}; } catch (e) { weldTbl = {}; }
+function weldDefaults(sizeA, sch) {
+  const t = pipeWall(sizeA, sch);
+  return { sop: Math.round((t + 3) * 10) / 10, gap: t < 4 ? 2.5 : (t < 8 ? 3 : 4) };
+}
+function weldValsOf(sizeA, sch) {
+  const d = weldDefaults(sizeA, sch), o = weldTbl[sizeA + '|' + sch] || {};
+  return { sop: (o.sop > 0 ? o.sop : d.sop), gap: (o.gap >= 0 ? o.gap : d.gap) };
+}
+function setWeldVal(sizeA, sch, key, v) {
+  const k = sizeA + '|' + sch, d = weldDefaults(sizeA, sch);
+  const cur = weldTbl[k] || {};
+  const n = parseFloat(v);
+  if (!isFinite(n) || n < 0 || Math.abs(n - d[key]) < 0.001) delete cur[key];   // 既定と同じ＝上書きを消す
+  else cur[key] = Math.round(n * 10) / 10;
+  if (Object.keys(cur).length) weldTbl[k] = cur; else delete weldTbl[k];
+  try { localStorage.setItem('p3d_weld_tbl', JSON.stringify(weldTbl)); } catch (e) {}
+}
+window.__weldValsOf = weldValsOf;
+window.__setWeldVal = setWeldVal;
 
 // ===== 材質（種類の記号）の選択肢 =====
 // アイテムリストの「材質」欄は手入力もできるが、ここの一覧から選べる（datalist）。
@@ -3952,6 +3979,70 @@ function insertItemIntoPipe(obj, hit) {
   if (window.__scheduleHistory) window.__scheduleHistory();
   return true;
 }
+
+// ===== 配管化③：パイプ切寸（現場でそのまま切れる長さ）=====
+// 各端の接続先を機点の一致（1.5mm）で判定し、切寸＝図面長さ−BWギャップ＋差込み深さ を計算する。
+//  ・BW（エルボ・ティー・レジューサー・キャップ・他のパイプ・WNフランジの首）＝ルートギャップぶん短く
+//  ・SOP/LJフランジの背面＝差し込み（フランジ全高−フェイスからの控え）ぶん長く
+//  ・SW（差込み溶接継手・SWフランジ・SW形バルブ）＝ソケット深さ−浮かし1.6mmぶん長く（JIS B2316の流儀）
+//  ・どこにも繋がっていない端・ガスケット面など＝そのまま
+function pipeEndJoint(pipe, endLocal) {
+  const P = connModelPos(pipe, endLocal);
+  const TOL = 0.0015;
+  const pp = pipe.userData.pipe;
+  for (const q of placedParts) {
+    if (q === pipe || q.userData.hidden || !q.userData.faceLocal) continue;
+    const u = q.userData;
+    for (const l of connsOf(q)) {
+      if (connModelPos(q, l).distanceTo(P) > TOL) continue;
+      const BW_NAME = { pipe: 'パイプ', elbow: 'エルボ', tee: 'ティー', reducer: 'レジューサ', cap: 'キャップ' };
+      if (BW_NAME[u.partType]) return { kind: 'BW', with: BW_NAME[u.partType] };
+      if (u.partType === 'flange') {
+        const o = u.flange || {};
+        if (l !== u.backLocal) return { kind: 'none' };            // フェイス側＝管の継手ではない
+        if (o.type === 'WN') return { kind: 'BW', with: 'WN' };    // 首の先でBW
+        if (o.type === 'SW') {
+          const C = SW_C_E[o.sizeA] || 0;                          // ソケット深さ（規格表）
+          return C > 0 ? { kind: 'SW', with: 'SWフランジ', depth: Math.max(C - 1.6, 0) } : { kind: 'none' };
+        }
+        if (o.type === 'SOP' || o.type === 'LJ') {                 // 背面から差し込み・フェイスから控える
+          const span = (u.faceLocal.y - u.backLocal.y) * 1000;     // フランジの全高(mm)
+          const sop = weldValsOf(pp.sizeA, pp.sch).sop;
+          return { kind: 'SOP', with: o.type, depth: Math.max(span - sop, 0) };
+        }
+        return { kind: 'none' };                                   // BL等
+      }
+      if (u.partType === 'sw') {
+        const k = u.sw.kind || '';
+        const C = (k === '45E' ? SW_C_45 : k === 'CAP' ? SW_C_CAP : SW_C_E)[u.sw.sizeA] || 0;
+        return C > 0 ? { kind: 'SW', with: 'SW継手', depth: Math.max(C - 1.6, 0) } : { kind: 'none' };
+      }
+      if (u.partType === 'valve' && ['swgate', 'swglobe'].includes((u.valve && u.valve.kind) || '')) {
+        const C = SW_C_E[u.valve.sizeA] || 0;
+        return C > 0 ? { kind: 'SW', with: 'SWバルブ', depth: Math.max(C - 1.6, 0) } : { kind: 'none' };
+      }
+      return { kind: 'none' };                                     // ガスケット・フランジ形機器など
+    }
+  }
+  return { kind: 'free' };
+}
+function pipeCutInfo(pipe) {
+  const u = pipe.userData, o = u.pipe;
+  const ends = [pipeEndJoint(pipe, u.backLocal), pipeEndJoint(pipe, u.faceLocal)];
+  const w = weldValsOf(o.sizeA, o.sch);
+  let cut = o.length;
+  for (const e of ends) {
+    if (e.kind === 'BW') cut -= w.gap;
+    else if (e.kind === 'SOP' || e.kind === 'SW') cut += e.depth;
+  }
+  return { ends, cut: Math.round(cut * 10) / 10, gap: w.gap, sop: w.sop };
+}
+window.__pipeCutInfo = (i) => {
+  const p = placedParts[i];
+  if (!p || p.userData.partType !== 'pipe') return null;
+  const c = pipeCutInfo(p);
+  return { cut: c.cut, gap: c.gap, sop: c.sop, ends: c.ends.map(e => ({ kind: e.kind, with: e.with || '', depth: e.depth != null ? Math.round(e.depth * 10) / 10 : null })) };
+};
 
 // 仮配置：プレビューの姿勢（位置・向き）をそのままコピーして置く＝見た目が完全一致。
 // 置いた部品オブジェクトを返す（呼び出し側で選択＝高さ入力フォームを出す）。
@@ -7905,7 +7996,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return rows;
   }
   // ---- 部品表CSV（Excel向け・BOM付きUTF-8） ----
-  function exportCsv() {
+  function buildCsvLines() {
     const esc = v => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const lines = [];
     lines.push(['図番', $('dwgNo').value, '名称', $('dwgName').value, '年月日', $('dwgDate').value, '社名', $('dwgCompany').value].map(esc).join(','));
@@ -7914,6 +8005,27 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const r of partsRows()) lines.push([r.no, r.kind, r.type, r.size, r.cls, r.qty, r.mat || ''].map(esc).join(','));
     lines.push('');
     lines.push(esc('※ガスケット・ボルト・溶接口・パイプ合計は機点の接続から自動集計した参考値'));
+    // ---- パイプ切寸表（配管化③）：BWギャップ・SOP/SW差込みを加減した、現場でそのまま切れる寸法 ----
+    const pipes = placedParts.filter(p => p.userData.partType === 'pipe' && !p.userData.hidden);
+    if (pipes.length) {
+      const lbl = e => e.kind === 'BW' ? `BW(${e.with || ''})`
+                    : e.kind === 'SOP' ? `${e.with || 'SOP'}差込${e.depth != null ? Math.round(e.depth * 10) / 10 : ''}`
+                    : e.kind === 'SW' ? `SW差込${e.depth != null ? Math.round(e.depth * 10) / 10 : ''}`
+                    : e.kind === 'none' ? '突き当て' : '—';
+      lines.push('');
+      lines.push(esc('パイプ切寸表（切寸＝図面長さ−BWルートギャップ＋差込み深さ。⚙設定→溶接・切寸の設定で調整可）'));
+      lines.push(['#', '呼び径', 'Sch', '図面長さ(mm)', '端A', '端B', '切寸(mm)', 'ギャップ(mm)', 'SOP控え(mm)'].join(','));
+      pipes.forEach((p, i) => {
+        const c = pipeCutInfo(p);
+        lines.push([i + 1, p.userData.pipe.sizeA, p.userData.pipe.sch, Math.round(p.userData.pipe.length * 10) / 10,
+                    lbl(c.ends[0]), lbl(c.ends[1]), c.cut, c.gap, c.sop].map(esc).join(','));
+      });
+    }
+    return lines;
+  }
+  window.__csvText = () => buildCsvLines().join('\n');   // e2e検証用（切寸表の内容確認）
+  function exportCsv() {
+    const lines = buildCsvLines();
     const name = (($('dwgNo').value || $('dwgName').value || '部品表').trim() || '部品表').replace(/[\\/:*?"<>|]/g, '_') + '.csv';
     // 保存先を最初に選ぶ（BOM付きUTF-8＝Excelで文字化けしない）
     saveWithLocationChoice(name, '\ufeff' + lines.join('\r\n'), 'text/csv')
@@ -12101,6 +12213,61 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbB) cbB.addEventListener('change', () => { showBoltPts = cbB.checked; _idleSig = null; try { localStorage.setItem('p3d_show_boltpt', showBoltPts ? '1' : '0'); } catch (e) {} });
     if (cbQ) cbQ.addEventListener('change', () => { showQuadPts = cbQ.checked; _idleSig = null; try { localStorage.setItem('p3d_show_quad', showQuadPts ? '1' : '0'); } catch (e) {} });
     if (cbAG) cbAG.addEventListener('change', () => { autoGasket = cbAG.checked; try { localStorage.setItem('p3d_auto_gasket', autoGasket ? '1' : '0'); } catch (e) {} });
+    // ---- 溶接・切寸の設定（配管化③）：SOP控え・BWルートギャップを呼び径×Schで編集 ----
+    { const bW = document.getElementById('setWeld');
+      if (bW) {
+        let dlg = null, schSel = null;
+        const buildDlg = () => {
+          if (dlg) return;
+          dlg = document.createElement('div');
+          dlg.id = 'weldDlg';
+          dlg.style.cssText = 'position:fixed;z-index:120;left:50%;top:50%;transform:translate(-50%,-50%);display:none;flex-direction:column;' +
+            'max-height:82vh;width:360px;background:rgba(248,250,253,.98);border:1px solid #7fa8e8;border-radius:10px;box-shadow:0 8px 30px rgba(20,40,80,.3);' +
+            'font:12px Meiryo,sans-serif;color:#33405c;padding:10px 12px;gap:6px';
+          dlg.innerHTML =
+            '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><b>溶接・切寸の設定</b>' +
+            '<select id="weldSch" style="background:#fff;border:1px solid #c4ccda;border-radius:5px;padding:2px 4px"></select>' +
+            '<span style="flex:1"></span><button id="weldReset" style="border:none;border-radius:6px;padding:3px 8px;background:#e2e7f0;cursor:pointer;font:inherit">このSchを既定に戻す</button>' +
+            '<button id="weldClose" style="border:none;border-radius:6px;padding:3px 10px;background:#2f6fd8;color:#fff;cursor:pointer;font:inherit">閉じる</button></div>' +
+            '<div style="opacity:.75">切寸＝図面長さ−BWギャップ＋差込み深さ。SOP控え＝管先端をフェイス面から控える量。既定＝肉厚から自動（変えた値だけ記憶・青太字）</div>' +
+            '<div style="overflow:auto"><table id="weldTblUI" style="border-collapse:collapse;width:100%"></table></div>';
+          document.body.appendChild(dlg);
+          schSel = dlg.querySelector('#weldSch');
+          for (const s of PIPE_SCHEDULES) schSel.add(new Option(s, s));
+          schSel.addEventListener('change', renderTbl);
+          dlg.querySelector('#weldClose').onclick = () => { dlg.style.display = 'none'; };
+          dlg.querySelector('#weldReset').onclick = () => {
+            for (const s of FLANGE_SIZES) { setWeldVal(s, schSel.value, 'sop', ''); setWeldVal(s, schSel.value, 'gap', ''); }
+            renderTbl();
+          };
+          ['pointerdown', 'click'].forEach(ev => dlg.addEventListener(ev, e => e.stopPropagation()));
+        };
+        const renderTbl = () => {
+          const tb = dlg.querySelector('#weldTblUI'), sch = schSel.value;
+          const cell = 'border:1px solid #d5dce8;padding:3px 6px;text-align:center';
+          let h = `<tr><th style="${cell}">呼び径</th><th style="${cell}">肉厚</th><th style="${cell}">SOP控え(mm)</th><th style="${cell}">ﾙｰﾄｷﾞｬｯﾌﾟ(mm)</th></tr>`;
+          for (const s of FLANGE_SIZES) {
+            const v = weldValsOf(s, sch);
+            const ov = weldTbl[s + '|' + sch] || {};
+            const inp = (key, val, isOv) => `<input data-size="${s}" data-key="${key}" type="number" step="0.1" min="0" value="${val}" ` +
+              `style="width:56px;text-align:right;border:1px solid #c4ccda;border-radius:4px;padding:1px 3px;background:#fff;color:${isOv ? '#1d5fd0' : '#2a3550'};font-weight:${isOv ? '700' : '400'}">`;
+            h += `<tr><td style="${cell}">${s}</td><td style="${cell}">${pipeWall(s, sch)}</td>` +
+                 `<td style="${cell}">${inp('sop', v.sop, ov.sop != null)}</td><td style="${cell}">${inp('gap', v.gap, ov.gap != null)}</td></tr>`;
+          }
+          tb.innerHTML = h;
+          tb.querySelectorAll('input').forEach(el => el.addEventListener('change', () => {
+            setWeldVal(el.dataset.size, schSel.value, el.dataset.key, el.value);
+            renderTbl();
+          }));
+        };
+        bW.onclick = () => {
+          buildDlg(); closeSet();
+          schSel.value = PIPE_SCHEDULES.includes(pipeOpts.sch) ? pipeOpts.sch : 'Sch40';
+          renderTbl();
+          dlg.style.display = 'flex';
+        };
+      }
+    }
     document.addEventListener('pointerdown', e => {
       if (_setMenu.style.display === 'block' && !_setMenu.contains(e.target) && !_bSet.contains(e.target)) closeSet();
     }, true);
