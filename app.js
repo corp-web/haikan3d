@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-A';
+const APP_VER = 'v0729-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1175,7 +1175,7 @@ function makeFlange(opts) {
 }
 
 // 現在パレットで選択中のフランジ仕様
-const flangeOpts = { sizeA: '25A', type: 'SOP', cls: 'JIS 10K', face: 'RF', sch: 'Sch40' };
+const flangeOpts = { sizeA: '25A', type: 'SOP', cls: 'JIS 10K', face: 'RF', sch: 'Sch40', pair: '1' };   // pair: '1'=片フランジ／'2'=合いフランジ(挿入時にガスケットを挟んで2枚)
 
 // ===================================================================
 //  スタブエンド（ラップジョイント用）BENKAN / JPF SP 001
@@ -3784,6 +3784,23 @@ function updateFollowPreview(clientX, clientY) {
   followPreview.visible = true;
   if (isFreeRotPart(followPreview) && followQuat) followPreview.quaternion.copy(followQuat);   // 線分式で回した向きを毎フレーム維持
   else orientRotation(followPreview, followOrient, followRoll);
+  // 配管化②：挿入系アイテムをパイプ芯線に近づけたら、パイプに沿う姿勢でプレビュー（挿入の予告）。
+  // ただし機点（面・背面など）への吸着が効く位置では従来の突き合わせ配置を優先する（noNear=真の機点だけ見る）
+  if (INSERTABLE_TYPES[followPreview.userData.partType] && insertAxialOk(followPreview) && !resolveSnap(clientX, clientY, null, true)) {
+    const insT = pipeAxisTargetAt(clientX, clientY);
+    if (insT) {
+      const back = connModelPos(insT.pipe, insT.pipe.userData.backLocal);
+      const face = connModelPos(insT.pipe, insT.pipe.userData.faceLocal);
+      const dir = face.clone().sub(back).normalize();
+      const pt = back.clone().addScaledVector(dir, insT.tMm / 1000);
+      followPreview.quaternion.copy(insT.pipe.quaternion);
+      const mid = followPreview.userData.faceLocal.clone().add(followPreview.userData.backLocal)
+        .multiplyScalar(0.5).applyQuaternion(followPreview.quaternion);
+      followPreview.position.copy(pt).sub(mid);   // 軸方向の中央を芯線上の点へ
+      showInteractionMarkers(followPreview, pt);
+      return;
+    }
+  }
   // 最初の部品も線分と同じく、カーソル位置（スナップ無ければ床面投影）へ自由配置
   const tgt = resolveTarget(clientX, clientY, null);
   if (!tgt) return;
@@ -3807,6 +3824,135 @@ function cycleFollowOrientation(shift) {
   showInteractionMarkers(followPreview, null);
 }
 
+// ===== 配管化②：パイプへの割り込み挿入（2026-07-29 社長要望） =====
+// パレットのアイテムを配置済みパイプの「芯線の上」へ置くと、パイプを2本に分割して割り込ませ、
+// 両側のパイプ長を自動調整する（芯々は変えない＝分割2本＋挿入物の長さ＝元のパイプ長）。
+// ・フランジはパレットの「枚数」で 片フランジ／合いフランジ（ガスケットを挟んで2枚。2枚目は面を向かい合わせ）。
+// ・両端フランジ形の機器（フランジ形バルブ・フレキ・サイドグラス）は、相手フランジ＋ガスケットを両側に
+//   自動で付けて挿入する（クラス＝機器のレーティング、Sch＝パイプのSch、タイプ＝パレットのフランジ設定）。
+// ・レジューサーは径が合う側を既存パイプへ向け、反対側のパイプは新しい径で作り直す。
+// ・入らない長さなら理由を出して中止（何も置かない）。エルボ挿入（ルート変更）は対象外。
+const INSERTABLE_TYPES = { flange: 1, valve: 1, reducer: 1, flex: 1, sight: 1 };
+const INSERT_SNAP_PX = 16;      // 画面上でこの距離までパイプ芯線に近ければ「挿入」と解釈
+const INSERT_END_MARGIN = 1;    // 端から1mm以内は挿入しない（端への通常の突き合わせと区別）
+// 軸方向にまっすぐ通り抜ける部品か（安全弁=アングル形や偏心レジューサーは芯がずれるので対象外）
+function insertAxialOk(obj) {
+  const fl = obj.userData.faceLocal, bl = obj.userData.backLocal;
+  return !!(fl && bl && Math.hypot(fl.x - bl.x, fl.z - bl.z) < 0.0005);
+}
+// カーソル近傍のパイプ芯線上の点を探す。{pipe, tMm(背面端からの距離mm)} か null。
+function pipeAxisTargetAt(clientX, clientY) {
+  const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, cam);
+  let best = null;
+  for (const p of placedParts) {
+    if (p.userData.partType !== 'pipe' || p.userData.hidden || !p.userData.faceLocal) continue;
+    const a = modelGroup.localToWorld(connModelPos(p, p.userData.backLocal).clone());
+    const b = modelGroup.localToWorld(connModelPos(p, p.userData.faceLocal).clone());
+    const ab = b.clone().sub(a), segL = ab.length();
+    if (segL < 1e-6) continue;
+    const d = ab.multiplyScalar(1 / segL);
+    const ro = ray.ray.origin, rd = ray.ray.direction;
+    const w0 = a.clone().sub(ro);
+    const bDot = d.dot(rd), denom = 1 - bDot * bDot;
+    if (denom < 1e-9) continue;                              // 視線と平行＝位置が決まらない
+    const t = Math.min(Math.max((bDot * rd.dot(w0) - d.dot(w0)) / denom, 0), segL);   // レイとの最近接（線分内へクランプ）
+    const Pw = a.clone().addScaledVector(d, t);
+    const scr = Pw.clone().project(cam);
+    if (scr.z >= 1) continue;
+    const sx = rect.left + (scr.x * 0.5 + 0.5) * rect.width;
+    const sy = rect.top + (-scr.y * 0.5 + 0.5) * rect.height;
+    const px = Math.hypot(sx - clientX, sy - clientY);
+    if (px > INSERT_SNAP_PX) continue;
+    if (!best || px < best.px) best = { pipe: p, tMm: t * 1000, px };
+  }
+  if (best) {
+    const Lmm = best.pipe.userData.pipe.length;
+    if (best.tMm < INSERT_END_MARGIN || best.tMm > Lmm - INSERT_END_MARGIN) return null;
+  }
+  return best;
+}
+// 挿入する部品列（軸方向の並び）を組む。{train:[{obj,flip}], span(mm), dsSize(下流の径|null)}
+function buildInsertTrain(obj, pipe) {
+  const u = obj.userData, pu = pipe.userData.pipe;
+  const train = []; let dsSize = null;
+  const gskT = (parseFloat(gasketOpts.t) > 0) ? parseFloat(gasketOpts.t) : 3;
+  if (u.partType === 'flange' && flangeOpts.pair === '2') {
+    const g = makeGasket({ sizeA: u.flange.sizeA, cls: u.flange.cls, t: gskT });
+    const f2 = makeFlange(u.flange);
+    train.push({ obj, flip: false }, { obj: g, flip: false }, { obj: f2, flip: true });   // 2枚目は面を向かい合わせ
+  } else if (isFlangedBody(u)) {
+    const spec = u[u.partType] || {};
+    const sizeA = spec.sizeA || pu.sizeA;
+    const cls = bodyRatingOf(u) || flangeOpts.cls;
+    const fType = (typeof classesForType === 'function' && classesForType(flangeOpts.type).includes(cls)) ? flangeOpts.type : 'SOP';
+    let fl1 = null, fl2 = null;
+    try { fl1 = makeFlange({ sizeA, type: fType, cls, face: flangeOpts.face, sch: pu.sch });
+          fl2 = makeFlange({ sizeA, type: fType, cls, face: flangeOpts.face, sch: pu.sch }); } catch (e) { fl1 = null; }
+    if (fl1 && fl2) {
+      const g1 = makeGasket({ sizeA, cls, t: gskT }), g2 = makeGasket({ sizeA, cls, t: gskT });
+      train.push({ obj: fl1, flip: false }, { obj: g1, flip: false }, { obj, flip: false },
+                 { obj: g2, flip: false }, { obj: fl2, flip: true });
+    } else train.push({ obj, flip: false });                 // 規格外＝機器だけ挿入
+  } else if (u.partType === 'reducer') {
+    let flip = false;
+    if (u.reducer.sizeA === pu.sizeA) { flip = false; dsSize = u.reducer.sizeB; }        // 大端を上流へ
+    else if (u.reducer.sizeB === pu.sizeA) { flip = true; dsSize = u.reducer.sizeA; }    // 小端を上流へ（反転）
+    train.push({ obj, flip });
+  } else {
+    train.push({ obj, flip: false });
+  }
+  let span = 0;
+  for (const it of train) { computeConns(it.obj); span += (it.obj.userData.faceLocal.y - it.obj.userData.backLocal.y) * 1000; }
+  return { train, span, dsSize };
+}
+// 挿入の実行。成功=true。失敗（長さ不足）はトーストを出して false（同伴部品は破棄）。
+function insertItemIntoPipe(obj, hit) {
+  const pipe = hit.pipe, pu = pipe.userData.pipe;
+  const plan = buildInsertTrain(obj, pipe);
+  const L = pu.length;
+  const L1 = hit.tMm - plan.span / 2, L2 = L - hit.tMm - plan.span / 2;
+  const disposeOf = (o) => o.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
+  if (L1 < 0.5 || L2 < 0.5) {
+    for (const it of plan.train) if (it.obj !== obj) disposeOf(it.obj);
+    if (window.__toast) window.__toast(`挿入できません：挿入には${Math.ceil(plan.span)}mm必要です（パイプ${Math.round(L)}mm）。もう少し中寄りに置くか、パイプを伸ばしてください`);
+    return false;
+  }
+  const back = connModelPos(pipe, pipe.userData.backLocal).clone();
+  const face = connModelPos(pipe, pipe.userData.faceLocal).clone();
+  const dir = face.clone().sub(back).normalize();
+  const FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);   // ローカルY反転
+  let s = L1;                                                // パイプ背面端からの距離(mm)
+  for (const it of plan.train) {
+    const o = it.obj, q = pipe.quaternion.clone();
+    if (it.flip) q.multiply(FLIP);
+    o.quaternion.copy(q);
+    const entry = it.flip ? o.userData.faceLocal : o.userData.backLocal;   // 上流側に来る機点
+    o.position.copy(back).addScaledVector(dir, s / 1000).sub(entry.clone().applyQuaternion(q));
+    o.userData.placed = true; o.userData.orient = 0; o.userData.roll = 0;
+    if (pipe.userData.groupId != null) o.userData.groupId = pipe.userData.groupId;
+    modelGroup.add(o); placedParts.push(o);
+    s += (o.userData.faceLocal.y - o.userData.backLocal.y) * 1000;
+  }
+  // 下流側の新しいパイプ（レジューサー挿入なら新しい径）
+  const p2 = makePipe({ sizeA: plan.dsSize || pu.sizeA, sch: pu.sch, length: L2 });
+  computeConns(p2);
+  p2.quaternion.copy(pipe.quaternion);
+  p2.position.copy(back).addScaledVector(dir, (L1 + plan.span + L2 / 2) / 1000);
+  p2.userData.placed = true; p2.userData.orient = pipe.userData.orient || 0; p2.userData.roll = pipe.userData.roll || 0;
+  if (pipe.userData.mat) p2.userData.mat = pipe.userData.mat;
+  if (pipe.userData.groupId != null) p2.userData.groupId = pipe.userData.groupId;
+  modelGroup.add(p2); placedParts.push(p2);
+  rebuildPipe(pipe, L1, 'back');                             // 上流側＝元のパイプを短縮（背面端は不動）
+  if (typeof _idleSig !== 'undefined') _idleSig = null;
+  const nm = (typeof partColumns === 'function') ? partColumns(obj).kind : 'アイテム';
+  const extra = plan.train.length > 1 ? `（フランジ・ガスケット込み${Math.round(plan.span)}mm）` : '';
+  if (window.__toast) window.__toast(`${nm}を挿入し、パイプを ${Math.round(L1)}mm＋${Math.round(L2)}mm に分割しました${extra}${plan.dsSize ? `。下流は${plan.dsSize}` : ''}`);
+  if (window.__scheduleHistory) window.__scheduleHistory();
+  return true;
+}
+
 // 仮配置：プレビューの姿勢（位置・向き）をそのままコピーして置く＝見た目が完全一致。
 // 置いた部品オブジェクトを返す（呼び出し側で選択＝高さ入力フォームを出す）。
 function placeToolAt(tool, clientX, clientY) {
@@ -3816,6 +3962,16 @@ function placeToolAt(tool, clientX, clientY) {
   updateFollowPreview(clientX, clientY);     // 確定直前にプレビュー位置を最新化
   const obj = tool.build();
   computeConns(obj);
+  // ▼配管化②：パイプの芯線上に置いたら「挿入」＝パイプを分割して割り込ませ、長さを自動調整。
+  // 機点への吸着が効く位置では従来の突き合わせ配置を優先（プレビューと同じ判定）
+  if (INSERTABLE_TYPES[obj.userData.partType] && insertAxialOk(obj) && !resolveSnap(clientX, clientY, null, true)) {
+    const hit = pipeAxisTargetAt(clientX, clientY);
+    if (hit) {
+      if (insertItemIntoPipe(obj, hit)) { refreshItemList(); return obj; }
+      obj.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
+      return null;   // 入らない＝置かずに配置モードを継続（理由はトースト済み）
+    }
+  }
   obj.quaternion.copy(followPreview.quaternion);
   obj.position.copy(followPreview.position);
   obj.userData.placed = true;
@@ -6221,6 +6377,8 @@ function rebuildClassOptions() {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => onOptChange(id));
 });
+// フランジの「枚数」（片／合い）＝パイプ挿入時の構成にだけ効く（配管化②）
+{ const el = document.getElementById('optPair'); if (el) { el.value = flangeOpts.pair; el.addEventListener('change', () => { flangeOpts.pair = el.value; }); } }
 syncOptionsUI();   // 起動時：アクティブ部品(フランジ)で初期化
 buildPipeOptions();   // パイプのオプション欄も用意（初期は非表示）
 buildGasketOptions(); // ガスケットのオプション欄も用意（初期は非表示）
@@ -6487,7 +6645,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     rotBox.style.top = Math.round(Math.min(Math.max(sy - 44, rect.top + 8), rect.bottom - 44)) + 'px';
   }
   function execRotate(deg) {
-    if (!rotateMode) return;
+    if (!rotateMode || !rotateMode.p1) return;   // 起点が未確定なら何もしない（画面外から値だけ入った時の保険）
     const M = rotYMatrix(rotateMode.p1, deg);
     for (const s of rotateMode.parts) {
       s.updateMatrixWorld(true);
