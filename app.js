@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-E';
+const APP_VER = 'v0729-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4316,7 +4316,7 @@ function cycleMoveOrientation(mode) {   // 自由移動中の3軸45°送り（20
 function cycleSelectedOrientation(mode) { pipeRotate(mode); }
 // ---- パイプ・エルボの回転：線分と同じ仕様（起点まわりに45°／Shift=鉛直／垂直時クロス／長押しで角度スピナー） ----
 let _pipeRotAxis = null, _pipeTipAxis = null, _pipeTipMode = false;
-function resetPipeRotState() { _pipeRotAxis = null; _pipeTipAxis = null; _pipeTipMode = false; }
+function resetPipeRotState() { _pipeRotAxis = null; _pipeTipAxis = null; _pipeTipMode = false; _elevStepAxis = null; _elevStepFor = null; }
 // SW継手の回転・向き挙動は対応するBW形状に合わせる（90E/45E=エルボ／T/TR/CROSS=ティー／CAP=キャップ／その他=レジューサ）。
 function swShapeOf(part) {
   if (!part || part.userData.partType !== 'sw') return null;
@@ -4450,12 +4450,21 @@ function partAxisFor(part, mode) {
   if (a.lengthSq() > 1e-12) return a.normalize();
   return new THREE.Vector3(1, 0, 0).applyQuaternion(part.quaternion).normalize();
 }
+let _elevStepAxis = null, _elevStepFor = null;   // 立面角ボタン連打中の固定軸（真上・真下を跨いで一周できる）
 function stepPartRotate(part, mode) {
   mode = rotModeOf(mode);
   const { pivot } = partRotPivotDir(part);
   let axis, ang = Math.PI / 4;
-  if (mode === 'az') { axis = new THREE.Vector3(0, 1, 0); ang = -Math.PI / 4; }   // 世界Yの−45°＝方位角+45°（北→東）
-  else axis = partAxisFor(part, mode);
+  if (mode === 'az') {
+    axis = new THREE.Vector3(0, 1, 0); ang = -Math.PI / 4;   // 世界Yの−45°＝方位角+45°（北→東）
+    _elevStepAxis = null; _elevStepFor = null;               // 方位を変えたら立面の固定軸は作り直す
+  } else if (mode === 'el') {
+    // 連打中は最初に決めた軸で回し続ける＝頂点で軸が反転して90°⇄45°を往復する不具合の対策（2026-07-29 社長報告）
+    if (_elevStepFor !== part || !_elevStepAxis) { _elevStepAxis = partAxisFor(part, 'el'); _elevStepFor = part; }
+    axis = _elevStepAxis;
+  } else {
+    axis = partAxisFor(part, mode);   // 回転＝フェイス法線（ロールでは法線が変わらないので固定不要）
+  }
   rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, ang));
 }
 function lineRotate45(part, shift) {   // 起点(grip)まわりに45°回す核（パイプ・エルボ・キャップ・ティー共通。追従中も再利用）
@@ -6308,6 +6317,7 @@ function orientStep(mode) {
     // 線・構築線：方位角＝水平45°／立面角・回転＝従来のShift挙動（鉛直へ）
     else window.__annRotate(m !== 'az');
   }
+  else if (window.__toast) window.__toast('回すアイテムを選んでください（部品または線）');   // 空押し＝案内（無反応に見えないように）
 }
 if (rotAInput) {
   // 角度=0〜360未満/方位=0〜180未満（いずれも0.5°刻みで折り返し）／移動・逃げ=mm整数（折り返し無し・負値可）
@@ -12104,7 +12114,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const faceSign = p => (behType(p) === 'elbow' ? -1 : 1);   // エルボは向き表示を反転（2026-07-19 社長要望：南表示→北、西→東）
     const faceN = p => new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion).multiplyScalar(faceSign(p));
     const azimuthOf = (x, z) => { let d = Math.atan2(x, -z) * 180 / Math.PI; if (d < 0) d += 360; return Math.round(d * 10) / 10; };
-    const faceBearing = p => { const n = faceN(p); if (Math.hypot(n.x, n.z) < 1e-3) return 0; return azimuthOf(n.x, n.z); };
+    // 方位角：上/下向きのフェイスは「ローカルX（ひねりの基準）の水平向き」で代用＝常に読める・常に編集できる
+    //（従来は0固定＋編集拒否で「入力できない」となっていた。2026-07-29 社長報告）
+    const faceBearing = p => {
+      const n = faceN(p);
+      if (Math.hypot(n.x, n.z) >= 1e-3) return azimuthOf(n.x, n.z);
+      const lx = new THREE.Vector3(1, 0, 0).applyQuaternion(p.quaternion);
+      if (Math.hypot(lx.x, lx.z) < 1e-3) return 0;
+      return azimuthOf(lx.x, lx.z);
+    };
     const faceElev = p => { const n = faceN(p); return Math.round(Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI * 10) / 10; };
     const faceDirText = p => {
       const el = faceElev(p);
@@ -12124,9 +12142,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       updateForm();
     };
     const setFaceBearing = (p, v) => {
-      const n = faceN(p);
-      if (Math.hypot(n.x, n.z) < 1e-3) { if (window.__toast) window.__toast('上/下向きのフェイスは、先に立面角を横向き（0°など）にしてください'); return; }
-      const a = (azimuthOf(n.x, n.z) - v) * Math.PI / 180;   // +Y回転は方位角を減らす向き
+      const a = (faceBearing(p) - v) * Math.PI / 180;   // +Y回転は方位角を減らす向き（上/下向きはローカルX基準で同様に効く）
       rotPartWorld(p, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), a));
     };
     // 回転（フェイス軸まわり・旧「ひねり」）：基準＝水平フェイスなら(Y×n)、垂直フェイスなら世界X。
@@ -12198,7 +12214,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const u = p.userData, c = partColumns(p);
       sec('部品');
       roRow('種別', () => `${c.kind} ${c.type}`.trim());
-      roRow('サイズ', () => `${c.size}${c.cls && c.cls !== '—' ? ' / ' + c.cls : ''}`);
+      // サイズ行は廃止（下の「仕様」と重複のため。2026-07-29 社長指摘）
       // ---- 仕様の編集（パレットとは切り離し。呼び径などはここで変える）----
       {
         const field = SPEC_FIELD[u.partType];
