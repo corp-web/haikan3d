@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-K';
+const APP_VER = 'v0729-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3955,8 +3955,7 @@ function updateFollowPreview(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
     followPreview.visible = false; clearMarkers();
-    if (!insDistFocused()) hideInsDist();   // 数値入力中は箱を消さない（Enterで確定できる）
-    return;
+    return;   // 距離ボックスは消さない（配置モード中は最後の値を保持＝入力しに行ける）
   }
   followPreview.visible = true;
   // 3軸ボタンで回した向きは全部品で毎フレーム維持する（旧：パイプ系だけ維持でフランジ等は既定向きへ
@@ -4001,7 +4000,7 @@ function updateFollowPreview(clientX, clientY) {
       return;
     }
   }
-  if (!insDistFocused()) hideInsDist();
+  // 距離ボックスはここでは消さない＝パイプから離れても最後の値を保持（入力しに行く途中で消えない）
   // 最初の部品も線分と同じく、カーソル位置（スナップ無ければ床面投影）へ自由配置
   const tgt = resolveTarget(clientX, clientY, null);
   if (!tgt) return;
@@ -4140,23 +4139,29 @@ function insertTargetAt(clientX, clientY) {
 // ---- 吸着した相手の向きへ合わせる（2026-07-29 社長要望：フランジ等を相手のフランジへ置く時、毎回回さなくて済むように）----
 const MATE_TYPES = { flange: 1, gasket: 1, valve: 1, flex: 1, sight: 1, cap: 1 };
 function mateInfoAt(pt) {
+  // 同じ点に複数の機点が重なる時（例：面基準ではパイプ端とフランジのフェイスが同位置）は
+  // 「フェイス面」を最優先＝フランジがある所へ持って行けば必ず面と面が向き合う（2026-07-29 社長報告）
+  let best = null, bestRank = -1;
   for (const q of placedParts) {
     if (q.userData.hidden || !q.userData.faceLocal) continue;
     for (const l of connsOf(q)) {
       if (connModelPos(q, l).distanceTo(pt) > 1e-6) continue;
       const n = connNormalOf(q, l);
-      if (!n || n.lengthSq() < 1e-9) return null;
+      if (!n || n.lengthSq() < 1e-9) continue;
       const u = q.userData, tp = u.partType;
       // フェイス面（フランジの表・ガスケット・フランジ形機器の両端）＝面と面を向かい合わせ（−n）。
       // 溶接端（パイプ・エルボ等）やフランジの背面＝こちらの背を相手へ向ける（+n）。
       const faceMate = (tp === 'gasket') || (tp === 'flange' && l === u.faceLocal) ||
                        (isFlangedBody(u) && (l === u.faceLocal || l === u.backLocal));
+      const rank = faceMate ? 2 : (tp === 'flange' ? 1 : 0);
+      if (rank <= bestRank) continue;
       const dirN = faceMate ? n.clone().negate() : n.clone();
-      return { part: q, n: n.clone().normalize(),
+      best = { part: q, n: n.clone().normalize(),
                q: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirN.normalize()) };
+      bestRank = rank;
     }
   }
-  return null;
+  return best;
 }
 // ---- 挿入位置から両端（曲がり・分岐）までの距離表示＋数値入力（2026-07-29 社長要望）----
 // ←（背面端まで）／（フェイス端まで）→ の2欄。どちらかに数値を入れてEnter＝その位置へ挿入を確定。
@@ -4199,11 +4204,15 @@ function showInsDist(cx, cy, hit) {
   const L = hit.pipe.userData.pipe.length;
   if (document.activeElement !== _insL) _insL.value = Math.round(hit.tMm);
   if (document.activeElement !== _insR) _insR.value = Math.round(L - hit.tMm);
-  if (!insDistFocused()) {   // 入力中は箱を動かさない
-    _insDistBox.style.left = Math.round(cx + 18) + 'px';
-    _insDistBox.style.top = Math.round(cy - 42) + 'px';
+  // 箱はカーソルを追わず、出す時に一度だけ画面上部の定位置へ置く。
+  // カーソル脇に出すと、入力しに行く途中でプレビューが動いてしまう（2026-07-29 社長報告）
+  if (_insDistBox.style.display !== 'flex') {
+    _insDistBox.style.display = 'flex';
+    const rect = renderer.domElement.getBoundingClientRect();
+    const bw = _insDistBox.offsetWidth || 260;
+    _insDistBox.style.left = Math.round(rect.left + (rect.width - bw) / 2) + 'px';
+    _insDistBox.style.top = Math.round(rect.top + 12) + 'px';
   }
-  _insDistBox.style.display = 'flex';
 }
 function hideInsDist() {
   if (_insDistBox) _insDistBox.style.display = 'none';
