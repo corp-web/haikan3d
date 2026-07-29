@@ -1,6 +1,6 @@
-﻿/* 配管3D — 3Dモデル空間 + AutoCAD風ビューキューブ
+﻿/* 配管3D — 3Dモデル空間 + 格子舞台の視点操作子
    ・床下も回れる視点 / 床グリッド・座標軸（modelGroup）
-   ・右上ビューキューブ：面クリックで正対＋平行投影、二重リング＋東西南北
+   ・右上の格子舞台：方位文字タップで正対＋平行投影、床タップ=真上、角タップ=等角
    ・ホーム＝初期視点、円弧矢印＝平行投影時のみ画面90°ロール
    ・視点切替はトゥイーンでなめらかに移行
    制御方針：平行投影(ortho)中はOrbitControlsを止め、こちらでカメラを所有する。
@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-S';
+const APP_VER = 'v0729-T';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -231,138 +231,180 @@ const DRAW_CURSOR = (() => {
 })();
 
 // ===================================================================
-//  ビューキューブ（画面右上の独立ギズモ・別シーン）
+//  格子舞台ギズモ（画面右上の独立ギズモ・別シーン）
+//  キューブに代わる視点操作子（2026-07-29 社長案・案A「四角舞台」）。
+//  半透明の四角い格子床＝空間の縮図。中心に座標（東=赤・北=緑・上=青の矢）。
+//  方位文字タップ=その方角から正対、床タップ=真上、角タップ=等角。
+//  外枠は中の格子と同じ線材質＝同じ太さ（2026-07-29 社長指示）。
 // ===================================================================
-const GIZMO_CAM_DIST = 8.6;
+const GIZMO_CAM_DIST = 7.4;
 const gizmo = {};
 (function buildGizmo() {
   const gScene = new THREE.Scene();
-  const gCam = new THREE.PerspectiveCamera(40, 1, 0.1, 20);
+  const gCam = new THREE.PerspectiveCamera(40, 1, 0.1, 30);
   gCam.position.set(0, 0, GIZMO_CAM_DIST);
   gCam.lookAt(0, 0, 0);
-  // 立体感のある照明：空/地の自然グラデ(HemisphereLight)＋斜め上のキーライト＋弱い補助光。
-  // 各面の明るさが向きで変わり、より現実のキューブらしく見える。
-  gScene.add(new THREE.HemisphereLight(0xffffff, 0x6b7280, 0.95));
-  const gl = new THREE.DirectionalLight(0xffffff, 0.85);
-  gl.position.set(3.5, 6, 4.5); gScene.add(gl);
-  const glFill = new THREE.DirectionalLight(0xffffff, 0.22);
-  glFill.position.set(-4, -1.5, -3); gScene.add(glFill);
 
   const globe = new THREE.Group();
-  const cubeSize = 1.5;
+  const HALF = 1.15, TH = 0.12;   // 舞台の半幅・板の厚み（真横視点でも板として見える）
 
-  // 明暗テーマの色（ダーク背景＝明るいキューブ／ホワイト背景＝濃いめのキューブ）
+  // 明暗テーマの色
   const GIZ_THEME = {
-    dark:  { g0: '#eef1f6', g1: '#d2d7e0', border: '#aab2c2', text: '#566072', edge: 0x9aa2b2, dir: '#cdd5e2' },
-    light: { g0: '#ccd4e2', g1: '#aab4c6', border: '#8b95aa', text: '#2a3344', edge: 0x7c8498, dir: '#46506a' },
+    dark:  { line: 0x9fc0e8, fill: 0x5aa8ff, text: '#dbe7ff', north: '#ffb454' },
+    light: { line: 0x5f7396, fill: 0x7c96c0, text: '#2a3344', north: '#c96a00' },
   };
-  let gizPal = GIZ_THEME.dark;
-  function faceTexture(text) {
-    const s = 256, cv = document.createElement('canvas'); cv.width = cv.height = s;
-    const ctx = cv.getContext('2d');
-    // 面はほぼ一様色（陰影は3D照明側で付ける＝向きに応じた立体感）。中心をわずかに明るくして艶を演出。
-    const rg = ctx.createRadialGradient(s * 0.42, s * 0.40, s * 0.05, s * 0.5, s * 0.5, s * 0.72);
-    rg.addColorStop(0, gizPal.g0); rg.addColorStop(1, gizPal.g1);
-    ctx.fillStyle = rg; ctx.fillRect(0, 0, s, s);
-    ctx.strokeStyle = gizPal.border; ctx.lineWidth = 6; ctx.strokeRect(3, 3, s - 6, s - 6);
-    ctx.fillStyle = gizPal.text;
-    ctx.font = '116px "Hiragino Kaku Gothic ProN","Meiryo","Segoe UI",sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(text, s / 2, s / 2 + 6);
-    const tex = new THREE.CanvasTexture(cv);
-    tex.minFilter = THREE.LinearFilter; tex.anisotropy = 4;
+  let gizPal = GIZ_THEME.light;
+
+  // ---- 舞台（半透明の板＋格子） ----
+  const fillMat = new THREE.MeshBasicMaterial({ color: gizPal.fill, transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false });
+  const plateTop = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), fillMat);
+  plateTop.rotation.x = -Math.PI / 2;
+  plateTop.renderOrder = 1;
+  plateTop.userData.snapDir = new THREE.Vector3(0, 1, 0);   // 床タップ＝真上（平面図）
+  globe.add(plateTop);
+  const slabMat = new THREE.MeshBasicMaterial({ color: gizPal.fill, transparent: true, opacity: 0.10, depthWrite: false });
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(HALF * 2, TH, HALF * 2), slabMat);
+  slab.position.y = -TH / 2 - 0.002;
+  globe.add(slab);
+  // 格子（外枠を含む全線を1本の材質で描く＝外枠と格子の太さが揃う）
+  const gridPts = [];
+  for (let i = 0; i <= 4; i++) {
+    const t = -HALF + (HALF * 2 / 4) * i;
+    gridPts.push(new THREE.Vector3(t, 0, -HALF), new THREE.Vector3(t, 0, HALF));
+    gridPts.push(new THREE.Vector3(-HALF, 0, t), new THREE.Vector3(HALF, 0, t));
+  }
+  const gridMat = new THREE.LineBasicMaterial({ color: gizPal.line, transparent: true, opacity: 0.85 });
+  const gridLines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gridPts), gridMat);
+  gridLines.renderOrder = 2;
+  globe.add(gridLines);
+  // 板の底の外周（薄め＝厚みの表現）
+  const bY = -TH;
+  const botPts = [
+    [-HALF, bY, -HALF], [HALF, bY, -HALF], [HALF, bY, -HALF], [HALF, bY, HALF],
+    [HALF, bY, HALF], [-HALF, bY, HALF], [-HALF, bY, HALF], [-HALF, bY, -HALF],
+  ].map(p => new THREE.Vector3(p[0], p[1], p[2]));
+  const botMat = new THREE.LineBasicMaterial({ color: gizPal.line, transparent: true, opacity: 0.4 });
+  globe.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(botPts), botMat));
+
+  // ---- 中心の座標（三本の矢）。東=+X赤 / 北=-Z緑 / 上=+Y青 ----
+  const AXES_DEF = [
+    { name: 'east',  dir: new THREE.Vector3(1, 0, 0),  color: 0xe05252, len: 1.02 },
+    { name: 'north', dir: new THREE.Vector3(0, 0, -1), color: 0x1fa04d, len: 1.02 },
+    { name: 'up',    dir: new THREE.Vector3(0, 1, 0),  color: 0x3b76e0, len: 1.30 },
+  ];
+  function axisDotSprite(colorHex) {   // 軸がこちらを向いて潰れた時のCAD流「⊙」記号
+    const s = 64, cv2 = document.createElement('canvas'); cv2.width = cv2.height = s;
+    const c2 = cv2.getContext('2d');
+    c2.strokeStyle = c2.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+    c2.lineWidth = 6;
+    c2.beginPath(); c2.arc(s / 2, s / 2, 22, 0, 7); c2.stroke();
+    c2.beginPath(); c2.arc(s / 2, s / 2, 7, 0, 7); c2.fill();
+    const tex = new THREE.CanvasTexture(cv2); tex.minFilter = THREE.LinearFilter;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    sp.scale.setScalar(0.34); sp.visible = false; sp.renderOrder = 6;
+    return sp;
+  }
+  gizmo.axes = [];
+  const UNIT_Y = new THREE.Vector3(0, 1, 0);
+  AXES_DEF.forEach(a => {
+    const g = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ color: a.color });
+    const shaftLen = a.len - 0.30;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, shaftLen, 10), mat);
+    shaft.position.y = shaftLen / 2;
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.32, 12), mat);
+    head.position.y = a.len - 0.16;
+    g.add(shaft); g.add(head);
+    g.quaternion.setFromUnitVectors(UNIT_Y, a.dir);
+    g.renderOrder = 3;
+    globe.add(g);
+    const dot = axisDotSprite(a.color);
+    globe.add(dot);
+    gizmo.axes.push({ name: a.name, dir: a.dir.clone(), arrow: g, dot });
+  });
+  globe.add(new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10),
+    new THREE.MeshBasicMaterial({ color: 0x666e7e })));
+
+  // ---- 方位・上の文字（常にこちらを向くスプライト。タップで視点スナップ） ----
+  function labelTexture(text, colCss, big) {
+    const s = 128, cv2 = document.createElement('canvas'); cv2.width = cv2.height = s;
+    const c2 = cv2.getContext('2d');
+    c2.fillStyle = colCss;
+    c2.font = 'bold ' + (big ? 100 : 92) + 'px "Hiragino Kaku Gothic ProN","Meiryo","Segoe UI",sans-serif';
+    c2.textAlign = 'center'; c2.textBaseline = 'middle';
+    c2.fillText(text, s / 2, s / 2 + 4);
+    const tex = new THREE.CanvasTexture(cv2); tex.minFilter = THREE.LinearFilter; tex.anisotropy = 4;
     return tex;
   }
-  const FACE_TEXTS = ['右', '左', '上', '下', '前', '後'];
-  const faceMat = t => new THREE.MeshStandardMaterial({ map: faceTexture(t), color: 0xffffff, roughness: 0.58, metalness: 0.06 });
-  // 角の丸いキューブ（2026-07-21 社長要望）。箱を分割し、頂点を「角の丸み半径」ぶん内側の芯へ
-  // 寄せてから半径だけ押し出す＝面は平ら・稜線は円筒・角は球になる。面ごとのUVと材質分けは箱のまま
-  // 保たれるので、6面の文字テクスチャも当たり判定（face.normal）もこれまでどおり効く。
-  const CUBE_R = cubeSize * 0.11;
-  function roundedBoxGeo(size, radius, seg) {
-    const g = new THREE.BoxGeometry(size, size, size, seg, seg, seg);
-    const h = size / 2, r = Math.min(radius, h * 0.5);
-    const pos = g.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3(), d = new THREE.Vector3();
-    const cl = t => Math.max(-(h - r), Math.min(h - r, t));
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i);
-      c.set(cl(v.x), cl(v.y), cl(v.z));
-      d.subVectors(v, c);
-      const len = d.length();
-      if (len > 1e-9) { d.multiplyScalar(r / len); v.copy(c).add(d); }
-      pos.setXYZ(i, v.x, v.y, v.z);
+  const LR = 2.0;   // 方位文字は舞台の角（HALF√2≒1.63）より外＝重ならない
+  const LABEL_DEFS = [
+    { t: '北', pos: [0, 0.02, -LR], dir: [0, 0, -1], north: true },
+    { t: '南', pos: [0, 0.02, LR],  dir: [0, 0, 1] },
+    { t: '東', pos: [LR, 0.02, 0],  dir: [1, 0, 0] },
+    { t: '西', pos: [-LR, 0.02, 0], dir: [-1, 0, 0] },
+    { t: '上', pos: [0, 1.72, 0],   dir: [0, 1, 0] },
+  ];
+  const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+  gizmo.labels = [];
+  gizmo.hitObjs = [plateTop];
+  LABEL_DEFS.forEach(L => {
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: labelTexture(L.t, L.north ? gizPal.north : gizPal.text, L.north), transparent: true, depthTest: false }));
+    sp.scale.setScalar(L.north ? 0.92 : 0.82);
+    sp.renderOrder = 5;
+    sp.position.set(L.pos[0], L.pos[1], L.pos[2]);
+    globe.add(sp);
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(0.44, 8, 6), hitMat);
+    hit.position.copy(sp.position);
+    hit.userData.snapDir = new THREE.Vector3(L.dir[0], L.dir[1], L.dir[2]);
+    globe.add(hit);
+    gizmo.hitObjs.push(hit);
+    gizmo.labels.push({ text: L.t, dir: hit.userData.snapDir.clone(), sprite: sp, hit, north: !!L.north });
+  });
+  // 舞台の四隅タップ＝その方角の等角視点（キューブの角タップに相当）
+  [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([sx, sz]) => {
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(0.34, 8, 6), hitMat);
+    hit.position.set(sx * HALF, 0, sz * HALF);
+    hit.userData.snapDir = new THREE.Vector3(sx, 1, sz).normalize();
+    globe.add(hit);
+    gizmo.hitObjs.push(hit);
+  });
+
+  // 正対で潰れる要素の出し分け：軸がこちらを向いたら⊙記号、方位文字は中央に重なるため隠す
+  gizmo.updateDegenerate = (viewDir) => {
+    for (const a of gizmo.axes) {
+      const collapsed = Math.abs(a.dir.dot(viewDir)) > 0.985;
+      a.arrow.visible = !collapsed;
+      a.dot.visible = collapsed;
     }
-    pos.needsUpdate = true;
-    g.computeVertexNormals();
-    return g;
-  }
-  const cube = new THREE.Mesh(roundedBoxGeo(cubeSize, CUBE_R, 20), FACE_TEXTS.map(faceMat));
-  globe.add(cube);
-  gizmo.cube = cube;
-
-  // 稜線＝平らな面の外周だけを描く（丸めた部分にはみ出さない）
-  function faceOutlineGeo(size, radius) {
-    const h = size / 2, a = h - radius, pts = [];
-    const quad = q => { for (let i = 0; i < 4; i++) { pts.push(q[i], q[(i + 1) % 4]); } };
-    const mk = fn => quad([fn(-a, -a), fn(a, -a), fn(a, a), fn(-a, a)]);
-    mk((u, v) => new THREE.Vector3(h, u, v));  mk((u, v) => new THREE.Vector3(-h, u, v));
-    mk((u, v) => new THREE.Vector3(u, h, v));  mk((u, v) => new THREE.Vector3(u, -h, v));
-    mk((u, v) => new THREE.Vector3(u, v, h));  mk((u, v) => new THREE.Vector3(u, v, -h));
-    return new THREE.BufferGeometry().setFromPoints(pts);
-  }
-  const edges = new THREE.LineSegments(
-    faceOutlineGeo(cubeSize * 1.002, CUBE_R),
-    new THREE.LineBasicMaterial({ color: gizPal.edge })
-  );
-  globe.add(edges);
-  const dirPlanes = [];   // 方位ラベル（北南東西）の再着色用
-
-  const compass = new THREE.Group();
-  compass.position.y = -cubeSize * 0.55;
-  globe.add(compass);
-  function thinRing(rIn, rOut) {
-    const r = new THREE.Mesh(new THREE.RingGeometry(rIn, rOut, 80),
-      new THREE.MeshBasicMaterial({ color: 0x6f7c96, side: THREE.DoubleSide, transparent: true, opacity: 0.45 }));
-    r.rotation.x = -Math.PI / 2; return r;
-  }
-  const ringInner = cubeSize * 1.18, ringOuter = cubeSize * 1.62;
-  compass.add(thinRing(ringInner - 0.04, ringInner));
-  compass.add(thinRing(ringOuter - 0.05, ringOuter));
-
-  function dirTexture(text) {
-    const s = 128, cv = document.createElement('canvas'); cv.width = cv.height = s;
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, s, s);
-    ctx.fillStyle = gizPal.dir;
-    ctx.font = 'bold 96px "Hiragino Kaku Gothic ProN","Meiryo","Segoe UI",sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(text, s / 2, s / 2 + 4);
-    const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter; tex.anisotropy = 4;
-    return tex;
-  }
-  function dirPlane(text, rotZ) {
-    const pl = new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.72),
-      new THREE.MeshBasicMaterial({ map: dirTexture(text), transparent: true, side: THREE.DoubleSide, depthWrite: false }));
-    pl.rotation.x = -Math.PI / 2; pl.rotation.z = rotZ;
-    dirPlanes.push({ mesh: pl, text });
-    return pl;
-  }
-  const RL = (ringInner + ringOuter) / 2;
-  [{ t:'北', x:0, z:-RL, rz:0 }, { t:'南', x:0, z:RL, rz:Math.PI },
-   { t:'東', x:RL, z:0, rz:-Math.PI/2 }, { t:'西', x:-RL, z:0, rz:Math.PI/2 }]
-    .forEach(m => { const pl = dirPlane(m.t, m.rz); pl.position.set(m.x, 0.01, m.z); compass.add(pl); });
+    for (const L of gizmo.labels) {
+      const hide = Math.abs(L.dir.dot(viewDir)) > 0.985;
+      L.sprite.visible = !hide;
+      L.hit.userData.enabled = !hide;
+    }
+  };
 
   gScene.add(globe);
   gizmo.scene = gScene;
   gizmo.cam = gCam;
-  // 明暗テーマの適用（背景は透明＝3D背景に乗るので、キューブ自体の色を切替）
+  gizmo.stage = globe;
+  gizmo.gridMat = gridMat;
+  gizmo.half = HALF;
+  // 明暗テーマの適用（背景は透明＝3D背景に乗るので、線と文字の色を切替）
   gizmo.applyTheme = (light) => {
     gizPal = light ? GIZ_THEME.light : GIZ_THEME.dark;
-    FACE_TEXTS.forEach((t, i) => { const m = cube.material[i]; if (m.map) m.map.dispose(); m.map = faceTexture(t); m.needsUpdate = true; });
-    edges.material.color.setHex(gizPal.edge);
-    for (const d of dirPlanes) { if (d.mesh.material.map) d.mesh.material.map.dispose(); d.mesh.material.map = dirTexture(d.text); d.mesh.material.needsUpdate = true; }
+    gridMat.color.setHex(gizPal.line);
+    botMat.color.setHex(gizPal.line);
+    fillMat.color.setHex(gizPal.fill);
+    slabMat.color.setHex(gizPal.fill);
+    for (const L of gizmo.labels) {
+      const m = L.sprite.material;
+      if (m.map) m.map.dispose();
+      m.map = labelTexture(L.text, L.north ? gizPal.north : gizPal.text, L.north);
+      m.needsUpdate = true;
+    }
   };
-  gizmo.applyTheme(true);   // 統一グレー背景＝明るい背景用のキューブ配色（2026-07-19）
+  gizmo.applyTheme(true);   // 統一グレー背景＝明るい背景用の配色（2026-07-19）
 })();
 
 // ===================================================================
@@ -515,7 +557,8 @@ document.getElementById('rollCW').onclick  = () => rollView(-1);
 // ---- 尺度（平行投影での表示倍率）。CSS 96dpi 基準で 1モデルm→画面px を物理尺度に合わせる ----
 const PX_PER_M = 96 / 0.0254;   // CSS px / 物理m（96dpi）
 const SCALE_OPTS = [
-  ['1:1', 1], ['1:2', 0.5], ['1:4', 0.25], ['1:5', 0.2], ['1:8', 0.125], ['1:10', 0.1], ['1:16', 0.0625],
+  ['1:1', 1], ['1:2', 0.5], ['1:3', 1 / 3], ['1:4', 0.25], ['1:5', 0.2], ['1:6', 1 / 6], ['1:7', 1 / 7],
+  ['1:8', 0.125], ['1:9', 1 / 9], ['1:10', 0.1], ['1:16', 0.0625],
   ['1:20', 0.05], ['1:30', 1 / 30], ['1:40', 0.025], ['1:50', 0.02], ['1:100', 0.01],
   ['2:1', 2], ['4:1', 4], ['8:1', 8], ['10:1', 10], ['100:1', 100],
 ];
@@ -566,7 +609,7 @@ function updateRollButtons() {
   });
 }
 
-// ---- ビューキューブ面クリック → 正対＋平行投影（なめらかに移行） ----
+// ---- 舞台の方位タップ → 正対＋平行投影（なめらかに移行） ----
 function snapToDir(dir) {
   const t = controls.target;
   const dist = camera.position.distanceTo(t);
@@ -592,16 +635,6 @@ function inGizmo(px, py) {
   const r = gizmoRect();
   return px >= r.x0 && px <= r.x0 + r.size && py >= r.y0 && py <= r.y0 + r.size;
 }
-// キューブの角を丸めたので、稜線・角をタップした時の面法線を近い正方向へ整える。
-// 面＝その正面、稜線＝2軸の斜め、角＝アイソメ（3軸均等）になる（2026-07-21）
-function gizmoSnapDir(n) {
-  const q = new THREE.Vector3(
-    Math.abs(n.x) > 0.5 ? Math.sign(n.x) : 0,
-    Math.abs(n.y) > 0.5 ? Math.sign(n.y) : 0,
-    Math.abs(n.z) > 0.5 ? Math.sign(n.z) : 0);
-  return q.lengthSq() > 0 ? q.normalize() : n.clone().normalize();
-}
-
 // ortho解除の判定：pointerdown開始時点で「何か選択中」だったかを最初に記録する
 // （後段の deselect より前に走るよう、window capture で早く登録）。
 let _orthoHadSel = false;
@@ -640,15 +673,16 @@ renderer.domElement.addEventListener('pointerup', e => {
   gizmoNdc.x = ((px - r.x0) / r.size) * 2 - 1;
   gizmoNdc.y = -((py - r.y0) / r.size) * 2 + 1;
   gizmoRay.setFromCamera(gizmoNdc, gizmo.cam);
-  const hits = gizmoRay.intersectObject(gizmo.cube, false);
+  const hits = gizmoRay.intersectObjects(gizmo.hitObjs, false)
+    .filter(h => h.object.userData.enabled !== false && h.object.userData.snapDir);
   if (!hits.length) return;
-  const n = hits[0].face.normal.clone().transformDirection(gizmo.cube.matrixWorld).normalize();
-  snapToDir(gizmoSnapDir(n));
+  snapToDir(hits[0].object.userData.snapDir.clone());
 });
 
 // ---- ギズモを画面右上に描く ----
 function renderGizmo() {
   const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
+  if (gizmo.updateDegenerate) gizmo.updateDegenerate(dir);
   gizmo.cam.position.copy(dir.clone().multiplyScalar(GIZMO_CAM_DIST));
   gizmo.cam.up.copy(camera.up);
   gizmo.cam.lookAt(0, 0, 0);
