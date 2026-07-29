@@ -1,4 +1,4 @@
-/* 配管3D — 3Dモデル空間 + AutoCAD風ビューキューブ
+﻿/* 配管3D — 3Dモデル空間 + AutoCAD風ビューキューブ
    ・床下も回れる視点 / 床グリッド・座標軸（modelGroup）
    ・右上ビューキューブ：面クリックで正対＋平行投影、二重リング＋東西南北
    ・ホーム＝初期視点、円弧矢印＝平行投影時のみ画面90°ロール
@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-H';
+const APP_VER = 'v0729-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3946,6 +3946,7 @@ function stopFollow() {
   followParked = null;
   clearMarkers();
   hideInsDist();
+  clearPairGhost();
   if (window.__syncTouchOrbit) window.__syncTouchOrbit();   // 配置終了＝1本指の視点回転を元に戻す
 }
 // プレビューを「起点が指す点」に置く＋向き適用＋機点スナップ
@@ -3974,7 +3975,9 @@ function updateFollowPreview(clientX, clientY) {
       const mid = followPreview.userData.faceLocal.clone().add(followPreview.userData.backLocal)
         .multiplyScalar(0.5).applyQuaternion(followPreview.quaternion);
       followPreview.position.copy(pt).sub(mid);   // 軸方向の中央を芯線上の点へ
-      updatePairGhost(insT.pipe, dir, pt);        // 合いフランジ＝2枚目とガスケットの影も出す
+      const pgs = pairGhostSpans();
+      if (pgs) followPreview.position.addScaledVector(dir, -(pgs.tg + pgs.s2) / 2);   // 合いフランジ＝列全体を中央に
+      updatePairGhost();                          // 2枚目とガスケットの影も出す
       showInsDist(clientX, clientY, insT);        // 両端（曲がり・分岐）までの距離を表示（入力で確定も可）
       showInteractionMarkers(followPreview, pt);
       return;
@@ -4003,6 +4006,7 @@ function updateFollowPreview(clientX, clientY) {
   }
   setPartByOrigin(followPreview, tgt.point);
   if (mateOfs) followPreview.position.add(mateOfs);
+  updatePairGhost();   // 合いフランジ＝通常配置のプレビューでも2枚＋ガスケットで見せる
   showInteractionMarkers(followPreview, tgt.snapped ? tgt.point : null);
 }
 function moveFollow(x, y) { updateFollowPreview(x, y); }
@@ -4197,7 +4201,6 @@ function showInsDist(cx, cy, hit) {
 function hideInsDist() {
   if (_insDistBox) _insDistBox.style.display = 'none';
   _insPrev = null;
-  clearPairGhost();
 }
 // 数値入力（Enter）で指定位置へ挿入を確定
 function commitInsertAt(pipe, tMm) {
@@ -4207,7 +4210,7 @@ function commitInsertAt(pipe, tMm) {
   if (!INSERTABLE_TYPES[obj.userData.partType] || !insertAxialOk(obj)) return;
   if (_insL) _insL.blur();
   if (_insR) _insR.blur();
-  hideInsDist();
+  hideInsDist(); clearPairGhost();
   if (insertItemIntoPipe(obj, { pipe, tMm })) {
     refreshItemList();
     stopFollow();
@@ -4225,9 +4228,10 @@ function clearPairGhost() {
   _pairGhost = null;
 }
 window.__pairGhostActive = () => !!(_pairGhost && _pairGhost.grp.visible);
-function updatePairGhost(pipe, dir, pt) {
+// 影を（必要なら）作って各スパン(m)を返す。合いフランジ選択でなければ影を消して null
+function pairGhostSpans() {
   const isPair = followPreview && followPreview.userData.partType === 'flange' && flangeOpts.pair === '2';
-  if (!isPair) { clearPairGhost(); return; }
+  if (!isPair) { clearPairGhost(); return null; }
   const spec = followPreview.userData.flange || flangeOpts;
   const gt = (parseFloat(gasketOpts.t) > 0) ? parseFloat(gasketOpts.t) : 3;
   const key = [spec.sizeA, spec.type, spec.cls, spec.face, spec.sch, gt].join('|');
@@ -4247,15 +4251,21 @@ function updatePairGhost(pipe, dir, pt) {
       tg: g.userData.faceLocal.y - g.userData.backLocal.y,
       s2: f2.userData.faceLocal.y - f2.userData.backLocal.y };
   }
-  const P = _pairGhost, spanT = P.s1 + P.tg + P.s2;
-  const q1 = pipe.quaternion;
+  return _pairGhost;
+}
+// followPreview（1枚目）の姿勢に沿って、ガスケット＋2枚目の影を面合わせで並べる。
+// 挿入プレビューでも通常配置のプレビューでも同じ（2026-07-29 社長要望：配置時も常に2枚見せる）
+function updatePairGhost() {
+  const P = pairGhostSpans();
+  if (!P) return;
+  const q1 = followPreview.quaternion;
+  const n = new THREE.Vector3(0, 1, 0).applyQuaternion(q1).normalize();   // 1枚目のフェイス方向
+  const F = connModelPos(followPreview, followPreview.userData.faceLocal);
   const q2 = q1.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI));
-  const s0 = pt.clone().addScaledVector(dir, -spanT / 2);
-  followPreview.position.addScaledVector(dir, -(P.tg + P.s2) / 2);   // 本体（1枚目）を列の先頭へ
   P.g.quaternion.copy(q1);
-  P.g.position.copy(s0).addScaledVector(dir, P.s1).sub(P.g.userData.backLocal.clone().applyQuaternion(q1));
+  P.g.position.copy(F).sub(P.g.userData.backLocal.clone().applyQuaternion(q1));            // ガスケット背面＝1枚目フェイス
   P.f2.quaternion.copy(q2);
-  P.f2.position.copy(s0).addScaledVector(dir, P.s1 + P.tg).sub(P.f2.userData.faceLocal.clone().applyQuaternion(q2));
+  P.f2.position.copy(F).addScaledVector(n, P.tg).sub(P.f2.userData.faceLocal.clone().applyQuaternion(q2));   // 2枚目フェイス＝ガスケット面
   P.grp.visible = true;
 }
 // 挿入する部品列（軸方向の並び）を組む。{train:[{obj,flip}], span(mm), dsSize(下流の径|null)}
@@ -4445,7 +4455,7 @@ function placeToolAt(tool, clientX, clientY) {
   if (INSERTABLE_TYPES[obj.userData.partType] && insertAxialOk(obj)) {
     const hit = insertTargetAt(clientX, clientY);
     if (hit) {
-      hideInsDist();
+      hideInsDist(); clearPairGhost();
       if (insertItemIntoPipe(obj, hit)) { refreshItemList(); return obj; }
       obj.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
       return null;   // 入らない＝置かずに配置モードを継続（理由はトースト済み）
@@ -4458,6 +4468,22 @@ function placeToolAt(tool, clientX, clientY) {
   obj.userData.roll = followRoll;
   modelGroup.add(obj);
   placedParts.push(obj);
+  // 合いフランジ＝通常配置でも2枚＋ガスケットをセットで置く（2026-07-29 社長要望。プレビューの影と同じ並び）
+  if (obj.userData.partType === 'flange' && flangeOpts.pair === '2') {
+    const spec = obj.userData.flange;
+    const gt = (parseFloat(gasketOpts.t) > 0) ? parseFloat(gasketOpts.t) : 3;
+    const g = makeGasket({ sizeA: spec.sizeA, cls: spec.cls, t: gt });
+    const f2 = makeFlange(spec);
+    computeConns(g); computeConns(f2);
+    const n = new THREE.Vector3(0, 1, 0).applyQuaternion(obj.quaternion).normalize();
+    const F = connModelPos(obj, obj.userData.faceLocal);
+    g.quaternion.copy(obj.quaternion);
+    g.position.copy(F).sub(g.userData.backLocal.clone().applyQuaternion(g.quaternion));
+    f2.quaternion.copy(obj.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI));
+    const tgM = g.userData.faceLocal.y - g.userData.backLocal.y;
+    f2.position.copy(F).addScaledVector(n, tgM).sub(f2.userData.faceLocal.clone().applyQuaternion(f2.quaternion));
+    for (const o2 of [g, f2]) { o2.userData.placed = true; o2.userData.orient = 0; o2.userData.roll = 0; modelGroup.add(o2); placedParts.push(o2); }
+  }
   refreshItemList();
   autoInsertGasket(obj);      // フランジ面どうしなら、ここでガスケットを挟んで厚みぶん押し出す
   return obj;
@@ -7282,7 +7308,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     if (seed.length >= 2) {
       const miss = seed.filter(r => !used.has(r));
-      if (miss.length) return { err: `配管化：選んだ線分がつながっていません（${miss.length}本が離れています。端点は1mm以内で合わせてください）` };
+      if (miss.length) return { err: `スイープ：選んだ線分がつながっていません（${miss.length}本が離れています。端点は1mm以内で合わせてください）` };
     }
     // 端点をノードにまとめ、枝分かれ・輪を検査してから端から順にたどる
     const nodes = [];
@@ -7297,9 +7323,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (na === nb) continue;
       na.edges.push({ rec: r, to: nb }); nb.edges.push({ rec: r, to: na });
     }
-    if (nodes.some(n => n.edges.length > 2)) return { err: '配管化：ルートが枝分かれしています。1本の連続したルートにしてください' };
+    if (nodes.some(n => n.edges.length > 2)) return { err: 'スイープ：ルートが枝分かれしています。1本の連続したルートにしてください' };
     const ends = nodes.filter(n => n.edges.length === 1);
-    if (ends.length !== 2) return { err: '配管化：ルートが輪になっています。始点と終点のあるルートにしてください' };
+    if (ends.length !== 2) return { err: 'スイープ：ルートが輪になっています。始点と終点のあるルートにしてください' };
     const pts = [ends[0].p.clone()];
     let cur = ends[0], prevRec = null;
     while (true) {
@@ -7325,7 +7351,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const dIn = pts[i].clone().sub(pts[i - 1]).normalize();
       const dOut = pts[i + 1].clone().sub(pts[i]).normalize();
       const th = dIn.angleTo(dOut) * 180 / Math.PI;
-      if (th > 165) return { err: `配管化：${Math.round(th)}°曲がる角があります（対応は165°まで。折返しは配管化できません）` };
+      if (th > 165) return { err: `スイープ：${Math.round(th)}°曲がる角があります（対応は165°まで。折返しは配管化できません）` };
       const base = th <= 45 + SWEEP_ANG_TOL ? '45' : th <= 90 + SWEEP_ANG_TOL ? '90' : '180';
       const exact = base !== '180' && Math.abs(th - (base === '45' ? 45 : 90)) <= SWEEP_ANG_TOL;
       corners.push({ i, th, base, exact, short: false, dIn, dOut });
@@ -7341,21 +7367,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
       return R * Math.tan(c.th / 2 * D2R);
     }
-    for (const c of corners) if (cEof(c) == null) return { err: `配管化：${sizeA} の ${c.base}°エルボは規格表にありません` };
+    for (const c of corners) if (cEof(c) == null) return { err: `スイープ：${sizeA} の ${c.base}°エルボは規格表にありません` };
     // 各区間に収まるか。収まらない区間は両端の角をショートへ→それでも駄目なら中止
     for (let pass = 0; ; pass++) {
       let bad = null;
       for (let s = 0; s < pts.length - 1 && !bad; s++) {
         const cPrev = corners.find(c => c.i === s), cNext = corners.find(c => c.i === s + 1);
         const ceP = cPrev ? cEof(cPrev) : 0, ceN = cNext ? cEof(cNext) : 0;
-        if (ceP == null || ceN == null) return { err: `配管化：${sizeA} のショートエルボは規格表にありません（区間${s + 1}が短すぎます）` };
+        if (ceP == null || ceN == null) return { err: `スイープ：${sizeA} のショートエルボは規格表にありません（区間${s + 1}が短すぎます）` };
         const L = pts[s].distanceTo(pts[s + 1]) - ceP - ceN;
         if (L < -1e-6) bad = { s, L, cPrev, cNext };
       }
       if (!bad) break;
       let changed = false;
       for (const c of [bad.cPrev, bad.cNext]) if (c && !c.short) { c.short = true; changed = true; }
-      if (!changed || pass >= 3) return { err: `配管化：区間${bad.s + 1}（${Math.round(pts[bad.s].distanceTo(pts[bad.s + 1]) * 1000)}mm）が短すぎてエルボが入りません（あと${Math.ceil(-bad.L * 1000)}mm）` };
+      if (!changed || pass >= 3) return { err: `スイープ：区間${bad.s + 1}（${Math.round(pts[bad.s].distanceTo(pts[bad.s + 1]) * 1000)}mm）が短すぎてエルボが入りません（あと${Math.ceil(-bad.L * 1000)}mm）` };
     }
     const elbows = corners.map(c => ({
       i: c.i, th: c.th, dIn: c.dIn, dOut: c.dOut,
@@ -7408,7 +7434,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof updateForm === 'function') updateForm();
     if (typeof _idleSig !== 'undefined') _idleSig = null;
     if (window.__recordHistory) window.__recordHistory();
-    if (window.__toast) window.__toast(`配管化：パイプ${plan.pipes.length}本・エルボ${plan.elbows.length}個を配置しました（${sizeA} ${sch}）`);
+    if (window.__toast) window.__toast(`スイープ：パイプ${plan.pipes.length}本・エルボ${plan.elbows.length}個を配置しました（${sizeA} ${sch}）`);
     endSweepMode();
   }
   function ensureSweepBox() {
@@ -7420,7 +7446,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const sel = 'background:#fff;color:#2a3550;border:1px solid #c4ccda;border-radius:5px;padding:3px 5px;font-size:12px';
     const btn = 'border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer';
     sweepBox.innerHTML =
-      '<span style="font-weight:bold">配管化</span><span id="swpInfo" style="opacity:.72"></span>' +
+      '<span style="font-weight:bold">スイープ</span><span id="swpInfo" style="opacity:.72"></span>' +
       `<select id="swpSize" title="呼び径" style="${sel}"></select>` +
       `<select id="swpSch" title="スケジュール" style="${sel}"></select>` +
       `<button id="swpGo" style="${btn};background:#2f6fd8;color:#fff">実行</button>` +
@@ -7453,12 +7479,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (sweepMode) { endSweepMode(); return; }             // もう一度押す＝取消
     if (pendingCmd === 'sweep') { setPendingCmd(null); return; }   // 待ち受け中にもう一度押す＝取消
     const seed = [...selAnns].filter(r => r.type === 'line' && !r.hidden);
-    if (!seed.length) { setPendingCmd('sweep', '配管化：ルートの線分をタップで選んでください（1本選べば、つながった線分を自動でたどります）'); return; }
+    if (!seed.length) { setPendingCmd('sweep', 'スイープ：ルートの線分をタップで選んでください（1本選べば、つながった線分を自動でたどります）'); return; }
     setPendingCmd(null);
     if (typeof clearOtherCommands === 'function') clearOtherCommands('sweep');   // 他のコマンドは解除
     const tr = sweepTrace(seed);
     if (tr.err) { if (window.__toast) window.__toast(tr.err); return; }
-    if (tr.pts.length < 2) { if (window.__toast) window.__toast('配管化：ルートの長さがありません'); return; }
+    if (tr.pts.length < 2) { if (window.__toast) window.__toast('スイープ：ルートの長さがありません'); return; }
     sweepMode = { pts: tr.pts, lineCount: tr.count };
     // たどったルート全体を選択表示＝どこまで配管化されるかが青く見える（2026-07-29 社長要望）。
     // selectLineは冒頭でselectPart(null)＝選択クリアが走るため、1本目だけ通して残りは直接足す
@@ -7470,7 +7496,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     syncCmdLights();
     showSweepBox();
-    if (window.__toast) window.__toast('配管化：呼び径とSchを確認して「実行」を押してください');
+    if (window.__toast) window.__toast('スイープ：呼び径とSchを確認して「実行」を押してください');
   }
   window.addEventListener('keydown', e => {
     if (!sweepMode) return;
