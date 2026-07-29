@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-N';
+const APP_VER = 'v0729-O';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4213,6 +4213,16 @@ function hideInsDist() {
 // 軸方向の位置は挿入と同じ芯線判定、半径方向はカーソルが指している側。溶接端(-Y)を管表面へ
 //（見た目の隙間が出ないよう1mmだけ沈める）。距離ボックスの数値入力（Enter）にも対応。
 function isBossTool(o) { return !!(o && o.userData.partType === 'sw' && (o.userData.sw || {}).kind === 'BOSS'); }
+// ボスの姿勢＝枝（ローカル+Y）を半径方向へ・ローカルZを管軸に揃える＝ひねりが出ない「通常の角度」
+//（setFromUnitVectorsだけだとひねりが不定で、特殊な角度に見える。2026-07-29 社長報告）
+function bossQuat(radial, axisDir) {
+  const y = radial.clone().normalize();
+  let z = axisDir.clone().addScaledVector(y, -axisDir.dot(y));
+  if (z.lengthSq() < 1e-10) z = new THREE.Vector3(0, 0, 1).addScaledVector(y, -y.z);
+  z.normalize();
+  const x = y.clone().cross(z);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+}
 function bossFitAt(clientX, clientY) {
   const hit = pipeAxisTargetAt(clientX, clientY, 26);   // ボスは太い管の胴の上で離すので少し広め
   if (!hit) return null;
@@ -4236,8 +4246,8 @@ function bossFitAt(clientX, clientY) {
   const surfW = axisW.clone().addScaledVector(radialW, Math.max(outR - 0.001, 0));
   const surf = modelGroup.worldToLocal(surfW.clone());
   const radial = modelGroup.worldToLocal(surfW.clone().addScaledVector(radialW, 0.1)).sub(surf).normalize();
-  return { pipe: p, tMm: hit.tMm, surf, radial,
-           quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), radial) };
+  const axisL = modelGroup.worldToLocal(surfW.clone().addScaledVector(dW, 0.1)).sub(surf).normalize();
+  return { pipe: p, tMm: hit.tMm, surf, radial, quat: bossQuat(radial, axisL) };
 }
 // スナップ済みの配置点P（＝プレビューの起点位置）を基準に、その真横のパイプ外面へ合わせる。
 // 中点・機点などへスナップして置いた時、その点の軸方向位置がそのまま使われる（2026-07-29 社長報告）。
@@ -4263,8 +4273,7 @@ function bossFitAtPoint(P, clientX, clientY) {
   radial.normalize();
   const outR = (FLG_BORE[best.pipe.userData.pipe.sizeA] || 60) / 2000;
   const surf = best.axisPt.clone().addScaledVector(radial, Math.max(outR - 0.001, 0));
-  return { pipe: best.pipe, tMm: best.tMm, surf, radial,
-           quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), radial) };
+  return { pipe: best.pipe, tMm: best.tMm, surf, radial, quat: bossQuat(radial, best.d) };
 }
 // ボスが乗っている親パイプ（基部が外周面上にあるパイプ）＝回転の基準に使う
 function bossHostPipe(part) {
@@ -4851,6 +4860,14 @@ function stepPartRotate(part, mode) {
     const h = bossHostPipe(part);
     if (h) { rotatePipeAround(part, h.axisPt, new THREE.Quaternion().setFromAxisAngle(h.dir, Math.PI / 4)); return; }
   }
+  // ボスの「方位角」＝基部（溶接点）を支点に、自身の枝軸まわりで頭の向きを45°回す
+  //（従来は起点（頭側）支点の世界Y回転で、基部が管から外れて暴れていた。2026-07-29 社長報告）
+  if (mode === 'az' && typeof isBossTool === 'function' && isBossTool(part) && part.userData.backLocal) {
+    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();
+    const pivot = connModelPos(part, part.userData.backLocal);
+    rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, -Math.PI / 4));
+    return;
+  }
   const { pivot } = partRotPivotDir(part);
   let axis, ang = Math.PI / 4;
   if (mode === 'az') {
@@ -4887,6 +4904,12 @@ function pipeRotateSpinStart(mode) {
       _pipeSpin = { part, pivot: h.axisPt.clone(), axis: h.dir.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
       return true;
     }
+  }
+  // ボスの方位角スピナー＝基部支点・自身の枝軸まわり（頭の向きを連続で回す）
+  if (mode === 'az' && typeof isBossTool === 'function' && isBossTool(part) && part.userData.backLocal) {
+    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize().negate();
+    _pipeSpin = { part, pivot: connModelPos(part, part.userData.backLocal), axis, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
+    return true;
   }
   const { pivot } = partRotPivotDir(part);
   const n360 = v => ((v % 360) + 360) % 360;
