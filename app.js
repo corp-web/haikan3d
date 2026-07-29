@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-F';
+const APP_VER = 'v0729-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -784,13 +784,16 @@ const FITTING_SCHEDULES = [...SCHEDULES, 'FSGP'];
 // ===== 配管化③：溶接の控え・ルートギャップ（切寸計算用）2026-07-29 社長要望 =====
 // SOP控え＝差し込んだ管の先端をフランジのフェイス面から何mm控えるか（内側の溶接しろ）。
 // ルートギャップ＝BW突合せの開先の隙間。どちらも呼び径×Schで設定できる（⚙設定→溶接・切寸の設定）。
-// 既定値＝肉厚から：SOP控え＝肉厚+3mm／ルートギャップ＝肉厚<4→2.5・<8→3.0・以上→4.0（0.1mm丸め）。
+// 既定値（2026-07-29 社長の流儀）：
+//   SOP控え＝肉厚×√2（45°分＝1.414）＋3mm（0.1mm丸め）。例：25A SGP 肉厚3.2→7.5mm
+//   ルートギャップ＝肉厚<4→2.5・<8→3.0・以上→4.0（表で自由に変更可）
+// 切寸でのBW控除は「ギャップの半分」（例：3mm→1.5mm引く）。ギャップ0mmは縮み代として+0.5mm。
 // 設定した値は localStorage p3d_weld_tbl（既定と違う分だけ）に記憶する。
 let weldTbl = {};
 try { weldTbl = JSON.parse(localStorage.getItem('p3d_weld_tbl') || '{}') || {}; } catch (e) { weldTbl = {}; }
 function weldDefaults(sizeA, sch) {
   const t = pipeWall(sizeA, sch);
-  return { sop: Math.round((t + 3) * 10) / 10, gap: t < 4 ? 2.5 : (t < 8 ? 3 : 4) };
+  return { sop: Math.round((t * Math.SQRT2 + 3) * 10) / 10, gap: t < 4 ? 2.5 : (t < 8 ? 3 : 4) };
 }
 function weldValsOf(sizeA, sch) {
   const d = weldDefaults(sizeA, sch), o = weldTbl[sizeA + '|' + sch] || {};
@@ -3942,6 +3945,7 @@ function stopFollow() {
   followTool = null;
   followParked = null;
   clearMarkers();
+  hideInsDist();
   if (window.__syncTouchOrbit) window.__syncTouchOrbit();   // 配置終了＝1本指の視点回転を元に戻す
 }
 // プレビューを「起点が指す点」に置く＋向き適用＋機点スナップ
@@ -3949,15 +3953,16 @@ function updateFollowPreview(clientX, clientY) {
   if (!followPreview) return;
   const rect = renderer.domElement.getBoundingClientRect();
   if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
-    followPreview.visible = false; clearMarkers(); return;
+    followPreview.visible = false; clearMarkers(); hideInsDist(); return;
   }
   followPreview.visible = true;
-  if (isFreeRotPart(followPreview) && followQuat) followPreview.quaternion.copy(followQuat);   // 線分式で回した向きを毎フレーム維持
+  // 3軸ボタンで回した向きは全部品で毎フレーム維持する（旧：パイプ系だけ維持でフランジ等は既定向きへ
+  // 巻き戻されて「回転が効かない」ように見えた。2026-07-29 社長報告の一因）
+  if (followQuat) followPreview.quaternion.copy(followQuat);
   else orientRotation(followPreview, followOrient, followRoll);
-  // 配管化②：挿入系アイテムをパイプ芯線に近づけたら、パイプに沿う姿勢でプレビュー（挿入の予告）。
-  // ただし機点（面・背面など）への吸着が効く位置では従来の突き合わせ配置を優先する（noNear=真の機点だけ見る）
-  if (INSERTABLE_TYPES[followPreview.userData.partType] && insertAxialOk(followPreview) && !resolveSnap(clientX, clientY, null, true)) {
-    const insT = pipeAxisTargetAt(clientX, clientY);
+  // 配管化②：挿入系アイテム＝吸着点（中点・交点など）が芯線上ならその点へ、無ければ画面距離で挿入予告
+  if (INSERTABLE_TYPES[followPreview.userData.partType] && insertAxialOk(followPreview)) {
+    const insT = insertTargetAt(clientX, clientY);
     if (insT) {
       const back = connModelPos(insT.pipe, insT.pipe.userData.backLocal);
       const face = connModelPos(insT.pipe, insT.pipe.userData.faceLocal);
@@ -3967,13 +3972,21 @@ function updateFollowPreview(clientX, clientY) {
       const mid = followPreview.userData.faceLocal.clone().add(followPreview.userData.backLocal)
         .multiplyScalar(0.5).applyQuaternion(followPreview.quaternion);
       followPreview.position.copy(pt).sub(mid);   // 軸方向の中央を芯線上の点へ
+      showInsDist(clientX, clientY, insT);        // 両端（曲がり・分岐）までの距離を表示
       showInteractionMarkers(followPreview, pt);
       return;
     }
   }
+  hideInsDist();
   // 最初の部品も線分と同じく、カーソル位置（スナップ無ければ床面投影）へ自由配置
   const tgt = resolveTarget(clientX, clientY, null);
   if (!tgt) return;
+  // 相手の機点へ吸着した時は相手の向きへ自動で合わせる（2026-07-29 社長要望。
+  // 手動で回した後（followQuat あり）は本人の向きを尊重する）
+  if (tgt.snapped && !followQuat && MATE_TYPES[followPreview.userData.partType]) {
+    const mq = mateQuatAt(tgt.point);
+    if (mq) followPreview.quaternion.copy(mq);
+  }
   setPartByOrigin(followPreview, tgt.point);
   showInteractionMarkers(followPreview, tgt.snapped ? tgt.point : null);
 }
@@ -4040,6 +4053,101 @@ function pipeAxisTargetAt(clientX, clientY) {
   }
   return best;
 }
+// モデル座標の点がパイプ芯線の途中（半径1mm以内・端1mm除く）に乗っていれば挿入先とする。
+// 中点・交点などの吸着点で「きちっとした位置」へ挿入するための判定（2026-07-29 社長要望）。
+function pipeAxisHitAtPoint(pt) {
+  for (const p of placedParts) {
+    if (p.userData.partType !== 'pipe' || p.userData.hidden || !p.userData.faceLocal) continue;
+    const a = connModelPos(p, p.userData.backLocal), b = connModelPos(p, p.userData.faceLocal);
+    const ab = b.clone().sub(a), L = ab.length();
+    if (L < 1e-6) continue;
+    const d = ab.multiplyScalar(1 / L);
+    const t = pt.clone().sub(a).dot(d);
+    const radial = pt.clone().sub(a).sub(d.clone().multiplyScalar(t)).length();
+    if (radial > 0.001) continue;
+    const tMm = t * 1000, Lmm = p.userData.pipe.length;
+    if (tMm < INSERT_END_MARGIN || tMm > Lmm - INSERT_END_MARGIN) continue;   // 端＝従来の突き合わせに譲る
+    return { pipe: p, tMm };
+  }
+  return null;
+}
+// 部品の「機点」（面・背面・工作点・ボルト穴）だけの近接判定。四半円点は含めない。
+// ＝接続の意図がある点の上でだけ挿入を抑止し、パイプ胴の四半円点（作図用の赤マーク）の上では
+//   挿入を邪魔しない（「起点に来ると既定向きで置かれる」不具合の真因。2026-07-29 社長報告）
+function connSnapAt(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+  for (const p of placedParts) {
+    if (!p.userData.faceLocal || p.userData.hidden) continue;
+    for (const local of connsOf(p)) {
+      const ndc = modelGroup.localToWorld(connModelPos(p, local).clone()).project(cam);
+      if (ndc.z >= 1) continue;
+      const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
+      const sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+      if (Math.hypot(sx - clientX, sy - clientY) <= SNAP_PX) return true;
+    }
+  }
+  return false;
+}
+// 挿入先の決定（2026-07-29 社長報告への対策）：
+// ・部品の機点へ吸着＝従来の突き合わせ配置（mateQuatAtで向きも相手に合う）＝挿入しない。
+//   ※同軸に並ぶフランジ組の機点はパイプ軸線上に乗るため、ここで挿入すると誤爆する。
+// ・線分（芯線）の端点・中点・交点へ吸着＝その正確な位置へ挿入（「中点へきちっと」ができる）。
+// ・どちらも無ければ画面距離で芯線を探す（従来の接近挿入）。
+function insertTargetAt(clientX, clientY) {
+  if (connSnapAt(clientX, clientY)) return null;   // 機点吸着＝突き合わせ・向き合わせを優先
+  let byPt = null;
+  if (window.__annSnapPoints) {
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    let best = null, bestD = SNAP_PX;
+    for (const pt of window.__annSnapPoints()) {
+      const ndc = modelGroup.localToWorld(pt.clone()).project(cam);
+      if (ndc.z >= 1) continue;
+      const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width;
+      const sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+      const d = Math.hypot(sx - clientX, sy - clientY);
+      if (d < bestD) { bestD = d; best = pt; }
+    }
+    if (best) byPt = pipeAxisHitAtPoint(best);
+  }
+  return byPt || pipeAxisTargetAt(clientX, clientY);
+}
+// ---- 吸着した相手の向きへ合わせる（2026-07-29 社長要望：フランジ等を相手のフランジへ置く時、毎回回さなくて済むように）----
+const MATE_TYPES = { flange: 1, gasket: 1, valve: 1, flex: 1, sight: 1, cap: 1 };
+function mateQuatAt(pt) {
+  for (const q of placedParts) {
+    if (q.userData.hidden || !q.userData.faceLocal) continue;
+    for (const l of connsOf(q)) {
+      if (connModelPos(q, l).distanceTo(pt) > 1e-6) continue;
+      const n = connNormalOf(q, l);
+      if (!n || n.lengthSq() < 1e-9) return null;
+      const u = q.userData, tp = u.partType;
+      // フェイス面（フランジの表・ガスケット・フランジ形機器の両端）＝面と面を向かい合わせ（−n）。
+      // 溶接端（パイプ・エルボ等）やフランジの背面＝こちらの背を相手へ向ける（+n）。
+      const faceMate = (tp === 'gasket') || (tp === 'flange' && l === u.faceLocal) ||
+                       (isFlangedBody(u) && (l === u.faceLocal || l === u.backLocal));
+      const dirN = faceMate ? n.clone().negate() : n.clone();
+      return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirN.normalize());
+    }
+  }
+  return null;
+}
+// ---- 挿入位置から両端（曲がり・分岐）までの距離表示（2026-07-29 社長要望）----
+let _insDistBox = null;
+function showInsDist(cx, cy, hit) {
+  if (!_insDistBox) {
+    _insDistBox = document.createElement('div');
+    _insDistBox.id = 'insDistBox';
+    _insDistBox.style.cssText = 'position:fixed;z-index:95;pointer-events:none;padding:3px 8px;font:12px Meiryo,sans-serif;' +
+      'color:#1d2c4f;background:rgba(248,250,253,.95);border:1px solid #7fa8e8;border-radius:6px;white-space:nowrap;display:none;box-shadow:0 2px 8px rgba(20,40,80,.18)';
+    document.body.appendChild(_insDistBox);
+  }
+  const L = hit.pipe.userData.pipe.length;
+  _insDistBox.textContent = `←${Math.round(hit.tMm)}mm ｜ ${Math.round(L - hit.tMm)}mm→`;
+  _insDistBox.style.left = Math.round(cx + 18) + 'px';
+  _insDistBox.style.top = Math.round(cy - 36) + 'px';
+  _insDistBox.style.display = 'block';
+}
+function hideInsDist() { if (_insDistBox) _insDistBox.style.display = 'none'; }
 // 挿入する部品列（軸方向の並び）を組む。{train:[{obj,flip}], span(mm), dsSize(下流の径|null)}
 function buildInsertTrain(obj, pipe) {
   const u = obj.userData, pu = pipe.userData.pipe;
@@ -4121,8 +4229,10 @@ function insertItemIntoPipe(obj, hit) {
 }
 
 // ===== 配管化③：パイプ切寸（現場でそのまま切れる長さ）=====
-// 各端の接続先を機点の一致（1.5mm）で判定し、切寸＝図面長さ−BWギャップ＋差込み深さ を計算する。
-//  ・BW（エルボ・ティー・レジューサー・キャップ・他のパイプ・WNフランジの首）＝ルートギャップぶん短く
+// 各端の接続先を機点の一致（1.5mm）で判定し、切寸＝図面長さ−BWギャップ÷2＋差込み深さ を計算する。
+//  ・BW（エルボ・ティー・レジューサー・キャップ・他のパイプ・WNフランジの首）＝ルートギャップの半分を引く。
+//    ギャップ0mmの時は縮み代として+0.5mm（2026-07-29 社長の流儀。例：25A SGP 面→芯100・ギャップ3mm
+//    ＝100−7.5−38.1−1.5＝52.9→53mm）
 //  ・SOP/LJフランジの背面＝差し込み（フランジ全高−フェイスからの控え）ぶん長く
 //  ・SW（差込み溶接継手・SWフランジ・SW形バルブ）＝ソケット深さ−浮かし1.6mmぶん長く（JIS B2316の流儀）
 //  ・どこにも繋がっていない端・ガスケット面など＝そのまま
@@ -4172,7 +4282,7 @@ function pipeCutInfo(pipe) {
   const w = weldValsOf(o.sizeA, o.sch);
   let cut = o.length;
   for (const e of ends) {
-    if (e.kind === 'BW') cut -= w.gap;
+    if (e.kind === 'BW') cut += (w.gap > 0 ? -w.gap / 2 : 0.5);   // ギャップの半分を引く／0mmは縮み代+0.5
     else if (e.kind === 'SOP' || e.kind === 'SW') cut += e.depth;
   }
   return { ends, cut: Math.round(cut * 10) / 10, gap: w.gap, sop: w.sop };
@@ -4194,10 +4304,11 @@ function placeToolAt(tool, clientX, clientY) {
   const obj = tool.build();
   computeConns(obj);
   // ▼配管化②：パイプの芯線上に置いたら「挿入」＝パイプを分割して割り込ませ、長さを自動調整。
-  // 機点への吸着が効く位置では従来の突き合わせ配置を優先（プレビューと同じ判定）
-  if (INSERTABLE_TYPES[obj.userData.partType] && insertAxialOk(obj) && !resolveSnap(clientX, clientY, null, true)) {
-    const hit = pipeAxisTargetAt(clientX, clientY);
+  // 吸着点（中点・交点など）が芯線上ならその正確な位置へ。パイプ端の吸着＝従来の突き合わせ（プレビューと同じ判定）
+  if (INSERTABLE_TYPES[obj.userData.partType] && insertAxialOk(obj)) {
+    const hit = insertTargetAt(clientX, clientY);
     if (hit) {
+      hideInsDist();
       if (insertItemIntoPipe(obj, hit)) { refreshItemList(); return obj; }
       obj.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
       return null;   // 入らない＝置かずに配置モードを継続（理由はトースト済み）
@@ -8166,7 +8277,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                     : e.kind === 'SW' ? `SW差込${e.depth != null ? Math.round(e.depth * 10) / 10 : ''}`
                     : e.kind === 'none' ? '突き当て' : '—';
       lines.push('');
-      lines.push(esc('パイプ切寸表（切寸＝図面長さ−BWルートギャップ＋差込み深さ。⚙設定→溶接・切寸の設定で調整可）'));
+      lines.push(esc('パイプ切寸表（切寸＝図面長さ−BWルートギャップ÷2＋差込み深さ。ギャップ0は+0.5。⚙設定→溶接・切寸の設定で調整可）'));
       lines.push(['#', '呼び径', 'Sch', '図面長さ(mm)', '端A', '端B', '切寸(mm)', 'ギャップ(mm)', 'SOP控え(mm)'].join(','));
       pipes.forEach((p, i) => {
         const c = pipeCutInfo(p);
@@ -12470,7 +12581,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
             '<select id="weldSch" style="background:#fff;border:1px solid #c4ccda;border-radius:5px;padding:2px 4px"></select>' +
             '<span style="flex:1"></span><button id="weldReset" style="border:none;border-radius:6px;padding:3px 8px;background:#e2e7f0;cursor:pointer;font:inherit">このSchを既定に戻す</button>' +
             '<button id="weldClose" style="border:none;border-radius:6px;padding:3px 10px;background:#2f6fd8;color:#fff;cursor:pointer;font:inherit">閉じる</button></div>' +
-            '<div style="opacity:.75">切寸＝図面長さ−BWギャップ＋差込み深さ。SOP控え＝管先端をフェイス面から控える量。既定＝肉厚から自動（変えた値だけ記憶・青太字）</div>' +
+            '<div style="opacity:.75">切寸＝図面長さ−BWギャップ÷2＋差込み深さ（ギャップ0は+0.5）。SOP控え＝フェイス面からの控え（既定＝肉厚×1.414+3）。変えた値だけ記憶・青太字</div>' +
             '<div style="overflow:auto"><table id="weldTblUI" style="border-collapse:collapse;width:100%"></table></div>';
           document.body.appendChild(dlg);
           schSel = dlg.querySelector('#weldSch');
