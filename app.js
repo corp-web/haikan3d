@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-L';
+const APP_VER = 'v0729-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3962,17 +3962,7 @@ function updateFollowPreview(clientX, clientY) {
   // 巻き戻されて「回転が効かない」ように見えた。2026-07-29 社長報告の一因）
   if (followQuat) followPreview.quaternion.copy(followQuat);
   else orientRotation(followPreview, followOrient, followRoll);
-  // ボス＝パイプ芯線の近くなら外径面へ吸い付くプレビュー（2026-07-29 社長要望）
-  if (isBossTool(followPreview)) {
-    const bf = bossFitAt(clientX, clientY);
-    if (bf) {
-      followPreview.quaternion.copy(bf.quat);
-      followPreview.position.copy(bf.surf).sub(followPreview.userData.backLocal.clone().applyQuaternion(bf.quat));
-      showInsDist(clientX, clientY, bf);
-      showInteractionMarkers(followPreview, bf.surf);
-      return;
-    }
-  }
+  // ボスのプレビューは従来どおりの通常スナップ（外面への移動は「置いた後」に行う。2026-07-29 社長指示）
   // 配管化②：挿入系アイテム＝吸着点（中点・交点など）が芯線上ならその点へ、無ければ画面距離で挿入予告
   if (INSERTABLE_TYPES[followPreview.userData.partType] && insertAxialOk(followPreview)) {
     const insT = insertTargetAt(clientX, clientY);
@@ -4046,7 +4036,8 @@ function insertAxialOk(obj) {
   return !!(fl && bl && Math.hypot(fl.x - bl.x, fl.z - bl.z) < 0.0005);
 }
 // カーソル近傍のパイプ芯線上の点を探す。{pipe, tMm(背面端からの距離mm)} か null。
-function pipeAxisTargetAt(clientX, clientY) {
+function pipeAxisTargetAt(clientX, clientY, maxPx) {
+  const limitPx = maxPx || INSERT_SNAP_PX;
   const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
   const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, cam);
@@ -4069,7 +4060,7 @@ function pipeAxisTargetAt(clientX, clientY) {
     const sx = rect.left + (scr.x * 0.5 + 0.5) * rect.width;
     const sy = rect.top + (-scr.y * 0.5 + 0.5) * rect.height;
     const px = Math.hypot(sx - clientX, sy - clientY);
-    if (px > INSERT_SNAP_PX) continue;
+    if (px > limitPx) continue;
     if (!best || px < best.px) best = { pipe: p, tMm: t * 1000, px };
   }
   if (best) {
@@ -4223,7 +4214,7 @@ function hideInsDist() {
 //（見た目の隙間が出ないよう1mmだけ沈める）。距離ボックスの数値入力（Enter）にも対応。
 function isBossTool(o) { return !!(o && o.userData.partType === 'sw' && (o.userData.sw || {}).kind === 'BOSS'); }
 function bossFitAt(clientX, clientY) {
-  const hit = pipeAxisTargetAt(clientX, clientY);
+  const hit = pipeAxisTargetAt(clientX, clientY, 26);   // ボスは太い管の胴の上で離すので少し広め
   if (!hit) return null;
   const p = hit.pipe;
   const aW = modelGroup.localToWorld(connModelPos(p, p.userData.backLocal).clone());
@@ -4240,16 +4231,7 @@ function bossFitAt(clientX, clientY) {
     radialW = new THREE.Vector3(0, 1, 0).addScaledVector(dW, -dW.y);
     if (radialW.lengthSq() < 1e-10) radialW.set(1, 0, 0);
   }
-  radialW.normalize();
-  // 管まわり45°刻みへスナップ（真上・斜め45°・真横…がきれいに決まる。カメラの傾きに引っ張られない）
-  {
-    let e1 = new THREE.Vector3(0, 1, 0).addScaledVector(dW, -dW.y);
-    if (e1.lengthSq() < 1e-10) e1 = new THREE.Vector3(1, 0, 0).addScaledVector(dW, -dW.x);
-    e1.normalize();
-    const e2 = dW.clone().cross(e1).normalize();
-    const ang = Math.round(Math.atan2(radialW.dot(e2), radialW.dot(e1)) / (Math.PI / 4)) * (Math.PI / 4);
-    radialW = e1.clone().multiplyScalar(Math.cos(ang)).addScaledVector(e2, Math.sin(ang)).normalize();
-  }
+  radialW.normalize();   // 45°刻みへのスナップは廃止＝カーソルで指した側そのまま（2026-07-29 社長指示）
   const outR = (FLG_BORE[p.userData.pipe.sizeA] || 60) / 2000;
   const surfW = axisW.clone().addScaledVector(radialW, Math.max(outR - 0.001, 0));
   const surf = modelGroup.worldToLocal(surfW.clone());
@@ -4545,6 +4527,15 @@ function placeToolAt(tool, clientX, clientY) {
   }
   obj.quaternion.copy(followPreview.quaternion);
   obj.position.copy(followPreview.position);
+  // ボス＝置いて手を離した瞬間にパイプの外面へ移す（プレビュー中は通常スナップ。2026-07-29 社長指示。
+  // 向きは45°刻みにせず、カーソルで指した側の外周点そのまま）
+  if (isBossTool(obj)) {
+    const bf = bossFitAt(clientX, clientY);
+    if (bf) {
+      obj.quaternion.copy(bf.quat);
+      obj.position.copy(bf.surf).sub(obj.userData.backLocal.clone().applyQuaternion(bf.quat));
+    }
+  }
   obj.userData.placed = true;
   obj.userData.orient = followOrient;
   obj.userData.roll = followRoll;
