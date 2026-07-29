@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-U';
+const APP_VER = 'v0729-V';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -286,11 +286,12 @@ const gizmo = {};
   const botMat = new THREE.LineBasicMaterial({ color: gizPal.line, transparent: true, opacity: 0.4 });
   globe.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(botPts), botMat));
 
-  // ---- 中心の座標（三本の矢）。東=+X赤 / 北=-Z緑 / 上=+Y青 ----
+  // ---- 中心の座標（三本の矢）＝左下の座標軸インジケータと同じ流儀に揃える（2026-07-29 社長指示）
+  //      X=赤(+X) / Y=緑(+Y=上) / Z=青(+Z)。細い線の矢（ArrowHelper）＋X/Y/Zの文字。
   const AXES_DEF = [
-    { name: 'east',  dir: new THREE.Vector3(1, 0, 0),  color: 0xe05252, len: 1.02 },
-    { name: 'north', dir: new THREE.Vector3(0, 0, -1), color: 0x1fa04d, len: 1.02 },
-    { name: 'up',    dir: new THREE.Vector3(0, 1, 0),  color: 0x3b76e0, len: 1.30 },
+    { name: 'x', dir: new THREE.Vector3(1, 0, 0), color: 0xff5a5a },
+    { name: 'y', dir: new THREE.Vector3(0, 1, 0), color: 0x00b23c },
+    { name: 'z', dir: new THREE.Vector3(0, 0, 1), color: 0x5a8aff },
   ];
   function axisDotSprite(colorHex) {   // 軸がこちらを向いて潰れた時のCAD流「⊙」記号
     const s = 64, cv2 = document.createElement('canvas'); cv2.width = cv2.height = s;
@@ -305,27 +306,20 @@ const gizmo = {};
     return sp;
   }
   gizmo.axes = [];
-  const UNIT_Y = new THREE.Vector3(0, 1, 0);
+  const AXIS_L = 1.0;
   AXES_DEF.forEach(a => {
-    const g = new THREE.Group();
-    const mat = new THREE.MeshBasicMaterial({ color: a.color });
-    const shaftLen = a.len - 0.30;
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, shaftLen, 10), mat);
-    shaft.position.y = shaftLen / 2;
-    const head = new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.32, 12), mat);
-    head.position.y = a.len - 0.16;
-    g.add(shaft); g.add(head);
-    g.quaternion.setFromUnitVectors(UNIT_Y, a.dir);
-    g.renderOrder = 3;
-    globe.add(g);
+    const arrow = new THREE.ArrowHelper(a.dir, new THREE.Vector3(0, 0, 0), AXIS_L, a.color, 0.26, 0.16);
+    if (arrow.line) arrow.line.renderOrder = 3;
+    if (arrow.cone) arrow.cone.renderOrder = 3;
+    globe.add(arrow);
     const dot = axisDotSprite(a.color);
     globe.add(dot);
-    gizmo.axes.push({ name: a.name, dir: a.dir.clone(), arrow: g, dot });
+    gizmo.axes.push({ name: a.name, dir: a.dir.clone(), arrow, dot });
   });
-  globe.add(new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10),
+  globe.add(new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10),
     new THREE.MeshBasicMaterial({ color: 0x666e7e })));
 
-  // ---- 方位・上の文字（常にこちらを向くスプライト。タップで視点スナップ） ----
+  // ---- 方位とXYZの文字（常にこちらを向くスプライト。タップで視点スナップ） ----
   function labelTexture(text, colCss, big) {
     const s = 128, cv2 = document.createElement('canvas'); cv2.width = cv2.height = s;
     const c2 = cv2.getContext('2d');
@@ -337,29 +331,33 @@ const gizmo = {};
     return tex;
   }
   const LR = 2.0;   // 方位文字は舞台の角（HALF√2≒1.63）より外＝重ならない
+  const AXL = AXIS_L + 0.30;   // XYZ文字は矢の先（左下のインジケータと同じ流儀）
   const LABEL_DEFS = [
     { t: '北', pos: [0, 0.02, -LR], dir: [0, 0, -1], north: true },
     { t: '南', pos: [0, 0.02, LR],  dir: [0, 0, 1] },
     { t: '東', pos: [LR, 0.02, 0],  dir: [1, 0, 0] },
     { t: '西', pos: [-LR, 0.02, 0], dir: [-1, 0, 0] },
-    { t: '上', pos: [0, 1.72, 0],   dir: [0, 1, 0] },
+    { t: 'X', pos: [AXL, 0.05, 0], dir: [1, 0, 0], axis: 0xff5a5a },
+    { t: 'Y', pos: [0, AXL, 0],    dir: [0, 1, 0], axis: 0x00b23c },
+    { t: 'Z', pos: [0, 0.05, AXL], dir: [0, 0, 1], axis: 0x5a8aff },
   ];
   const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+  const labelColOf = L => L.axis ? ('#' + L.axis.toString(16).padStart(6, '0')) : (L.north ? gizPal.north : gizPal.text);
   gizmo.labels = [];
   gizmo.hitObjs = [plateTop];
   LABEL_DEFS.forEach(L => {
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: labelTexture(L.t, L.north ? gizPal.north : gizPal.text, L.north), transparent: true, depthTest: false }));
-    sp.scale.setScalar(L.north ? 0.92 : 0.82);
+      map: labelTexture(L.t, labelColOf(L), L.north), transparent: true, depthTest: false }));
+    sp.scale.setScalar(L.axis ? 0.52 : (L.north ? 0.92 : 0.82));
     sp.renderOrder = 5;
     sp.position.set(L.pos[0], L.pos[1], L.pos[2]);
     globe.add(sp);
-    const hit = new THREE.Mesh(new THREE.SphereGeometry(0.44, 8, 6), hitMat);
+    const hit = new THREE.Mesh(new THREE.SphereGeometry(L.axis ? 0.32 : 0.44, 8, 6), hitMat);
     hit.position.copy(sp.position);
     hit.userData.snapDir = new THREE.Vector3(L.dir[0], L.dir[1], L.dir[2]);
     globe.add(hit);
     gizmo.hitObjs.push(hit);
-    gizmo.labels.push({ text: L.t, dir: hit.userData.snapDir.clone(), sprite: sp, hit, north: !!L.north });
+    gizmo.labels.push({ text: L.t, dir: hit.userData.snapDir.clone(), sprite: sp, hit, north: !!L.north, axis: L.axis });
   });
   // 舞台の四隅タップ＝その方角の等角視点（キューブの角タップに相当）
   [[1, 1], [1, -1], [-1, 1], [-1, -1]].forEach(([sx, sz]) => {
@@ -400,7 +398,7 @@ const gizmo = {};
     for (const L of gizmo.labels) {
       const m = L.sprite.material;
       if (m.map) m.map.dispose();
-      m.map = labelTexture(L.text, L.north ? gizPal.north : gizPal.text, L.north);
+      m.map = labelTexture(L.text, labelColOf(L), L.north);
       m.needsUpdate = true;
     }
   };
