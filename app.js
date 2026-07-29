@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-A';
+const APP_VER = 'v0730-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3157,6 +3157,7 @@ function clearOtherCommands(keep) {
   if (keep !== 'rotate' && window.__rotateCancel) window.__rotateCancel();
   if (keep !== 'sweep' && window.__sweepCancel) window.__sweepCancel();
   if (keep !== 'detail' && window.__detailFrameEnd) window.__detailFrameEnd();
+  if (keep !== 'trim' && window.__trimEnd) window.__trimEnd();
 }
 let moveMode = false;   // true=「移動」コマンド実行待ち
 // 「移動」コマンドで、動かす前に起点（基準にする機点）をタップで選ぶ段階（2026-07-27 社長要望）。
@@ -6561,6 +6562,7 @@ window.addEventListener('keydown', e => {
     // フォーカスが無く rotAInput のEscハンドラを通らないので、ここで受ける（取消ボタン経由もここ）
     if (nudgeActive()) { endRotSpin(false); return; }
     if (hideArmed) { setHideArmed(false); if (window.__toast) window.__toast('非表示：取り消しました'); return; }   // Esc＝「非表示」コマンド取消
+    if (window.__trimActive && window.__trimActive()) { window.__trimEnd(); if (window.__toast) window.__toast('部分削除：取り消しました'); return; }   // Esc＝「部分削除」取消
     // 「複製・鏡・回転」を押して選択待ちの状態＝取消（進行中の操作より先に受ける）
     if (window.__hasPendingCmd && window.__hasPendingCmd()) { window.__clearPendingCmd(); if (window.__toast) window.__toast('取り消しました'); return; }
     if (pipeEndDrag) cancelPipeEndDrag();
@@ -7013,7 +7015,8 @@ let prevT = performance.now();
     const ctrlFree = touchCtrl || kbCtrl;
     const modal = (window.__detailFrameActive && window.__detailFrameActive())
                || (window.__rotateActive && window.__rotateActive())
-               || (window.__mirrorActive && window.__mirrorActive());   // 枠囲み・回転・鏡の最中は視点固定
+               || (window.__mirrorActive && window.__mirrorActive())
+               || (window.__trimActive && window.__trimActive());   // 枠囲み・回転・鏡・部分削除の最中は視点固定
     const lock = modal || followTool || movingPart || dirDrag || pipeEndDrag
               || ((selectedPart || (selectedParts && selectedParts.size)
                    || (window.__annHasSel && window.__annHasSel())) && !ctrlFree);
@@ -8300,6 +8303,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   window.__serializeForTest = o => serialize(o);      // e2e検証用
   window.__applyDataForTest = d => applyData(d);      // e2e検証用
+  window.__recordHistoryForTest = () => recordHistory();   // e2e検証用（基準スナップショットを積む）
   // ===== アンドゥ／リドゥ（状態スナップショット方式：serialize/applyData を流用） =====
   let _hist = [], _hi = -1, _histSuppress = false, _histTimer = null;
   function _snap() { try { return JSON.stringify(serialize()); } catch (e) { return null; } }
@@ -11345,6 +11349,110 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (rec.type === 'xline' || rec.type === 'line') updateXlinePts();
     if (typeof updateForm === 'function') updateForm();
   };
+  // ===== 線の部分削除（2026-07-30 社長要望） =====
+  // 線分の指定区間だけを消す（構築線・寸法は対象外）。ボタン→1点目→2点目のタップで実行。
+  // 点は起点（端点）と接近点（線上の最寄り点＝視線と線分の3D最接近点）に吸着する。
+  let trimState = null;            // { rec, t1, marker }（nullなら停止中）
+  const TRIM_PICK_PX = 14;         // 線を拾う画面距離
+  const TRIM_END_PX = 14;          // 端点（起点）吸着の画面距離
+  function trimBtnLit(on) { const b = document.getElementById('cmdTrim'); if (b) b.classList.toggle('active', on); }
+  // 画面座標→線分上の点。{rec, t, pt(model)} を返す（対象＝type:'line'・非表示を除く）
+  function trimPickAt(cx, cy) {
+    const cam = activeCam(); cam.updateMatrixWorld();
+    const rect = renderer.domElement.getBoundingClientRect();
+    let best = null;
+    for (const rec of annStore) {
+      if (rec.type !== 'line' || rec.hidden) continue;
+      const wa = modelGroup.localToWorld(rec.a.clone()), wb = modelGroup.localToWorld(rec.b.clone());
+      const na = wa.clone().project(cam), nb = wb.clone().project(cam);
+      if (na.z >= 1 || nb.z >= 1) continue;
+      const A = { x: rect.left + (na.x * 0.5 + 0.5) * rect.width, y: rect.top + (-na.y * 0.5 + 0.5) * rect.height };
+      const B = { x: rect.left + (nb.x * 0.5 + 0.5) * rect.width, y: rect.top + (-nb.y * 0.5 + 0.5) * rect.height };
+      const vx = B.x - A.x, vy = B.y - A.y, L2 = vx * vx + vy * vy;
+      let ts = L2 > 1e-9 ? ((cx - A.x) * vx + (cy - A.y) * vy) / L2 : 0;
+      ts = Math.max(0, Math.min(1, ts));
+      const px = Math.hypot(cx - (A.x + vx * ts), cy - (A.y + vy * ts));
+      if (px > TRIM_PICK_PX || (best && px >= best.px)) continue;
+      let t;
+      if (Math.hypot(cx - A.x, cy - A.y) < TRIM_END_PX) t = 0;          // 起点（端点）吸着
+      else if (Math.hypot(cx - B.x, cy - B.y) < TRIM_END_PX) t = 1;
+      else {                                                             // 接近点＝視線と線分の3D最接近点
+        pickRay.setFromCamera({ x: ((cx - rect.left) / rect.width) * 2 - 1, y: -((cy - rect.top) / rect.height) * 2 + 1 }, cam);
+        const dseg = new THREE.Vector3().subVectors(wb, wa);
+        const w0 = new THREE.Vector3().subVectors(wa, pickRay.ray.origin);
+        const a2 = dseg.dot(dseg), b2 = dseg.dot(pickRay.ray.direction);
+        const d2 = dseg.dot(w0), e2 = pickRay.ray.direction.dot(w0);
+        const den = a2 - b2 * b2;   // c=|ray.direction|²=1
+        t = Math.abs(den) > 1e-12 ? Math.max(0, Math.min(1, (b2 * e2 - d2) / den)) : ts;
+      }
+      best = { rec, t, px };
+    }
+    if (best) best.pt = best.rec.a.clone().lerp(best.rec.b, best.t);
+    return best;
+  }
+  function trimStart() {
+    if (trimState) { trimEnd(); if (window.__toast) window.__toast('部分削除：取り消しました'); return; }
+    clearOtherCommands('trim');
+    if (typeof selectPart === 'function') selectPart(null);
+    window.__annClearSel();
+    trimState = { rec: null, t1: null, marker: null };
+    trimBtnLit(true);
+    if (window.__toast) window.__toast('部分削除：消したい区間の1点目をタップ（線の端・線上の点に吸着。構築線は対象外）');
+  }
+  function trimEnd() {
+    if (trimState && trimState.marker) { annGroup.remove(trimState.marker); disposeObj(trimState.marker); }
+    trimState = null;
+    trimBtnLit(false);
+  }
+  function trimTapAt(cx, cy) {
+    const hit = trimPickAt(cx, cy);
+    if (!hit) { if (window.__toast) window.__toast('線分が見つかりません（構築線・寸法は対象外）'); return; }
+    if (!trimState.rec) {
+      trimState.rec = hit.rec; trimState.t1 = hit.t;
+      const world = modelGroup.localToWorld(hit.pt.clone());
+      const r = Math.max(activeCam().position.distanceTo(world) * 0.008, 0.002);
+      const mk = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8),
+        new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.9, depthTest: false }));
+      mk.scale.setScalar(r); mk.position.copy(hit.pt); mk.renderOrder = 9;
+      annGroup.add(mk); trimState.marker = mk;
+      if (window.__toast) window.__toast('部分削除：消す区間の2点目をタップ（同じ線の上）');
+      return;
+    }
+    if (hit.rec !== trimState.rec) { if (window.__toast) window.__toast('2点目は同じ線の上をタップしてください'); return; }
+    execTrim(trimState.rec, trimState.t1, hit.t);
+  }
+  function execTrim(rec, ta, tb) {
+    const lo = Math.min(ta, tb), hi = Math.max(ta, tb);
+    if (hi - lo < 1e-4) { if (window.__toast) window.__toast('2点が同じ場所です（別の点をタップしてください）'); return; }
+    const a0 = rec.a.clone(), b0 = rec.b.clone(), st = rec.style, gid = rec.groupId;
+    window.__annDeleteRec(rec);
+    const EPS = 1e-4;
+    const mk2 = (p, q) => { addAnnotation('line', p, q, st); const nr = annStore[annStore.length - 1]; if (gid != null) nr.groupId = gid; };
+    if (lo > EPS) mk2(a0.clone(), a0.clone().lerp(b0, lo));
+    if (hi < 1 - EPS) mk2(a0.clone().lerp(b0, hi), b0.clone());
+    trimEnd();
+    recordHistory();
+    if (window.__toast) window.__toast(lo <= EPS && hi >= 1 - EPS ? '線を削除しました' : '線を部分削除しました');
+  }
+  // タップの横取り（詳細図の枠モードと同じ流儀：モード中だけ window capture で受ける）
+  let _trimDown = null;
+  window.addEventListener('pointerdown', e => {
+    if (!trimState || e.button !== 0 || e.target !== renderer.domElement) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    _trimDown = { x: e.clientX, y: e.clientY };
+  }, true);
+  window.addEventListener('pointerup', e => {
+    if (!trimState || !_trimDown) return;
+    const d0 = _trimDown; _trimDown = null;
+    e.stopImmediatePropagation(); e.preventDefault();
+    if (Math.hypot(e.clientX - d0.x, e.clientY - d0.y) > 8) return;   // ドラッグは無視（タップのみ）
+    trimTapAt(e.clientX, e.clientY);
+  }, true);
+  window.__trimActive = () => !!trimState;
+  window.__trimEnd = () => { if (trimState) trimEnd(); };
+  window.__trimStart = () => trimStart();
+  { const b = document.getElementById('cmdTrim'); if (b) b.onclick = () => trimStart(); }
+
   // 部品選択時などの線選択全解除。lineSel も必ず消す（残っているとパイプ端クリックを
   // 寸法線の起点掴みが横取りする等の事故源になる・2026-06-13 修正）
   window.__annClearSel = () => {
@@ -11410,6 +11518,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   // 線分をプログラムから追加（配管化などのe2e検証用。a/b=[x,y,z]・単位m）
   window.__annAddLine = (a, b) => { addAnnotation('line', new V3(a[0], a[1], a[2]), new V3(b[0], b[1], b[2]), null); return annStore.length - 1; };
+  window.__annStoreForTest = () => annStore;   // e2e検証用
   // ---- プロパティパネル用（単一選択の注釈の値の取得・適用。2026-07-18 社長要望） ----
   window.__annPropsGet = () => {
     if (selAnns.size !== 1 || !lineSel) return null;
