@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-M';
+const APP_VER = 'v0729-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4239,6 +4239,52 @@ function bossFitAt(clientX, clientY) {
   return { pipe: p, tMm: hit.tMm, surf, radial,
            quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), radial) };
 }
+// スナップ済みの配置点P（＝プレビューの起点位置）を基準に、その真横のパイプ外面へ合わせる。
+// 中点・機点などへスナップして置いた時、その点の軸方向位置がそのまま使われる（2026-07-29 社長報告）。
+// Pが芯線上（半径方向が決まらない）や近くにパイプが無い時は、従来のカーソル基準へフォールバック。
+function bossFitAtPoint(P, clientX, clientY) {
+  let best = null;
+  for (const p of placedParts) {
+    if (p.userData.partType !== 'pipe' || p.userData.hidden || !p.userData.faceLocal) continue;
+    const a = connModelPos(p, p.userData.backLocal), b = connModelPos(p, p.userData.faceLocal);
+    const ab = b.clone().sub(a), L = ab.length();
+    if (L < 1e-6) continue;
+    const d = ab.multiplyScalar(1 / L);
+    let t = P.clone().sub(a).dot(d);
+    t = Math.min(Math.max(t, INSERT_END_MARGIN / 1000), L - INSERT_END_MARGIN / 1000);
+    const axisPt = a.clone().addScaledVector(d, t);
+    const rd = P.distanceTo(axisPt);
+    if (rd > 0.25) continue;                                 // 250mmより遠い＝そのパイプ狙いではない
+    if (!best || rd < best.rd) best = { pipe: p, d, axisPt, rd, tMm: t * 1000 };
+  }
+  if (!best) return bossFitAt(clientX, clientY);
+  let radial = P.clone().sub(best.axisPt);
+  if (radial.lengthSq() < 1e-10) return bossFitAt(clientX, clientY);   // 芯線上へスナップ＝側はカーソルで決める
+  radial.normalize();
+  const outR = (FLG_BORE[best.pipe.userData.pipe.sizeA] || 60) / 2000;
+  const surf = best.axisPt.clone().addScaledVector(radial, Math.max(outR - 0.001, 0));
+  return { pipe: best.pipe, tMm: best.tMm, surf, radial,
+           quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), radial) };
+}
+// ボスが乗っている親パイプ（基部が外周面上にあるパイプ）＝回転の基準に使う
+function bossHostPipe(part) {
+  if (!isBossTool(part) || !part.userData.backLocal) return null;
+  const base = connModelPos(part, part.userData.backLocal);
+  for (const p of placedParts) {
+    if (p.userData.partType !== 'pipe' || p.userData.hidden || !p.userData.faceLocal) continue;
+    const a = connModelPos(p, p.userData.backLocal), b = connModelPos(p, p.userData.faceLocal);
+    const ab = b.clone().sub(a), L = ab.length();
+    if (L < 1e-6) continue;
+    const d = ab.multiplyScalar(1 / L);
+    const t = base.clone().sub(a).dot(d);
+    if (t < -0.001 || t > L + 0.001) continue;
+    const axisPt = a.clone().addScaledVector(d, t);
+    const outR = (FLG_BORE[p.userData.pipe.sizeA] || 60) / 2000;
+    if (Math.abs(base.distanceTo(axisPt) - (outR - 0.001)) > 0.005) continue;   // 外周面（±5mm）に乗っているか
+    return { pipe: p, axisPt, dir: d };
+  }
+  return null;
+}
 function bossPlaceAt(obj, pipe, tMm, radial, quat) {
   const a = connModelPos(pipe, pipe.userData.backLocal), b = connModelPos(pipe, pipe.userData.faceLocal);
   const d = b.clone().sub(a).normalize();
@@ -4527,10 +4573,10 @@ function placeToolAt(tool, clientX, clientY) {
   }
   obj.quaternion.copy(followPreview.quaternion);
   obj.position.copy(followPreview.position);
-  // ボス＝置いて手を離した瞬間にパイプの外面へ移す（プレビュー中は通常スナップ。2026-07-29 社長指示。
-  // 向きは45°刻みにせず、カーソルで指した側の外周点そのまま）
+  // ボス＝置いて手を離した瞬間にパイプの外面へ移す（プレビュー中は通常スナップ。2026-07-29 社長指示）。
+  // 基準は「スナップ済みの配置点」＝中点・機点へ吸着して置けばその軸位置の真横に付く
   if (isBossTool(obj)) {
-    const bf = bossFitAt(clientX, clientY);
+    const bf = bossFitAtPoint(originModelPos(obj).clone(), clientX, clientY);
     if (bf) {
       obj.quaternion.copy(bf.quat);
       obj.position.copy(bf.surf).sub(obj.userData.backLocal.clone().applyQuaternion(bf.quat));
@@ -4800,6 +4846,11 @@ function partAxisFor(part, mode) {
 let _elevStepAxis = null, _elevStepFor = null;   // 立面角ボタン連打中の固定軸（真上・真下を跨いで一周できる）
 function stepPartRotate(part, mode) {
   mode = rotModeOf(mode);
+  // ボスの「回転」＝親パイプの中心（軸）まわりに45°＝外周の上を回って向きを変える（2026-07-29 社長要望）
+  if (mode === 'roll' && typeof isBossTool === 'function' && isBossTool(part)) {
+    const h = bossHostPipe(part);
+    if (h) { rotatePipeAround(part, h.axisPt, new THREE.Quaternion().setFromAxisAngle(h.dir, Math.PI / 4)); return; }
+  }
   const { pivot } = partRotPivotDir(part);
   let axis, ang = Math.PI / 4;
   if (mode === 'az') {
@@ -4829,6 +4880,14 @@ let _pipeSpin = null;
 function pipeRotateSpinStart(mode) {
   mode = rotModeOf(mode);
   const part = selectedPart; if (!isSpinRotPart(part)) return false;
+  // ボスの回転スピナー＝親パイプの軸まわり（外周の上を連続で回す）
+  if (mode === 'roll' && typeof isBossTool === 'function' && isBossTool(part)) {
+    const h = bossHostPipe(part);
+    if (h) {
+      _pipeSpin = { part, pivot: h.axisPt.clone(), axis: h.dir.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
+      return true;
+    }
+  }
   const { pivot } = partRotPivotDir(part);
   const n360 = v => ((v % 360) + 360) % 360;
   let axis, baseDeg = 0;   // スピナーの初期表示角＝プロパティの方位角/立面角/回転と同じ絶対角
