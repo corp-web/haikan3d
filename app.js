@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-Q';
+const APP_VER = 'v0729-R';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8476,7 +8476,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return 2 * Math.tan(cam.fov * Math.PI / 360) * dist / h;
   }
   // 印刷用：白背景・グリッド非表示・線画化して撮る（参考の手書き図面に寄せる）
-  function snapshotForPrint() {
+  function snapshotForPrint(hideParts) {   // hideParts=true：部品を隠して注釈だけ撮る（単線図のラスタ層用）
     // 印刷は紙に引き伸ばされるので、画面解像度のまま撮ると線がぼやけて鉛筆書きのように見える。
     // 一時的に高解像度（3倍）で描画してから撮る（2026-07-21 社長指摘）
     const prevPR = renderer.getPixelRatio();
@@ -8489,6 +8489,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 選択中の起点・機点マーカーやカーソルの補助表示は図面に出さない（2026-07-21）
     const hideForPrint = [];
     for (const g of [markerGroup, xptGroup, lineGuideGroup]) if (g && g.visible) { g.visible = false; hideForPrint.push(g); }
+    // 単線図モード＝部品は描かない（SVGの単線・記号で別層に描く）。寸法・線分・文字だけ撮る
+    const partsHidden = [];
+    if (hideParts) for (const p of placedParts) if (p.visible) { p.visible = false; partsHidden.push(p); }
     scene.background = new THREE.Color(0xffffff);
     renderer.setClearColor(0xffffff, 1);
     if (grid) grid.visible = false;
@@ -8502,7 +8505,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const overlays = [];    // [親mesh, 追加したobject, 破棄するgeometry|null]
     // 先に対象メッシュを集める（走査中に子メッシュを足すと再帰してしまうため）
     const printMeshes = [];
-    for (const p of placedParts) p.traverse(o => { if (o.isMesh && o.geometry) printMeshes.push(o); });
+    if (!hideParts) for (const p of placedParts) p.traverse(o => { if (o.isMesh && o.geometry) printMeshes.push(o); });
     for (const o of printMeshes) {
       matBackup.push([o, o.material]);
       o.material = fill;
@@ -8535,7 +8538,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.setScissorTest(false);
     renderer.clear();
     renderer.render(scene, activeCam());
-    drawSilhouette(activeCam());        // 部品の外形（シルエット）を1画素の細線で重ねる
+    if (!hideParts) drawSilhouette(activeCam());   // 部品の外形（シルエット）を1画素の細線で重ねる
     const url = renderer.domElement.toDataURL('image/png');
 
     // 後始末：注釈の色/合成/不透明度を戻す → 稜線を外して元のマテリアルへ戻す
@@ -8547,6 +8550,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (grid) grid.visible = prevGrid;
     if (groundGroup) groundGroup.visible = prevGround;
     for (const g of hideForPrint) g.visible = true;
+    for (const p of partsHidden) p.visible = true;
     if (window.__dimMaskPrint) { window.__dimMaskPrint(false); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }   // マスクを画面用に戻す
     renderer.setPixelRatio(prevPR);   // 画面用の解像度へ戻す
     renderer.clear();
@@ -8913,8 +8917,117 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     renderer.clear(); renderer.render(scene, activeCam());
     return url;
   }
-  function printSheet() {
-    const img = snapshotForPrint();   // 白地・グリッドなしの線画
+  // ===== 単線アイソメ図（提案1・第1段 2026-07-29）＝部品をJIS風の単線・記号でベクトル描画 =====
+  // 現在の視点で canvas と同じ座標系（クライアントpx）へ投影した SVG を作る。
+  // 寸法線・線分・文字は snapshotForPrint(true)（部品を隠した従来描画）のラスタ層をそのまま重ねる＝位置が完全一致。
+  function buildSingleLineSVG() {
+    const cam = activeCam(); cam.updateMatrixWorld();
+    const W = renderer.domElement.clientWidth, H = renderer.domElement.clientHeight;
+    const view = new V3(); cam.getWorldDirection(view);
+    const el = [];
+    const prj = (v) => { const p = modelGroup.localToWorld(v.clone()).project(cam); return [(p.x * 0.5 + 0.5) * W, (-p.y * 0.5 + 0.5) * H]; };
+    const XY = (v) => { const a = prj(v); return `${a[0].toFixed(1)},${a[1].toFixed(1)}`; };
+    const line = (a, b, w) => { const A = prj(a), B = prj(b); el.push(`<line x1="${A[0].toFixed(1)}" y1="${A[1].toFixed(1)}" x2="${B[0].toFixed(1)}" y2="${B[1].toFixed(1)}"${w ? ` stroke-width="${w}"` : ''}/>`); };
+    const poly = (pts, close) => el.push(`<${close ? 'polygon' : 'polyline'} points="${pts.map(XY).join(' ')}"/>`);
+    // 軸に直交し視線にも直交する向き＝紙の上で長さが縮まない方向（記号の幅出しに使う）
+    const perpView = (axis, lenM) => {
+      let v = axis.clone().cross(view);
+      if (v.lengthSq() < 1e-9) v = axis.clone().cross(new V3(0, 1, 0));
+      if (v.lengthSq() < 1e-9) v.set(1, 0, 0);
+      return v.normalize().multiplyScalar(lenM);
+    };
+    const circle = (c, rM) => {
+      const C = prj(c), E = prj(c.clone().add(perpView(view, rM)));
+      const r = Math.max(Math.hypot(E[0] - C[0], E[1] - C[1]), 2);
+      el.push(`<circle cx="${C[0].toFixed(1)}" cy="${C[1].toFixed(1)}" r="${r.toFixed(1)}"/>`);
+    };
+    const wc = (p, l) => connModelPos(p, l);
+    const axisOf = (p) => {
+      const a = wc(p, p.userData.backLocal), b = wc(p, p.userData.faceLocal);
+      const d = b.clone().sub(a);
+      return { a, b, d: d.lengthSq() > 1e-12 ? d.normalize() : new V3(0, 1, 0), c: a.clone().add(b).multiplyScalar(0.5) };
+    };
+    for (const p of placedParts) {
+      if (p.userData.hidden || !p.userData.faceLocal) continue;
+      const u = p.userData, t = u.partType;
+      if (t === 'pipe') { const s = axisOf(p); line(s.a, s.b); continue; }
+      if (t === 'elbow') {                                        // 工作点で折れる2本の線
+        const s = axisOf(p);
+        if (u.cornerLocal) { const c = wc(p, u.cornerLocal); line(s.a, c); line(c, s.b); }
+        else line(s.a, s.b);
+        continue;
+      }
+      if (t === 'tee') {                                          // 中心から各口へ
+        const c = wc(p, new V3(0, 0, 0));
+        for (const l of connsOf(p)) { if (u.boltLocals && u.boltLocals.includes(l)) continue; line(c, wc(p, l)); }
+        continue;
+      }
+      if (t === 'flange') {                                       // フェイス位置の太めティック
+        const o = u.flange || {};
+        const s = axisOf(p);
+        let D = 0.1;
+        try { D = (flangeDim(o.cls, o.sizeA).D || 100) / 1000; } catch (e) {}
+        const v = perpView(s.d, D / 2);
+        line(s.b.clone().add(v), s.b.clone().sub(v), 2.6);
+        continue;
+      }
+      if (t === 'gasket') continue;                               // 単線図ではフランジ2本のティックで表す
+      if (t === 'valve') {                                        // 蝶ネジ（ボウタイ）
+        const s = axisOf(p);
+        const w = perpView(s.d, s.a.distanceTo(s.b) * 0.35);
+        poly([s.a.clone().add(w), s.a.clone().sub(w), s.c, s.b.clone().sub(w), s.b.clone().add(w), s.c], true);
+        continue;
+      }
+      if (t === 'flex') {                                         // 線＋波の目印3つ
+        const s = axisOf(p);
+        line(s.a, s.b);
+        const v = perpView(s.d, 0.012);
+        for (const k of [-0.25, 0, 0.25]) {
+          const m = s.a.clone().lerp(s.b, 0.5 + k);
+          el.push(`<path d="M ${XY(m.clone().sub(v))} Q ${XY(m.clone().add(s.d.clone().multiplyScalar(0.01)))} ${XY(m.clone().add(v))}"/>`);
+        }
+        continue;
+      }
+      if (t === 'sight') { const s = axisOf(p); line(s.a, s.b); circle(s.c, s.a.distanceTo(s.b) * 0.22); continue; }
+      if (t === 'reducer') {                                      // 大端→小端の台形（コーン）
+        const s = axisOf(p);
+        const wA = perpView(s.d, (FLG_BORE[(u.reducer || {}).sizeA] || 60) / 2000);
+        const wB = perpView(s.d, (FLG_BORE[(u.reducer || {}).sizeB] || 30) / 2000);
+        poly([s.a.clone().add(wA), s.b.clone().add(wB), s.b.clone().sub(wB), s.a.clone().sub(wA)], true);
+        continue;
+      }
+      if (t === 'cap') {
+        const s = axisOf(p);
+        const v = perpView(s.d, (FLG_BORE[(u.cap || {}).sizeA] || 60) / 2000);
+        line(s.a, s.b);
+        line(s.b.clone().add(v), s.b.clone().sub(v));
+        continue;
+      }
+      if (t === 'sw') {                                           // SW継手：ボス＝基部ティック＋枝線／他＝中心から各口
+        if ((u.sw || {}).kind === 'BOSS') {
+          const s = axisOf(p);
+          const v = perpView(s.d, (SW_O_FC[(u.sw || {}).sizeA] || 40) / 2000);
+          line(s.a, s.b);
+          line(s.a.clone().add(v), s.a.clone().sub(v));
+          continue;
+        }
+        const c = wc(p, new V3(0, 0, 0));
+        for (const l of connsOf(p)) line(c, wc(p, l));
+        continue;
+      }
+      if (t === 'pg') { const s = axisOf(p); line(s.a, s.b); circle(s.b, ((u.pg || {}).dia || 100) / 2000); continue; }
+      const s = axisOf(p); line(s.a, s.b);                        // その他＝軸線のみ
+    }
+    return `<svg class="sl" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">` +
+      `<g stroke="#111" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round">${el.join('')}</g></svg>`;
+  }
+  window.__printSingleSVG = () => buildSingleLineSVG();          // e2e検証用
+  window.__printSnapSLForTest = () => snapshotForPrint(true);    // e2e検証用（部品を隠した注釈層）
+
+  function printSheet(mode) {
+    const single = mode === 'single';   // 単線図＝部品はSVGの単線・記号／寸法等は部品を隠したラスタ
+    const img = snapshotForPrint(single);   // 白地・グリッドなしの線画
+    const slSvg = single ? buildSingleLineSVG() : '';
     // ---- 詳細図（部分拡大）：登録があれば拡大画像と、本図に付ける丸印の位置を用意する ----
     const DW = 420, DH = 297, INSET = 7.6;                     // A3横(mm)と図面枠の内側
     const cw = DW - INSET * 2, ch = DH - INSET * 2;
@@ -8977,6 +9090,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   /* 図面は外枠の内側に収める＝構築線など長い線が枠から飛び出さない（2026-07-21 社長指摘） */
   .dwg{position:absolute;inset:7.6mm;overflow:hidden;}
   .dwg>img{width:100%;height:100%;object-fit:contain;display:block;}
+  .dwg>svg.sl{position:absolute;inset:0;width:100%;height:100%;}
   .frame{position:absolute;inset:7mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
   .north{position:absolute;left:10mm;top:9mm;width:24mm;height:24mm;}
   /* 詳細図（部分拡大）：左上に積む。本図には丸印＋記号を重ねる（2026-07-21 社長要望） */
@@ -9005,7 +9119,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   @media print{@page{size:A3 landscape;margin:0;}}
 </style></head><body>
   <div class="pg">
-    <div class="dwg"><img src="${img}"></div>
+    <div class="dwg"><img src="${img}">${slSvg}</div>
     ${(() => { let top = 36; return details.map(d => {
         const dw = 86, dih = Math.max(34, Math.min(70, dw / (d.aspect || 1.4)));
         const html = `<div class="detail" style="left:${INSET + 2}mm;top:${top}mm;width:${dw}mm">
@@ -12946,7 +13060,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }, true);
   }
   $('cmdTplSave').onclick = saveDwgTemplate;   // 図面情報を既定として記憶
-  $('cmdPrint').onclick = printSheet;
+  $('cmdPrint').onclick = () => printSheet();                     // 実体図（従来）
+  { const b = $('cmdPrintSL'); if (b) b.onclick = () => printSheet('single'); }   // 単線アイソメ図（2026-07-29 第1段）
   $('cmdPng').onclick = exportPng;
   $('cmdLine').onclick = () => setDrawMode('line');
   { const b = $('cmdSweep'); if (b) b.onclick = sweepCmd; }   // 配管化コマンド（2026-07-29 社長要望）
