@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0729R — SKT-HD ♦</title>
+<title>配管3D v0729S — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0729R">
+<meta name="apple-mobile-web-app-title" content="配管3D v0729S">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -565,8 +565,9 @@
     <button id="cmdNew"   title="新規図面（現在の内容をすべて消してまっさらにする）"><span class="ic">📄</span>新規</button>
     <button id="cmdSave"  title="図面をファイルに保存（.p3d.json）"><span class="ic">💾</span>保存</button>
     <button id="cmdOpen"  title="保存した図面を開く"><span class="ic">📂</span>開く</button>
-    <button id="cmdPrint" title="図面と部品表を印刷（実体図）"><span class="ic">🖨</span>印刷</button>
-    <button id="cmdPrintSL" title="単線アイソメ図で印刷（管＝一本線・継手＝記号の提出用清書。寸法・文字は従来どおり）"><span class="ic">📐</span>単線図</button>
+    <button id="cmdPrint" title="図面と部品表を印刷"><span class="ic">🖨</span>印刷</button>
+    <!-- 単線図ボタンは一旦取り下げ（2026-07-29 社長判断）。エンジン(buildSingleLineSVG)は残置＝復活はこの1行を戻すだけ -->
+
     <button id="cmdPng"   title="画面をPNG画像で書き出し"><span class="ic"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2.4" fill="#4a5564" stroke="#2c3543" stroke-width="1"/><path d="M8.5 7 L9.8 5 H14.2 L15.5 7 Z" fill="#4a5564" stroke="#2c3543" stroke-width="1"/><circle cx="12" cy="13.4" r="4" fill="#2c3543"/><circle cx="12" cy="13.4" r="2.6" fill="#8fb6e0"/><circle cx="10.9" cy="12.3" r="0.9" fill="#eaf3ff"/><rect x="17.4" y="8.6" width="2.4" height="1.6" rx="0.5" fill="#cfe0f5"/></svg></span>画像</button>
     <button id="cmdCsv"   title="部品表をCSVで書き出し（付属品・溶接口・パイプ合計の自動集計付き。Excelで開けます）"><span class="ic"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2" fill="#4a5564" stroke="#2c3543" stroke-width="1"/><rect x="6.5" y="6" width="11" height="3" rx="0.6" fill="#8fb6e0"/><g fill="#cfe0f5"><rect x="6.5" y="10.5" width="3.2" height="2.2" rx="0.4"/><rect x="10.4" y="10.5" width="3.2" height="2.2" rx="0.4"/><rect x="14.3" y="10.5" width="3.2" height="2.2" rx="0.4"/><rect x="6.5" y="13.9" width="3.2" height="2.2" rx="0.4"/><rect x="10.4" y="13.9" width="3.2" height="2.2" rx="0.4"/><rect x="14.3" y="13.9" width="3.2" height="2.2" rx="0.4"/><rect x="6.5" y="17.3" width="3.2" height="2.2" rx="0.4"/><rect x="10.4" y="17.3" width="3.2" height="2.2" rx="0.4"/><rect x="14.3" y="17.3" width="3.2" height="2.2" rx="0.4"/></g></svg></span>CSV</button>
   </div>
