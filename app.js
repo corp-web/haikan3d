@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-P';
+const APP_VER = 'v0729-Q';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4854,14 +4854,11 @@ function stepPartRotate(part, mode) {
     const h = bossHostPipe(part);
     if (h) { rotatePipeAround(part, h.axisPt, new THREE.Quaternion().setFromAxisAngle(h.dir, Math.PI / 4)); return; }
   }
-  // ボスの「方位角」＝立面角と90°違いの向きへ倒す（基部＝溶接点は固定。2026-07-29 社長指示）
-  if (mode === 'az' && typeof isBossTool === 'function' && isBossTool(part) && part.userData.backLocal) {
-    const n = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // 枝の向き
-    let el = new THREE.Vector3(-n.z, 0, n.x);                                            // 立面角の軸
-    if (el.lengthSq() < 1e-10) el = new THREE.Vector3(1, 0, 0).applyQuaternion(part.quaternion);
-    el.normalize();
-    const axis = n.clone().cross(el).normalize();   // 立面角の軸と90°違いの倒し軸
-    const pivot = connModelPos(part, part.userData.backLocal);
+  // ボスの「立面角」「方位角」＝起点を中心に世界方位で振る（2026-07-29 社長指示）：
+  //   立面角＝南北へ振る（＝東西軸まわり）／方位角＝東西へ振る（＝南北軸まわり）
+  if (typeof isBossTool === 'function' && isBossTool(part) && (mode === 'az' || mode === 'el')) {
+    const axis = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+    const { pivot } = partRotPivotDir(part);
     rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 4));
     return;
   }
@@ -4902,14 +4899,11 @@ function pipeRotateSpinStart(mode) {
       return true;
     }
   }
-  // ボスの方位角スピナー＝基部支点・立面角と90°違いの倒し軸（連続で倒す）
-  if (mode === 'az' && typeof isBossTool === 'function' && isBossTool(part) && part.userData.backLocal) {
-    const n = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();
-    let el = new THREE.Vector3(-n.z, 0, n.x);
-    if (el.lengthSq() < 1e-10) el = new THREE.Vector3(1, 0, 0).applyQuaternion(part.quaternion);
-    el.normalize();
-    const axis = n.clone().cross(el).normalize();
-    _pipeSpin = { part, pivot: connModelPos(part, part.userData.backLocal), axis, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
+  // ボスの立面角・方位角スピナー＝起点中心・世界方位の振り（立面角=南北／方位角=東西）を連続で
+  if (typeof isBossTool === 'function' && isBossTool(part) && (mode === 'az' || mode === 'el')) {
+    const axis = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+    const { pivot } = partRotPivotDir(part);
+    _pipeSpin = { part, pivot: pivot.clone(), axis, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
     return true;
   }
   const { pivot } = partRotPivotDir(part);
