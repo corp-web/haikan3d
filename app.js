@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-G';
+const APP_VER = 'v0729-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3953,7 +3953,9 @@ function updateFollowPreview(clientX, clientY) {
   if (!followPreview) return;
   const rect = renderer.domElement.getBoundingClientRect();
   if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
-    followPreview.visible = false; clearMarkers(); hideInsDist(); return;
+    followPreview.visible = false; clearMarkers();
+    if (!insDistFocused()) hideInsDist();   // 数値入力中は箱を消さない（Enterで確定できる）
+    return;
   }
   followPreview.visible = true;
   // 3軸ボタンで回した向きは全部品で毎フレーム維持する（旧：パイプ系だけ維持でフランジ等は既定向きへ
@@ -3972,22 +3974,35 @@ function updateFollowPreview(clientX, clientY) {
       const mid = followPreview.userData.faceLocal.clone().add(followPreview.userData.backLocal)
         .multiplyScalar(0.5).applyQuaternion(followPreview.quaternion);
       followPreview.position.copy(pt).sub(mid);   // 軸方向の中央を芯線上の点へ
-      showInsDist(clientX, clientY, insT);        // 両端（曲がり・分岐）までの距離を表示
+      updatePairGhost(insT.pipe, dir, pt);        // 合いフランジ＝2枚目とガスケットの影も出す
+      showInsDist(clientX, clientY, insT);        // 両端（曲がり・分岐）までの距離を表示（入力で確定も可）
       showInteractionMarkers(followPreview, pt);
       return;
     }
   }
-  hideInsDist();
+  if (!insDistFocused()) hideInsDist();
   // 最初の部品も線分と同じく、カーソル位置（スナップ無ければ床面投影）へ自由配置
   const tgt = resolveTarget(clientX, clientY, null);
   if (!tgt) return;
   // 相手の機点へ吸着した時は相手の向きへ自動で合わせる（2026-07-29 社長要望。
   // 手動で回した後（followQuat あり）は本人の向きを尊重する）
+  let mateOfs = null;
   if (tgt.snapped && !followQuat && MATE_TYPES[followPreview.userData.partType]) {
-    const mq = mateQuatAt(tgt.point);
-    if (mq) followPreview.quaternion.copy(mq);
+    const mi = mateInfoAt(tgt.point);
+    if (mi) {
+      followPreview.quaternion.copy(mi.q);
+      // SOP/LJフランジをパイプ端へ＝控えぶんフェイスを外へ出し、管を実寸で差し込む（2026-07-29 社長指示）
+      if (followPreview.userData.partType === 'flange' && mi.part.userData.partType === 'pipe') {
+        const fo = followPreview.userData.flange || {};
+        if (fo.type === 'SOP' || fo.type === 'LJ') {
+          const pu2 = mi.part.userData.pipe;
+          mateOfs = mi.n.clone().multiplyScalar(weldValsOf(pu2.sizeA, pu2.sch).sop / 1000);
+        }
+      }
+    }
   }
   setPartByOrigin(followPreview, tgt.point);
+  if (mateOfs) followPreview.position.add(mateOfs);
   showInteractionMarkers(followPreview, tgt.snapped ? tgt.point : null);
 }
 function moveFollow(x, y) { updateFollowPreview(x, y); }
@@ -4113,7 +4128,7 @@ function insertTargetAt(clientX, clientY) {
 }
 // ---- 吸着した相手の向きへ合わせる（2026-07-29 社長要望：フランジ等を相手のフランジへ置く時、毎回回さなくて済むように）----
 const MATE_TYPES = { flange: 1, gasket: 1, valve: 1, flex: 1, sight: 1, cap: 1 };
-function mateQuatAt(pt) {
+function mateInfoAt(pt) {
   for (const q of placedParts) {
     if (q.userData.hidden || !q.userData.faceLocal) continue;
     for (const l of connsOf(q)) {
@@ -4126,28 +4141,123 @@ function mateQuatAt(pt) {
       const faceMate = (tp === 'gasket') || (tp === 'flange' && l === u.faceLocal) ||
                        (isFlangedBody(u) && (l === u.faceLocal || l === u.backLocal));
       const dirN = faceMate ? n.clone().negate() : n.clone();
-      return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirN.normalize());
+      return { part: q, n: n.clone().normalize(),
+               q: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirN.normalize()) };
     }
   }
   return null;
 }
-// ---- 挿入位置から両端（曲がり・分岐）までの距離表示（2026-07-29 社長要望）----
-let _insDistBox = null;
-function showInsDist(cx, cy, hit) {
-  if (!_insDistBox) {
-    _insDistBox = document.createElement('div');
-    _insDistBox.id = 'insDistBox';
-    _insDistBox.style.cssText = 'position:fixed;z-index:95;pointer-events:none;padding:3px 8px;font:12px Meiryo,sans-serif;' +
-      'color:#1d2c4f;background:rgba(248,250,253,.95);border:1px solid #7fa8e8;border-radius:6px;white-space:nowrap;display:none;box-shadow:0 2px 8px rgba(20,40,80,.18)';
-    document.body.appendChild(_insDistBox);
+// ---- 挿入位置から両端（曲がり・分岐）までの距離表示＋数値入力（2026-07-29 社長要望）----
+// ←（背面端まで）／（フェイス端まで）→ の2欄。どちらかに数値を入れてEnter＝その位置へ挿入を確定。
+let _insDistBox = null, _insL = null, _insR = null, _insPrev = null;
+function insDistFocused() { return !!(_insDistBox && (document.activeElement === _insL || document.activeElement === _insR)); }
+function ensureInsDistBox() {
+  if (_insDistBox) return;
+  _insDistBox = document.createElement('div');
+  _insDistBox.id = 'insDistBox';
+  _insDistBox.style.cssText = 'position:fixed;z-index:95;display:none;align-items:center;gap:4px;padding:3px 8px;font:12px Meiryo,sans-serif;' +
+    'color:#1d2c4f;background:rgba(248,250,253,.97);border:1px solid #7fa8e8;border-radius:6px;white-space:nowrap;box-shadow:0 2px 8px rgba(20,40,80,.18)';
+  const ist = 'width:58px;text-align:right;border:1px solid #c4ccda;border-radius:4px;padding:1px 3px;background:#fff;color:#1d2c4f;font:inherit';
+  _insDistBox.innerHTML = `<span>←</span><input id="insDistL" type="number" step="1" min="1" style="${ist}"><span>mm ｜</span>` +
+    `<input id="insDistR" type="number" step="1" min="1" style="${ist}"><span>mm→</span>`;
+  document.body.appendChild(_insDistBox);
+  _insL = _insDistBox.querySelector('#insDistL');
+  _insR = _insDistBox.querySelector('#insDistR');
+  const commit = (side) => {
+    if (!_insPrev || !followTool) return;
+    const L = _insPrev.pipe.userData.pipe.length;
+    const v = parseFloat(side === 'L' ? _insL.value : _insR.value);
+    if (!isFinite(v)) return;
+    let tMm = side === 'L' ? v : L - v;
+    tMm = Math.min(Math.max(tMm, INSERT_END_MARGIN + 0.1), L - INSERT_END_MARGIN - 0.1);
+    commitInsertAt(_insPrev.pipe, tMm);
+  };
+  for (const [el, side] of [[_insL, 'L'], [_insR, 'R']]) {
+    el.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(side); }
+      if (e.key === 'Escape') { e.preventDefault(); el.blur(); }
+    });
+    ['pointerdown', 'click'].forEach(ev => el.addEventListener(ev, e => e.stopPropagation()));
   }
-  const L = hit.pipe.userData.pipe.length;
-  _insDistBox.textContent = `←${Math.round(hit.tMm)}mm ｜ ${Math.round(L - hit.tMm)}mm→`;
-  _insDistBox.style.left = Math.round(cx + 18) + 'px';
-  _insDistBox.style.top = Math.round(cy - 36) + 'px';
-  _insDistBox.style.display = 'block';
+  ['pointerdown', 'click'].forEach(ev => _insDistBox.addEventListener(ev, e => e.stopPropagation()));
 }
-function hideInsDist() { if (_insDistBox) _insDistBox.style.display = 'none'; }
+function showInsDist(cx, cy, hit) {
+  ensureInsDistBox();
+  _insPrev = { pipe: hit.pipe, tMm: hit.tMm };
+  const L = hit.pipe.userData.pipe.length;
+  if (document.activeElement !== _insL) _insL.value = Math.round(hit.tMm);
+  if (document.activeElement !== _insR) _insR.value = Math.round(L - hit.tMm);
+  if (!insDistFocused()) {   // 入力中は箱を動かさない
+    _insDistBox.style.left = Math.round(cx + 18) + 'px';
+    _insDistBox.style.top = Math.round(cy - 42) + 'px';
+  }
+  _insDistBox.style.display = 'flex';
+}
+function hideInsDist() {
+  if (_insDistBox) _insDistBox.style.display = 'none';
+  _insPrev = null;
+  clearPairGhost();
+}
+// 数値入力（Enter）で指定位置へ挿入を確定
+function commitInsertAt(pipe, tMm) {
+  if (!followTool) return;
+  const obj = followTool.tool.build();
+  computeConns(obj);
+  if (!INSERTABLE_TYPES[obj.userData.partType] || !insertAxialOk(obj)) return;
+  if (_insL) _insL.blur();
+  if (_insR) _insR.blur();
+  hideInsDist();
+  if (insertItemIntoPipe(obj, { pipe, tMm })) {
+    refreshItemList();
+    stopFollow();
+    selectPart(obj);
+  } else {
+    obj.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
+  }
+}
+// ---- 合いフランジの挿入プレビュー＝2枚目＋ガスケットの影も出す（2026-07-29 社長要望）----
+let _pairGhost = null;
+function clearPairGhost() {
+  if (!_pairGhost) return;
+  modelGroup.remove(_pairGhost.grp);
+  _pairGhost.grp.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); });
+  _pairGhost = null;
+}
+window.__pairGhostActive = () => !!(_pairGhost && _pairGhost.grp.visible);
+function updatePairGhost(pipe, dir, pt) {
+  const isPair = followPreview && followPreview.userData.partType === 'flange' && flangeOpts.pair === '2';
+  if (!isPair) { clearPairGhost(); return; }
+  const spec = followPreview.userData.flange || flangeOpts;
+  const gt = (parseFloat(gasketOpts.t) > 0) ? parseFloat(gasketOpts.t) : 3;
+  const key = [spec.sizeA, spec.type, spec.cls, spec.face, spec.sch, gt].join('|');
+  if (!_pairGhost || _pairGhost.key !== key) {
+    clearPairGhost();
+    const g = makeGasket({ sizeA: spec.sizeA, cls: spec.cls, t: gt });
+    const f2 = makeFlange(spec);
+    computeConns(g); computeConns(f2);
+    const grp = new THREE.Group();
+    for (const o of [g, f2]) {
+      o.traverse(m => { if (m.isMesh && m.material) { m.material = m.material.clone(); m.material.transparent = true; m.material.opacity = 0.45; m.material.depthWrite = false; } });
+      grp.add(o);
+    }
+    modelGroup.add(grp);
+    _pairGhost = { grp, key, g, f2,
+      s1: followPreview.userData.faceLocal.y - followPreview.userData.backLocal.y,
+      tg: g.userData.faceLocal.y - g.userData.backLocal.y,
+      s2: f2.userData.faceLocal.y - f2.userData.backLocal.y };
+  }
+  const P = _pairGhost, spanT = P.s1 + P.tg + P.s2;
+  const q1 = pipe.quaternion;
+  const q2 = q1.clone().multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI));
+  const s0 = pt.clone().addScaledVector(dir, -spanT / 2);
+  followPreview.position.addScaledVector(dir, -(P.tg + P.s2) / 2);   // 本体（1枚目）を列の先頭へ
+  P.g.quaternion.copy(q1);
+  P.g.position.copy(s0).addScaledVector(dir, P.s1).sub(P.g.userData.backLocal.clone().applyQuaternion(q1));
+  P.f2.quaternion.copy(q2);
+  P.f2.position.copy(s0).addScaledVector(dir, P.s1 + P.tg).sub(P.f2.userData.faceLocal.clone().applyQuaternion(q2));
+  P.grp.visible = true;
+}
 // 挿入する部品列（軸方向の並び）を組む。{train:[{obj,flip}], span(mm), dsSize(下流の径|null)}
 function buildInsertTrain(obj, pipe) {
   const u = obj.userData, pu = pipe.userData.pipe;
@@ -4194,6 +4304,17 @@ function insertItemIntoPipe(obj, hit) {
     if (window.__toast) window.__toast(`挿入できません：挿入には${Math.ceil(plan.span)}mm必要です（パイプ${Math.round(L)}mm）。もう少し中寄りに置くか、パイプを伸ばしてください`);
     return false;
   }
+  // SOP/LJフランジのハブ側は、管を実際に「フェイス−控え」まで差し込む（2026-07-29 社長指示。
+  // 従来は管端がハブ端（フェイスからフランジ厚の所）で切れていた）。控えはweldValsOfのSOP控え。
+  const sopExtOf = (fl) => {
+    const o = fl.userData.flange || {};
+    if (o.type !== 'SOP' && o.type !== 'LJ') return 0;
+    const span = (fl.userData.faceLocal.y - fl.userData.backLocal.y) * 1000;
+    return Math.max(span - weldValsOf(pu.sizeA, pu.sch).sop, 0);
+  };
+  const firstEl = plan.train[0], lastEl = plan.train[plan.train.length - 1];
+  const extUp = (firstEl.obj.userData.partType === 'flange' && !firstEl.flip) ? sopExtOf(firstEl.obj) : 0;
+  const extDown = (lastEl.obj.userData.partType === 'flange' && lastEl.flip) ? sopExtOf(lastEl.obj) : 0;
   const back = connModelPos(pipe, pipe.userData.backLocal).clone();
   const face = connModelPos(pipe, pipe.userData.faceLocal).clone();
   const dir = face.clone().sub(back).normalize();
@@ -4210,20 +4331,20 @@ function insertItemIntoPipe(obj, hit) {
     modelGroup.add(o); placedParts.push(o);
     s += (o.userData.faceLocal.y - o.userData.backLocal.y) * 1000;
   }
-  // 下流側の新しいパイプ（レジューサー挿入なら新しい径）
-  const p2 = makePipe({ sizeA: plan.dsSize || pu.sizeA, sch: pu.sch, length: L2 });
+  // 下流側の新しいパイプ（レジューサー挿入なら新しい径。フランジのハブへは差し込みぶん延長）
+  const p2 = makePipe({ sizeA: plan.dsSize || pu.sizeA, sch: pu.sch, length: L2 + extDown });
   computeConns(p2);
   p2.quaternion.copy(pipe.quaternion);
-  p2.position.copy(back).addScaledVector(dir, (L1 + plan.span + L2 / 2) / 1000);
+  p2.position.copy(back).addScaledVector(dir, (L1 + plan.span - extDown + (L2 + extDown) / 2) / 1000);
   p2.userData.placed = true; p2.userData.orient = pipe.userData.orient || 0; p2.userData.roll = pipe.userData.roll || 0;
   if (pipe.userData.mat) p2.userData.mat = pipe.userData.mat;
   if (pipe.userData.groupId != null) p2.userData.groupId = pipe.userData.groupId;
   modelGroup.add(p2); placedParts.push(p2);
-  rebuildPipe(pipe, L1, 'back');                             // 上流側＝元のパイプを短縮（背面端は不動）
+  rebuildPipe(pipe, L1 + extUp, 'back');                     // 上流側＝背面端は不動・ハブへは差し込みぶん延長
   if (typeof _idleSig !== 'undefined') _idleSig = null;
   const nm = (typeof partColumns === 'function') ? partColumns(obj).kind : 'アイテム';
   const extra = plan.train.length > 1 ? `（フランジ・ガスケット込み${Math.round(plan.span)}mm）` : '';
-  if (window.__toast) window.__toast(`${nm}を挿入し、パイプを ${Math.round(L1)}mm＋${Math.round(L2)}mm に分割しました${extra}${plan.dsSize ? `。下流は${plan.dsSize}` : ''}`);
+  if (window.__toast) window.__toast(`${nm}を挿入し、パイプを ${Math.round(L1 + extUp)}mm＋${Math.round(L2 + extDown)}mm に分割しました${extra}${plan.dsSize ? `。下流は${plan.dsSize}` : ''}`);
   if (window.__scheduleHistory) window.__scheduleHistory();
   return true;
 }
@@ -4240,6 +4361,27 @@ function pipeEndJoint(pipe, endLocal) {
   const P = connModelPos(pipe, endLocal);
   const TOL = 0.0015;
   const pp = pipe.userData.pipe;
+  // SOP/LJフランジ＝管端がハブ領域（背面〜フェイス）に入っていれば差し込み継手。
+  // 2026-07-29 社長指示で差し込みは実寸表現（管端＝フェイス−控え）になったため、点一致ではなく領域で判定する。
+  // 調整値＝（フェイス−控え）−現在の管端位置：正しく差し込まれていれば0＝図面長さがそのまま切寸。
+  for (const q of placedParts) {
+    if (q === pipe || q.userData.hidden || q.userData.partType !== 'flange') continue;
+    const o = q.userData.flange || {};
+    if (o.type !== 'SOP' && o.type !== 'LJ') continue;
+    const B = connModelPos(q, q.userData.backLocal), F = connModelPos(q, q.userData.faceLocal);
+    const ax = F.clone().sub(B), span = ax.length();
+    if (span < 1e-6) continue;
+    const d = ax.multiplyScalar(1 / span);
+    const t = P.clone().sub(B).dot(d);
+    const radial = P.clone().sub(B).sub(d.clone().multiplyScalar(t)).length();
+    if (radial > TOL) continue;
+    if (t < -TOL || t > span + TOL) continue;
+    // 管の胴が背面側へ伸びている時だけ「差し込み」。フェイス側に突き当てただけの管は対象外
+    const otherLocal = (endLocal === pipe.userData.backLocal) ? pipe.userData.faceLocal : pipe.userData.backLocal;
+    if (connModelPos(pipe, otherLocal).clone().sub(P).dot(d) > 0) continue;
+    const sop = weldValsOf(pp.sizeA, pp.sch).sop;
+    return { kind: 'SOP', with: o.type, depth: Math.round(((span * 1000 - sop) - t * 1000) * 10) / 10 };
+  }
   for (const q of placedParts) {
     if (q === pipe || q.userData.hidden || !q.userData.faceLocal) continue;
     const u = q.userData;
@@ -4255,12 +4397,7 @@ function pipeEndJoint(pipe, endLocal) {
           const C = SW_C_E[o.sizeA] || 0;                          // ソケット深さ（規格表）
           return C > 0 ? { kind: 'SW', with: 'SWフランジ', depth: Math.max(C - 1.6, 0) } : { kind: 'none' };
         }
-        if (o.type === 'SOP' || o.type === 'LJ') {                 // 背面から差し込み・フェイスから控える
-          const span = (u.faceLocal.y - u.backLocal.y) * 1000;     // フランジの全高(mm)
-          const sop = weldValsOf(pp.sizeA, pp.sch).sop;
-          return { kind: 'SOP', with: o.type, depth: Math.max(span - sop, 0) };
-        }
-        return { kind: 'none' };                                   // BL等
+        return { kind: 'none' };                                   // SOP/LJは上の領域判定で処理済み。BL等はなし
       }
       if (u.partType === 'sw') {
         const k = u.sw.kind || '';
@@ -7178,7 +7315,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const d2 = pts[i + 1].clone().sub(pts[i]).normalize();
       if (d1.angleTo(d2) * 180 / Math.PI < 0.5) pts.splice(i, 1);
     }
-    return { pts, count: used.size };
+    return { pts, count: used.size, lines: [...used] };
   }
   // 点列→部品割り付け（エルボの種類・切断角・パイプ長）。err か {elbows, pipes} を返す。
   function sweepPlan(pts, sizeA) {
@@ -7323,6 +7460,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (tr.err) { if (window.__toast) window.__toast(tr.err); return; }
     if (tr.pts.length < 2) { if (window.__toast) window.__toast('配管化：ルートの長さがありません'); return; }
     sweepMode = { pts: tr.pts, lineCount: tr.count };
+    // たどったルート全体を選択表示＝どこまで配管化されるかが青く見える（2026-07-29 社長要望）。
+    // selectLineは冒頭でselectPart(null)＝選択クリアが走るため、1本目だけ通して残りは直接足す
+    const rl = tr.lines || [];
+    if (rl.length) {
+      selectLine(rl[0]);
+      for (let i = 1; i < rl.length; i++) selAnns.add(rl[i]);
+      refreshAnnHi(); refreshHandles();
+    }
     syncCmdLights();
     showSweepBox();
     if (window.__toast) window.__toast('配管化：呼び径とSchを確認して「実行」を押してください');
