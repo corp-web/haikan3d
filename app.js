@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-T';
+const APP_VER = 'v0729-U';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4896,6 +4896,20 @@ function stepPartRotate(part, mode) {
     rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 4));
     return;
   }
+  // フランジ等が真上/真下を向いた姿勢（フェイス法線が鉛直）では、方位角＝世界Yまわりが
+  // 回転（法線まわり）と同じになってしまう。ボスと同じ「起点中心に世界方位で振る」へ切替える：
+  // 方位角＝東西へ振る（南北軸まわり）／立面角＝南北へ振る（東西軸まわり）（2026-07-29 社長要望）
+  if ((mode === 'az' || mode === 'el') && part.userData.partType !== 'pipe') {
+    const nUp = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion);
+    if (Math.abs(nUp.y) > 0.985) {
+      const axis2 = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+      const { pivot } = partRotPivotDir(part);
+      rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis2, Math.PI / 4));
+      if (mode === 'el') { _elevStepAxis = axis2; _elevStepFor = part; }   // 連打も同じ軸で回し続ける
+      else { _elevStepAxis = null; _elevStepFor = null; }
+      return;
+    }
+  }
   const { pivot } = partRotPivotDir(part);
   let axis, ang = Math.PI / 4;
   if (mode === 'az') {
@@ -4939,6 +4953,16 @@ function pipeRotateSpinStart(mode) {
     const { pivot } = partRotPivotDir(part);
     _pipeSpin = { part, pivot: pivot.clone(), axis, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
     return true;
+  }
+  // 真上/真下を向いた部品（パイプ以外）のスピナーもボスと同じ世界方位の振りへ（ボタンと同挙動）
+  if ((mode === 'az' || mode === 'el') && part.userData.partType !== 'pipe') {
+    const nUp = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion);
+    if (Math.abs(nUp.y) > 0.985) {
+      const axis2 = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+      const { pivot } = partRotPivotDir(part);
+      _pipeSpin = { part, pivot: pivot.clone(), axis: axis2, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
+      return true;
+    }
   }
   const { pivot } = partRotPivotDir(part);
   const n360 = v => ((v % 360) + 360) % 360;
@@ -7962,7 +7986,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     s = s || {};
     for (const [id, k] of DWG_SPEC_FIELDS) { const el = $(id); if (el) el.value = s[k] || ''; }
   }
-  function serialize() {
+  // 詳細図の記憶域（宣言は serialize/applyData より前＝起動時の自動保存復元でも参照できる位置に置く）
+  const detailAreas = [];   // [{ id, name, key, rect, aspect, url, parts:[], anns:[] }]
+  const detailPhotos = new Map();   // key→写真dataURL（アンドゥ履歴の文字列を重くしないための側持ち）
+  let _detailSeq = 0;
+  function serialize(o) {
     return {
       app: '配管3D', version: 1,
       drawing: { date: $('dwgDate').value, place: $('dwgPlace').value, name: $('dwgName').value, no: $('dwgNo').value, spec: gatherSpec() },
@@ -7980,6 +8008,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         hidden: p.userData.hidden ? 1 : undefined,   // 非表示状態（undefined はJSONに載らない）
       })),
       annotations: annStore.map(a => ({ type: a.type, a: a.a.toArray(), b: a.b.toArray(), style: a.style, groupId: a.groupId != null ? a.groupId : null, hidden: a.hidden ? 1 : undefined })),
+      // 詳細図の登録＝「押さえた瞬間の写真」を記憶する（2026-07-29 社長要望：後から表示/非表示を
+      // 変えても・アプリが再起動しても、詳細図は登録時の画像のまま印刷される）。
+      // 写真(dataURL)は大きいので、ファイル保存・自動保存にだけ埋める（o.photos）。
+      // アンドゥ履歴は毎編集で文字列を積むため key だけを載せ、写真はメモリ(detailPhotos)から引く。
+      details: detailAreas.map(d => ({
+        id: d.id, name: d.name, renamed: d.renamed ? 1 : undefined,
+        rect: d.rect, aspect: d.aspect, key: d.key,
+        url: (o && o.photos) ? d.url : undefined,
+        parts: d.parts.map(p => placedParts.indexOf(p)).filter(i => i >= 0),
+        anns: d.anns.map(a => annStore.indexOf(a)).filter(i => i >= 0),
+      })),
     };
   }
   // ---- 保存：新規保存／上書き保存（2026-07-12 社長要望） ----
@@ -8067,7 +8106,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   window.__devFiles = devFilesGet;   // テスト・保守用
   async function saveAsNew() {
-    const text = JSON.stringify(serialize(), null, 2);
+    const text = JSON.stringify(serialize({ photos: true }), null, 2);
     const name = defaultSaveName();
     if (window.showSaveFilePicker) {
       try {
@@ -8087,7 +8126,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   async function saveOverwrite() {
     if (!_saveTarget) { saveAsNew(); return; }
-    const text = JSON.stringify(serialize(), null, 2);
+    const text = JSON.stringify(serialize({ photos: true }), null, 2);
     if (_saveTarget.handle) {
       try {
         await writeHandle(_saveTarget.handle, text);
@@ -8107,7 +8146,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   let _autoLast = '';
   function autosaveTick() {
     try {
-      const s = JSON.stringify(serialize());
+      const s = JSON.stringify(serialize({ photos: true }));
       if (s === _autoLast) return;                      // 変化なしは書かない
       _autoLast = s;
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ t: Date.now(), name: ($('dwgNo').value || $('dwgName').value || ''), data: s }));
@@ -8242,8 +8281,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const p of placedParts) if (p.userData.groupId > maxG) maxG = p.userData.groupId;
     for (const a of annStore) if (a.groupId > maxG) maxG = a.groupId;
     if (window.__bumpGroupSeq) window.__bumpGroupSeq(maxG);
+    // 詳細図の復元＝登録時の写真ごと戻す（写真は rec.url（ファイル/自動保存）または detailPhotos（履歴）から）。
+    // details の無い古いファイルでは空になる＝前の図面の詳細図が新しい図面に紛れ込まない。
+    detailAreas.length = 0;
+    for (const rec of (data.details || [])) {
+      const url = rec.url || detailPhotos.get(rec.key);
+      if (!url || !rec.rect) continue;
+      const key = rec.key || ('k' + (++_detailSeq));
+      detailPhotos.set(key, url);
+      detailAreas.push({ id: rec.id, name: rec.name || ('詳細' + rec.id), renamed: !!rec.renamed,
+        rect: rec.rect, aspect: rec.aspect, key, url,
+        parts: (rec.parts || []).map(i => placedParts[i]).filter(Boolean),
+        anns: (rec.anns || []).map(i => annStore[i]).filter(Boolean) });
+    }
+    try { updateDetailBtn(); } catch (e) {}   // 起動時の自動保存復元ではボタン類が未初期化のことがある
     selectPart(null); refreshItemList();
   }
+  window.__serializeForTest = o => serialize(o);      // e2e検証用
+  window.__applyDataForTest = d => applyData(d);      // e2e検証用
   // ===== アンドゥ／リドゥ（状態スナップショット方式：serialize/applyData を流用） =====
   let _hist = [], _hi = -1, _histSuppress = false, _histTimer = null;
   function _snap() { try { return JSON.stringify(serialize()); } catch (e) { return null; } }
@@ -8700,8 +8755,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ===== 詳細図（部分拡大）＝2026-07-21 社長要望 =====
   // 込み入った所を選んで登録すると、印刷の左上に「詳細A」として拡大図を載せ、本図には丸印とAを付ける。
   // ルートが長くて実寸では細部が読めない問題への、製図の定番の対処。モデルは何も変えない。
-  const detailAreas = [];   // [{ id, parts:[], anns:[] }]
   const DETAIL_IDS = ['A', 'B', 'C'];
+  // （detailAreas 等の実体は serialize/applyData から使うため、その直前で宣言している）
   window.__detailCount = () => detailAreas.length;
   window.__detailClear = () => { detailAreas.length = 0; };
   window.__addDetailArea = () => addDetailArea();
@@ -8742,7 +8797,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const img = new Image();
     await new Promise(r => { img.onload = r; img.onerror = r; img.src = url; });
     const sx = nx * img.width, sy = ny * img.height, sw = Math.max(1, nw * img.width), sh = Math.max(1, nh * img.height);
-    const cv = document.createElement('canvas'); cv.width = Math.round(sw); cv.height = Math.round(sh);
+    // 写真は保存データ（自動保存・ファイル）にも記憶するので、長辺を抑えて容量を軽くする（印刷86mm幅には十分な精細さ）
+    const MAXL = 1600, k = Math.min(1, MAXL / Math.max(sw, sh));
+    const cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(sw * k)); cv.height = Math.max(1, Math.round(sh * k));
     cv.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
     return cv.toDataURL('image/png');
   }
@@ -8768,6 +8825,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (exist >= 0) {                                   // 同じ範囲を再度囲む＝取り消し
       const gid = detailAreas[exist].id;
       detailAreas.splice(exist, 1); relabelDetails(); updateDetailBtn();
+      recordHistory();
       if (window.__toast) window.__toast(`詳細${gid} を取り消しました`);
       return;
     }
@@ -8777,8 +8835,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const nw = Math.abs(x1 - x0) / rc.width, nh = Math.abs(y1 - y0) / rc.height;
     const id = DETAIL_IDS[detailAreas.length];
     const url = await captureDetailCrop(nx, ny, nw, nh);
-    detailAreas.push({ id, name: `詳細${id}`, parts, anns, rect: { nx, ny, nw, nh }, aspect: nw * rc.width / Math.max(nh * rc.height, 1), url });
+    const key = 'k' + (++_detailSeq); detailPhotos.set(key, url);
+    detailAreas.push({ id, name: `詳細${id}`, key, parts, anns, rect: { nx, ny, nw, nh }, aspect: nw * rc.width / Math.max(nh * rc.height, 1), url });
     updateDetailBtn();
+    recordHistory();   // 登録＝図面の状態（保存・アンドゥの対象）
     if (window.__toast) window.__toast(`詳細${id} を登録しました（長押しで一覧・編集）`);
   }
   // 従来の「選択して押す」も残す（選択があればそれを写真として登録／無ければ枠モードへ）
@@ -8786,14 +8846,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const parts = [...selectedParts], anns = [...selAnns];
     if (parts.length || anns.length) {
       const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
-      if (exist >= 0) { const gid = detailAreas[exist].id; detailAreas.splice(exist, 1); relabelDetails(); updateDetailBtn(); if (window.__toast) window.__toast(`詳細${gid} を取り消しました`); return; }
+      if (exist >= 0) { const gid = detailAreas[exist].id; detailAreas.splice(exist, 1); relabelDetails(); updateDetailBtn(); recordHistory(); if (window.__toast) window.__toast(`詳細${gid} を取り消しました`); return; }
       if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
       const nr = screenRectOf(parts, anns);
       if (!nr) { if (window.__toast) window.__toast('画面に映っていません（対象が見える向きにしてから登録してください）'); return; }
       const id = DETAIL_IDS[detailAreas.length];
       const url = await captureDetailCrop(nr.nx, nr.ny, nr.nw, nr.nh);
-      detailAreas.push({ id, name: `詳細${id}`, parts, anns, rect: nr, aspect: nr.nw / Math.max(nr.nh, 0.001), url });
+      const key = 'k' + (++_detailSeq); detailPhotos.set(key, url);
+      detailAreas.push({ id, name: `詳細${id}`, key, parts, anns, rect: nr, aspect: nr.nw / Math.max(nr.nh, 0.001), url });
       updateDetailBtn();
+      recordHistory();
       if (window.__toast) window.__toast(`詳細${id} を登録しました`);
       return;
     }
@@ -8842,14 +8904,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const nmLb = document.createElement('label'); nmLb.textContent = '名前'; nmLb.style.cssText = 'color:#4a5a74;';
     const nmIn = document.createElement('input'); nmIn.type = 'text'; nmIn.value = d.name;
     nmIn.className = 'val-input'; nmIn.style.cssText = 'flex:1;padding:5px 7px;font:inherit;';   // 色・枠は共通指定
-    nmIn.addEventListener('input', () => { d.name = nmIn.value.trim() || `詳細${d.id}`; d.renamed = true; });
+    nmIn.addEventListener('input', () => { d.name = nmIn.value.trim() || `詳細${d.id}`; d.renamed = true; scheduleHistory(); });
     nmIn.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') nmIn.blur(); });
     nmRow.append(nmLb, nmIn);
     const ft = document.createElement('div'); ft.style.cssText = 'display:flex;gap:8px;padding:10px 14px;border-top:1px solid #d7dee9;';
     const mk = (t, primary, danger) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = t;
       b.style.cssText = `padding:7px 14px;border-radius:7px;cursor:pointer;font:inherit;border:1px solid ${danger ? '#d0a0a0' : (primary ? '#2f7bff' : '#c4ccda')};background:${primary ? '#2f7bff' : '#fff'};color:${danger ? '#a33' : (primary ? '#fff' : '#33405c')};`; return b; };
     const del = mk('削除', false, true), back = mk('一覧へ'), cl = mk('閉じる', true);
-    del.onclick = () => { detailAreas.splice(i, 1); relabelDetails(); updateDetailBtn(); if (window.__toast) window.__toast('詳細図を削除しました'); openDetailList(); };
+    del.onclick = () => { detailAreas.splice(i, 1); relabelDetails(); updateDetailBtn(); recordHistory(); if (window.__toast) window.__toast('詳細図を削除しました'); openDetailList(); };
     back.onclick = () => openDetailList();
     cl.onclick = closeDetailPanels;
     ft.append(del, back); ft.style.justifyContent = 'flex-start'; const spacer = document.createElement('div'); spacer.style.flex = '1'; ft.append(spacer, cl);
