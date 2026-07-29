@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-J';
+const APP_VER = 'v0729-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3963,6 +3963,17 @@ function updateFollowPreview(clientX, clientY) {
   // 巻き戻されて「回転が効かない」ように見えた。2026-07-29 社長報告の一因）
   if (followQuat) followPreview.quaternion.copy(followQuat);
   else orientRotation(followPreview, followOrient, followRoll);
+  // ボス＝パイプ芯線の近くなら外径面へ吸い付くプレビュー（2026-07-29 社長要望）
+  if (isBossTool(followPreview)) {
+    const bf = bossFitAt(clientX, clientY);
+    if (bf) {
+      followPreview.quaternion.copy(bf.quat);
+      followPreview.position.copy(bf.surf).sub(followPreview.userData.backLocal.clone().applyQuaternion(bf.quat));
+      showInsDist(clientX, clientY, bf);
+      showInteractionMarkers(followPreview, bf.surf);
+      return;
+    }
+  }
   // 配管化②：挿入系アイテム＝吸着点（中点・交点など）が芯線上ならその点へ、無ければ画面距離で挿入予告
   if (INSERTABLE_TYPES[followPreview.userData.partType] && insertAxialOk(followPreview)) {
     const insT = insertTargetAt(clientX, clientY);
@@ -4027,7 +4038,7 @@ function cycleFollowOrientation(mode) {
 //   自動で付けて挿入する（クラス＝機器のレーティング、Sch＝パイプのSch、タイプ＝パレットのフランジ設定）。
 // ・レジューサーは径が合う側を既存パイプへ向け、反対側のパイプは新しい径で作り直す。
 // ・入らない長さなら理由を出して中止（何も置かない）。エルボ挿入（ルート変更）は対象外。
-const INSERTABLE_TYPES = { flange: 1, valve: 1, reducer: 1, flex: 1, sight: 1 };
+const INSERTABLE_TYPES = { flange: 1, valve: 1, flex: 1, sight: 1 };   // レジューサーの途中挿入は廃止（2026-07-29 社長指示）
 const INSERT_SNAP_PX = 16;      // 画面上でこの距離までパイプ芯線に近ければ「挿入」と解釈
 const INSERT_END_MARGIN = 1;    // 端から1mm以内は挿入しない（端への通常の突き合わせと区別）
 // 軸方向にまっすぐ通り抜ける部品か（安全弁=アングル形や偏心レジューサーは芯がずれるので対象外）
@@ -4184,7 +4195,7 @@ function ensureInsDistBox() {
 }
 function showInsDist(cx, cy, hit) {
   ensureInsDistBox();
-  _insPrev = { pipe: hit.pipe, tMm: hit.tMm };
+  _insPrev = { pipe: hit.pipe, tMm: hit.tMm, radial: hit.radial || null, quat: hit.quat || null };   // ボスは半径方向も控える
   const L = hit.pipe.userData.pipe.length;
   if (document.activeElement !== _insL) _insL.value = Math.round(hit.tMm);
   if (document.activeElement !== _insR) _insR.value = Math.round(L - hit.tMm);
@@ -4198,12 +4209,77 @@ function hideInsDist() {
   if (_insDistBox) _insDistBox.style.display = 'none';
   _insPrev = null;
 }
-// 数値入力（Enter）で指定位置へ挿入を確定
+// ---- ボス（SW BOSS）＝位置を決めたらパイプの外径面へ吸い付かせる（2026-07-29 社長要望）----
+// 軸方向の位置は挿入と同じ芯線判定、半径方向はカーソルが指している側。溶接端(-Y)を管表面へ
+//（見た目の隙間が出ないよう1mmだけ沈める）。距離ボックスの数値入力（Enter）にも対応。
+function isBossTool(o) { return !!(o && o.userData.partType === 'sw' && (o.userData.sw || {}).kind === 'BOSS'); }
+function bossFitAt(clientX, clientY) {
+  const hit = pipeAxisTargetAt(clientX, clientY);
+  if (!hit) return null;
+  const p = hit.pipe;
+  const aW = modelGroup.localToWorld(connModelPos(p, p.userData.backLocal).clone());
+  const bW = modelGroup.localToWorld(connModelPos(p, p.userData.faceLocal).clone());
+  const dW = bW.clone().sub(aW).normalize();
+  const axisW = aW.clone().addScaledVector(dW, hit.tMm / 1000);
+  const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+  const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+  const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, cam);
+  const q = ray.ray.origin.clone().addScaledVector(ray.ray.direction, axisW.clone().sub(ray.ray.origin).dot(ray.ray.direction));
+  const r0 = q.sub(axisW);
+  let radialW = r0.addScaledVector(dW, -r0.dot(dW));
+  if (radialW.lengthSq() < 1e-10) {                      // 軸方向から見た等の退化＝上向きに置く
+    radialW = new THREE.Vector3(0, 1, 0).addScaledVector(dW, -dW.y);
+    if (radialW.lengthSq() < 1e-10) radialW.set(1, 0, 0);
+  }
+  radialW.normalize();
+  // 管まわり45°刻みへスナップ（真上・斜め45°・真横…がきれいに決まる。カメラの傾きに引っ張られない）
+  {
+    let e1 = new THREE.Vector3(0, 1, 0).addScaledVector(dW, -dW.y);
+    if (e1.lengthSq() < 1e-10) e1 = new THREE.Vector3(1, 0, 0).addScaledVector(dW, -dW.x);
+    e1.normalize();
+    const e2 = dW.clone().cross(e1).normalize();
+    const ang = Math.round(Math.atan2(radialW.dot(e2), radialW.dot(e1)) / (Math.PI / 4)) * (Math.PI / 4);
+    radialW = e1.clone().multiplyScalar(Math.cos(ang)).addScaledVector(e2, Math.sin(ang)).normalize();
+  }
+  const outR = (FLG_BORE[p.userData.pipe.sizeA] || 60) / 2000;
+  const surfW = axisW.clone().addScaledVector(radialW, Math.max(outR - 0.001, 0));
+  const surf = modelGroup.worldToLocal(surfW.clone());
+  const radial = modelGroup.worldToLocal(surfW.clone().addScaledVector(radialW, 0.1)).sub(surf).normalize();
+  return { pipe: p, tMm: hit.tMm, surf, radial,
+           quat: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), radial) };
+}
+function bossPlaceAt(obj, pipe, tMm, radial, quat) {
+  const a = connModelPos(pipe, pipe.userData.backLocal), b = connModelPos(pipe, pipe.userData.faceLocal);
+  const d = b.clone().sub(a).normalize();
+  const outR = (FLG_BORE[pipe.userData.pipe.sizeA] || 60) / 2000;
+  const surf = a.clone().addScaledVector(d, tMm / 1000).addScaledVector(radial, Math.max(outR - 0.001, 0));
+  obj.quaternion.copy(quat);
+  obj.position.copy(surf).sub(obj.userData.backLocal.clone().applyQuaternion(quat));
+  obj.userData.placed = true; obj.userData.orient = 0; obj.userData.roll = 0;
+  modelGroup.add(obj); placedParts.push(obj);
+}
+// 数値入力（Enter）で指定位置へ挿入（またはボスの取り付け）を確定
 function commitInsertAt(pipe, tMm) {
   if (!followTool) return;
+  const prevRadial = _insPrev && _insPrev.radial, prevQuat = _insPrev && _insPrev.quat;
   const obj = followTool.tool.build();
   computeConns(obj);
-  if (!INSERTABLE_TYPES[obj.userData.partType] || !insertAxialOk(obj)) return;
+  if (isBossTool(obj)) {                                   // ボス＝外径面へ取り付け
+    if (!prevQuat || !prevRadial) return;
+    if (_insL) _insL.blur();
+    if (_insR) _insR.blur();
+    hideInsDist(); clearPairGhost();
+    bossPlaceAt(obj, pipe, tMm, prevRadial, prevQuat);
+    refreshItemList();
+    stopFollow();
+    selectPart(obj);
+    if (window.__scheduleHistory) window.__scheduleHistory();
+    return;
+  }
+  if (!INSERTABLE_TYPES[obj.userData.partType] || !insertAxialOk(obj)) {
+    obj.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
+    return;
+  }
   if (_insL) _insL.blur();
   if (_insR) _insR.blur();
   hideInsDist(); clearPairGhost();
@@ -4286,11 +4362,6 @@ function buildInsertTrain(obj, pipe) {
       train.push({ obj: fl1, flip: false }, { obj: g1, flip: false }, { obj, flip: false },
                  { obj: g2, flip: false }, { obj: fl2, flip: true });
     } else train.push({ obj, flip: false });                 // 規格外＝機器だけ挿入
-  } else if (u.partType === 'reducer') {
-    let flip = false;
-    if (u.reducer.sizeA === pu.sizeA) { flip = false; dsSize = u.reducer.sizeB; }        // 大端を上流へ
-    else if (u.reducer.sizeB === pu.sizeA) { flip = true; dsSize = u.reducer.sizeA; }    // 小端を上流へ（反転）
-    train.push({ obj, flip });
   } else {
     train.push({ obj, flip: false });
   }
