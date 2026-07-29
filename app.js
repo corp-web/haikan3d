@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-O';
+const APP_VER = 'v0729-P';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4215,6 +4215,12 @@ function hideInsDist() {
 function isBossTool(o) { return !!(o && o.userData.partType === 'sw' && (o.userData.sw || {}).kind === 'BOSS'); }
 // ボスの姿勢＝枝（ローカル+Y）を半径方向へ・ローカルZを管軸に揃える＝ひねりが出ない「通常の角度」
 //（setFromUnitVectorsだけだとひねりが不定で、特殊な角度に見える。2026-07-29 社長報告）
+// ボスの既定の取り付き側＝真上（縦管なら東）。カーソルの側では決めない（2026-07-29 社長指示）
+function bossDefaultRadial(d) {
+  let r = new THREE.Vector3(0, 1, 0).addScaledVector(d, -d.y);
+  if (r.lengthSq() < 1e-10) r = new THREE.Vector3(1, 0, 0).addScaledVector(d, -d.x);
+  return r.normalize();
+}
 function bossQuat(radial, axisDir) {
   const y = radial.clone().normalize();
   let z = axisDir.clone().addScaledVector(y, -axisDir.dot(y));
@@ -4231,17 +4237,7 @@ function bossFitAt(clientX, clientY) {
   const bW = modelGroup.localToWorld(connModelPos(p, p.userData.faceLocal).clone());
   const dW = bW.clone().sub(aW).normalize();
   const axisW = aW.clone().addScaledVector(dW, hit.tMm / 1000);
-  const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
-  const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
-  const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, cam);
-  const q = ray.ray.origin.clone().addScaledVector(ray.ray.direction, axisW.clone().sub(ray.ray.origin).dot(ray.ray.direction));
-  const r0 = q.sub(axisW);
-  let radialW = r0.addScaledVector(dW, -r0.dot(dW));
-  if (radialW.lengthSq() < 1e-10) {                      // 軸方向から見た等の退化＝上向きに置く
-    radialW = new THREE.Vector3(0, 1, 0).addScaledVector(dW, -dW.y);
-    if (radialW.lengthSq() < 1e-10) radialW.set(1, 0, 0);
-  }
-  radialW.normalize();   // 45°刻みへのスナップは廃止＝カーソルで指した側そのまま（2026-07-29 社長指示）
+  const radialW = bossDefaultRadial(dW);   // 既定＝真上（縦管なら東）。向きの調整は回転ボタンで
   const outR = (FLG_BORE[p.userData.pipe.sizeA] || 60) / 2000;
   const surfW = axisW.clone().addScaledVector(radialW, Math.max(outR - 0.001, 0));
   const surf = modelGroup.worldToLocal(surfW.clone());
@@ -4268,9 +4264,7 @@ function bossFitAtPoint(P, clientX, clientY) {
     if (!best || rd < best.rd) best = { pipe: p, d, axisPt, rd, tMm: t * 1000 };
   }
   if (!best) return bossFitAt(clientX, clientY);
-  let radial = P.clone().sub(best.axisPt);
-  if (radial.lengthSq() < 1e-10) return bossFitAt(clientX, clientY);   // 芯線上へスナップ＝側はカーソルで決める
-  radial.normalize();
+  const radial = bossDefaultRadial(best.d);   // 既定＝真上（縦管なら東）
   const outR = (FLG_BORE[best.pipe.userData.pipe.sizeA] || 60) / 2000;
   const surf = best.axisPt.clone().addScaledVector(radial, Math.max(outR - 0.001, 0));
   return { pipe: best.pipe, tMm: best.tMm, surf, radial, quat: bossQuat(radial, best.d) };
@@ -4860,12 +4854,15 @@ function stepPartRotate(part, mode) {
     const h = bossHostPipe(part);
     if (h) { rotatePipeAround(part, h.axisPt, new THREE.Quaternion().setFromAxisAngle(h.dir, Math.PI / 4)); return; }
   }
-  // ボスの「方位角」＝基部（溶接点）を支点に、自身の枝軸まわりで頭の向きを45°回す
-  //（従来は起点（頭側）支点の世界Y回転で、基部が管から外れて暴れていた。2026-07-29 社長報告）
+  // ボスの「方位角」＝立面角と90°違いの向きへ倒す（基部＝溶接点は固定。2026-07-29 社長指示）
   if (mode === 'az' && typeof isBossTool === 'function' && isBossTool(part) && part.userData.backLocal) {
-    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();
+    const n = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // 枝の向き
+    let el = new THREE.Vector3(-n.z, 0, n.x);                                            // 立面角の軸
+    if (el.lengthSq() < 1e-10) el = new THREE.Vector3(1, 0, 0).applyQuaternion(part.quaternion);
+    el.normalize();
+    const axis = n.clone().cross(el).normalize();   // 立面角の軸と90°違いの倒し軸
     const pivot = connModelPos(part, part.userData.backLocal);
-    rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, -Math.PI / 4));
+    rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 4));
     return;
   }
   const { pivot } = partRotPivotDir(part);
@@ -4905,9 +4902,13 @@ function pipeRotateSpinStart(mode) {
       return true;
     }
   }
-  // ボスの方位角スピナー＝基部支点・自身の枝軸まわり（頭の向きを連続で回す）
+  // ボスの方位角スピナー＝基部支点・立面角と90°違いの倒し軸（連続で倒す）
   if (mode === 'az' && typeof isBossTool === 'function' && isBossTool(part) && part.userData.backLocal) {
-    const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize().negate();
+    const n = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();
+    let el = new THREE.Vector3(-n.z, 0, n.x);
+    if (el.lengthSq() < 1e-10) el = new THREE.Vector3(1, 0, 0).applyQuaternion(part.quaternion);
+    el.normalize();
+    const axis = n.clone().cross(el).normalize();
     _pipeSpin = { part, pivot: connModelPos(part, part.userData.backLocal), axis, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
     return true;
   }
