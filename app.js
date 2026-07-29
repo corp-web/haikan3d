@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-V';
+const APP_VER = 'v0729-W';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -677,10 +677,46 @@ renderer.domElement.addEventListener('pointerup', e => {
   snapToDir(hits[0].object.userData.snapDir.clone());
 });
 
+// ---- 正対ビューの札（2026-07-29 社長採用：真上/真下/北南東西の正対中、どちらから見ているかを文字で言い切る） ----
+const VIEW_BADGES = [
+  { d: new THREE.Vector3(0, 1, 0),  t: '上から（平面）' },
+  { d: new THREE.Vector3(0, -1, 0), t: '下から（見上げ）' },
+  { d: new THREE.Vector3(0, 0, -1), t: '北から' },
+  { d: new THREE.Vector3(0, 0, 1),  t: '南から' },
+  { d: new THREE.Vector3(1, 0, 0),  t: '東から' },
+  { d: new THREE.Vector3(-1, 0, 0), t: '西から' },
+];
+let _viewBadgeEl = null, _viewBadgeTxt = '';
+function updateViewBadge(viewDir) {
+  let txt = '';
+  for (const b of VIEW_BADGES) { if (b.d.dot(viewDir) > 0.985) { txt = b.t; break; } }
+  if (!txt) {
+    if (_viewBadgeEl && _viewBadgeTxt) { _viewBadgeEl.style.display = 'none'; _viewBadgeTxt = ''; }
+    return;
+  }
+  if (!_viewBadgeEl) {
+    _viewBadgeEl = document.createElement('div');
+    _viewBadgeEl.id = 'viewBadge';
+    _viewBadgeEl.style.cssText = 'position:fixed;z-index:60;padding:3px 10px;border-radius:10px;'
+      + 'background:rgba(31,90,180,.94);color:#fff;font:bold 11px "Hiragino Kaku Gothic ProN","Meiryo",sans-serif;'
+      + 'pointer-events:none;transform:translateX(-50%);white-space:nowrap;display:none;';
+    document.body.appendChild(_viewBadgeEl);
+  }
+  const rc = renderer.domElement.getBoundingClientRect();
+  const r = gizmoRect();
+  const left = Math.round(rc.left + r.x0 + r.size / 2) + 'px';
+  const top = Math.round(rc.top + r.y0 + r.size + 2) + 'px';
+  if (txt !== _viewBadgeTxt) { _viewBadgeEl.textContent = txt; _viewBadgeTxt = txt; }
+  if (_viewBadgeEl.style.left !== left) _viewBadgeEl.style.left = left;
+  if (_viewBadgeEl.style.top !== top) _viewBadgeEl.style.top = top;
+  if (_viewBadgeEl.style.display !== 'block') _viewBadgeEl.style.display = 'block';
+}
+
 // ---- ギズモを画面右上に描く ----
 function renderGizmo() {
   const dir = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
   if (gizmo.updateDegenerate) gizmo.updateDegenerate(dir);
+  updateViewBadge(dir);
   gizmo.cam.position.copy(dir.clone().multiplyScalar(GIZMO_CAM_DIST));
   gizmo.cam.up.copy(camera.up);
   gizmo.cam.lookAt(0, 0, 0);
