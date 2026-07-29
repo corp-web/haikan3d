@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0729-I';
+const APP_VER = 'v0729-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3972,11 +3972,18 @@ function updateFollowPreview(clientX, clientY) {
       const dir = face.clone().sub(back).normalize();
       const pt = back.clone().addScaledVector(dir, insT.tMm / 1000);
       followPreview.quaternion.copy(insT.pipe.quaternion);
-      const mid = followPreview.userData.faceLocal.clone().add(followPreview.userData.backLocal)
-        .multiplyScalar(0.5).applyQuaternion(followPreview.quaternion);
-      followPreview.position.copy(pt).sub(mid);   // 軸方向の中央を芯線上の点へ
-      const pgs = pairGhostSpans();
-      if (pgs) followPreview.position.addScaledVector(dir, -(pgs.tg + pgs.s2) / 2);   // 合いフランジ＝列全体を中央に
+      const fu = followPreview.userData;
+      const sopFl = fu.partType === 'flange' && ['SOP', 'LJ'].includes((fu.flange || {}).type);
+      if (sopFl) {
+        // 面基準（案A）：片フランジ＝フェイス面を指定点へ／合い＝ガスケット中央を指定点へ
+        const P = pairGhostSpans();
+        const ofs = P ? P.tg / 2 : 0;
+        followPreview.position.copy(pt).addScaledVector(dir, -ofs)
+          .sub(fu.faceLocal.clone().applyQuaternion(followPreview.quaternion));
+      } else {
+        const mid = fu.faceLocal.clone().add(fu.backLocal).multiplyScalar(0.5).applyQuaternion(followPreview.quaternion);
+        followPreview.position.copy(pt).sub(mid);   // 軸方向の中央を芯線上の点へ
+      }
       updatePairGhost();                          // 2枚目とガスケットの影も出す
       showInsDist(clientX, clientY, insT);        // 両端（曲がり・分岐）までの距離を表示（入力で確定も可）
       showInteractionMarkers(followPreview, pt);
@@ -3988,24 +3995,13 @@ function updateFollowPreview(clientX, clientY) {
   const tgt = resolveTarget(clientX, clientY, null);
   if (!tgt) return;
   // 相手の機点へ吸着した時は相手の向きへ自動で合わせる（2026-07-29 社長要望。
-  // 手動で回した後（followQuat あり）は本人の向きを尊重する）
-  let mateOfs = null;
+  // 手動で回した後（followQuat あり）は本人の向きを尊重する）。
+  // 位置は面基準＝フェイスを吸着点そのものに置く（控えは図では見せず切寸表で引く。2026-07-29 案A採用）
   if (tgt.snapped && !followQuat && MATE_TYPES[followPreview.userData.partType]) {
     const mi = mateInfoAt(tgt.point);
-    if (mi) {
-      followPreview.quaternion.copy(mi.q);
-      // SOP/LJフランジをパイプ端へ＝控えぶんフェイスを外へ出し、管を実寸で差し込む（2026-07-29 社長指示）
-      if (followPreview.userData.partType === 'flange' && mi.part.userData.partType === 'pipe') {
-        const fo = followPreview.userData.flange || {};
-        if (fo.type === 'SOP' || fo.type === 'LJ') {
-          const pu2 = mi.part.userData.pipe;
-          mateOfs = mi.n.clone().multiplyScalar(weldValsOf(pu2.sizeA, pu2.sch).sop / 1000);
-        }
-      }
-    }
+    if (mi) followPreview.quaternion.copy(mi.q);
   }
   setPartByOrigin(followPreview, tgt.point);
-  if (mateOfs) followPreview.position.add(mateOfs);
   updatePairGhost();   // 合いフランジ＝通常配置のプレビューでも2枚＋ガスケットで見せる
   showInteractionMarkers(followPreview, tgt.snapped ? tgt.point : null);
 }
@@ -4298,8 +4294,16 @@ function buildInsertTrain(obj, pipe) {
   } else {
     train.push({ obj, flip: false });
   }
+  // 面基準（案A・2026-07-29 社長採用）：SOP/LJフランジは長さを消費しない（ハブは管に被さり、フェイスが区切り）。
+  // 消費するのはガスケット厚・バルブ等の面間・WN/SWフランジの全高だけ＝面間の寸法が図面のまま揃う。
   let span = 0;
-  for (const it of train) { computeConns(it.obj); span += (it.obj.userData.faceLocal.y - it.obj.userData.backLocal.y) * 1000; }
+  for (const it of train) {
+    computeConns(it.obj);
+    const u2 = it.obj.userData;
+    it.sopFl = u2.partType === 'flange' && ['SOP', 'LJ'].includes((u2.flange || {}).type);
+    it.adv = it.sopFl ? 0 : (u2.faceLocal.y - u2.backLocal.y) * 1000;
+    span += it.adv;
+  }
   return { train, span, dsSize };
 }
 // 挿入の実行。成功=true。失敗（長さ不足）はトーストを出して false（同伴部品は破棄）。
@@ -4314,17 +4318,6 @@ function insertItemIntoPipe(obj, hit) {
     if (window.__toast) window.__toast(`挿入できません：挿入には${Math.ceil(plan.span)}mm必要です（パイプ${Math.round(L)}mm）。もう少し中寄りに置くか、パイプを伸ばしてください`);
     return false;
   }
-  // SOP/LJフランジのハブ側は、管を実際に「フェイス−控え」まで差し込む（2026-07-29 社長指示。
-  // 従来は管端がハブ端（フェイスからフランジ厚の所）で切れていた）。控えはweldValsOfのSOP控え。
-  const sopExtOf = (fl) => {
-    const o = fl.userData.flange || {};
-    if (o.type !== 'SOP' && o.type !== 'LJ') return 0;
-    const span = (fl.userData.faceLocal.y - fl.userData.backLocal.y) * 1000;
-    return Math.max(span - weldValsOf(pu.sizeA, pu.sch).sop, 0);
-  };
-  const firstEl = plan.train[0], lastEl = plan.train[plan.train.length - 1];
-  const extUp = (firstEl.obj.userData.partType === 'flange' && !firstEl.flip) ? sopExtOf(firstEl.obj) : 0;
-  const extDown = (lastEl.obj.userData.partType === 'flange' && lastEl.flip) ? sopExtOf(lastEl.obj) : 0;
   const back = connModelPos(pipe, pipe.userData.backLocal).clone();
   const face = connModelPos(pipe, pipe.userData.faceLocal).clone();
   const dir = face.clone().sub(back).normalize();
@@ -4334,36 +4327,39 @@ function insertItemIntoPipe(obj, hit) {
     const o = it.obj, q = pipe.quaternion.clone();
     if (it.flip) q.multiply(FLIP);
     o.quaternion.copy(q);
-    const entry = it.flip ? o.userData.faceLocal : o.userData.backLocal;   // 上流側に来る機点
-    o.position.copy(back).addScaledVector(dir, s / 1000).sub(entry.clone().applyQuaternion(q));
+    // 面基準：SOP/LJフランジはフェイスを現在位置sへ置く（体は管に被さる・長さ消費0）。
+    // それ以外は上流側の機点（flip時はフェイス）をsへ置き、全長ぶん進む
+    const anchor = (it.sopFl || it.flip) ? o.userData.faceLocal : o.userData.backLocal;
+    o.position.copy(back).addScaledVector(dir, s / 1000).sub(anchor.clone().applyQuaternion(q));
     o.userData.placed = true; o.userData.orient = 0; o.userData.roll = 0;
     if (pipe.userData.groupId != null) o.userData.groupId = pipe.userData.groupId;
     modelGroup.add(o); placedParts.push(o);
-    s += (o.userData.faceLocal.y - o.userData.backLocal.y) * 1000;
+    s += it.adv;
   }
-  // 下流側の新しいパイプ（レジューサー挿入なら新しい径。フランジのハブへは差し込みぶん延長）
-  const p2 = makePipe({ sizeA: plan.dsSize || pu.sizeA, sch: pu.sch, length: L2 + extDown });
+  // 下流側の新しいパイプ（レジューサー挿入なら新しい径）
+  const p2 = makePipe({ sizeA: plan.dsSize || pu.sizeA, sch: pu.sch, length: L2 });
   computeConns(p2);
   p2.quaternion.copy(pipe.quaternion);
-  p2.position.copy(back).addScaledVector(dir, (L1 + plan.span - extDown + (L2 + extDown) / 2) / 1000);
+  p2.position.copy(back).addScaledVector(dir, (L1 + plan.span + L2 / 2) / 1000);
   p2.userData.placed = true; p2.userData.orient = pipe.userData.orient || 0; p2.userData.roll = pipe.userData.roll || 0;
   if (pipe.userData.mat) p2.userData.mat = pipe.userData.mat;
   if (pipe.userData.groupId != null) p2.userData.groupId = pipe.userData.groupId;
   modelGroup.add(p2); placedParts.push(p2);
-  rebuildPipe(pipe, L1 + extUp, 'back');                     // 上流側＝背面端は不動・ハブへは差し込みぶん延長
+  rebuildPipe(pipe, L1, 'back');                             // 上流側＝元のパイプを短縮（背面端は不動）
   if (typeof _idleSig !== 'undefined') _idleSig = null;
   const nm = (typeof partColumns === 'function') ? partColumns(obj).kind : 'アイテム';
-  const extra = plan.train.length > 1 ? `（フランジ・ガスケット込み${Math.round(plan.span)}mm）` : '';
-  if (window.__toast) window.__toast(`${nm}を挿入し、パイプを ${Math.round(L1 + extUp)}mm＋${Math.round(L2 + extDown)}mm に分割しました${extra}${plan.dsSize ? `。下流は${plan.dsSize}` : ''}`);
+  const extra = plan.span > 0.01 ? `（消費${Math.round(plan.span)}mm）` : '（面基準＝長さ消費なし）';
+  if (window.__toast) window.__toast(`${nm}を挿入し、パイプを ${Math.round(L1)}mm＋${Math.round(L2)}mm に分割しました${extra}${plan.dsSize ? `。下流は${plan.dsSize}` : ''}`);
   if (window.__scheduleHistory) window.__scheduleHistory();
   return true;
 }
 
 // ===== 配管化③：パイプ切寸（現場でそのまま切れる長さ）=====
-// 各端の接続先を機点の一致（1.5mm）で判定し、切寸＝図面長さ−BWギャップ÷2＋差込み深さ を計算する。
+// 面基準（案A・2026-07-29 社長採用）：図面のパイプは常に「フェイス面まで」描く。控えは図では見せず、
+// ここで切寸に反映する＝切寸＝図面長さ−SOP控え−BWギャップ÷2。
 //  ・BW（エルボ・ティー・レジューサー・キャップ・他のパイプ・WNフランジの首）＝ルートギャップの半分を引く。
-//    ギャップ0mmの時は縮み代として+0.5mm（2026-07-29 社長の流儀。例：25A SGP 面→芯100・ギャップ3mm
-//    ＝100−7.5−38.1−1.5＝52.9→53mm）
+//    ギャップ0mmの時は縮み代として+0.5mm。例：フランジ→エルボ 25A SGP 面→芯100・ギャップ3mm
+//    ＝パイプ図面61.9（=100−38.1）→ 61.9−7.5−1.5＝52.9→53mm（社長の検算と一致）
 //  ・SOP/LJフランジの背面＝差し込み（フランジ全高−フェイスからの控え）ぶん長く
 //  ・SW（差込み溶接継手・SWフランジ・SW形バルブ）＝ソケット深さ−浮かし1.6mmぶん長く（JIS B2316の流儀）
 //  ・どこにも繋がっていない端・ガスケット面など＝そのまま
@@ -4391,6 +4387,12 @@ function pipeEndJoint(pipe, endLocal) {
     if (connModelPos(pipe, otherLocal).clone().sub(P).dot(d) > 0) continue;
     const sop = weldValsOf(pp.sizeA, pp.sch).sop;
     return { kind: 'SOP', with: o.type, depth: Math.round(((span * 1000 - sop) - t * 1000) * 10) / 10 };
+  }
+  // フランジのフェイス面上で終わる管（面基準の下流側など）＝面への突き当て。
+  // 同じ点でもう一方のパイプ端と重なっていても「パイプ同士のBW」に誤判定しない（2026-07-29 案A対応）
+  for (const q of placedParts) {
+    if (q === pipe || q.userData.hidden || q.userData.partType !== 'flange') continue;
+    if (connModelPos(q, q.userData.faceLocal).distanceTo(P) <= TOL) return { kind: 'none' };
   }
   for (const q of placedParts) {
     if (q === pipe || q.userData.hidden || !q.userData.faceLocal) continue;
@@ -8444,11 +8446,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const pipes = placedParts.filter(p => p.userData.partType === 'pipe' && !p.userData.hidden);
     if (pipes.length) {
       const lbl = e => e.kind === 'BW' ? `BW(${e.with || ''})`
-                    : e.kind === 'SOP' ? `${e.with || 'SOP'}差込${e.depth != null ? Math.round(e.depth * 10) / 10 : ''}`
+                    : e.kind === 'SOP' ? `${e.with || 'SOP'}(${e.depth != null ? Math.round(e.depth * 10) / 10 : ''})`
                     : e.kind === 'SW' ? `SW差込${e.depth != null ? Math.round(e.depth * 10) / 10 : ''}`
                     : e.kind === 'none' ? '突き当て' : '—';
       lines.push('');
-      lines.push(esc('パイプ切寸表（切寸＝図面長さ−BWルートギャップ÷2＋差込み深さ。ギャップ0は+0.5。⚙設定→溶接・切寸の設定で調整可）'));
+      lines.push(esc('パイプ切寸表（面基準：切寸＝図面長さ−SOP控え−BWルートギャップ÷2。ギャップ0は+0.5。⚙設定→溶接・切寸の設定で調整可）'));
       lines.push(['#', '呼び径', 'Sch', '図面長さ(mm)', '端A', '端B', '切寸(mm)', 'ギャップ(mm)', 'SOP控え(mm)'].join(','));
       pipes.forEach((p, i) => {
         const c = pipeCutInfo(p);
@@ -12752,7 +12754,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
             '<select id="weldSch" style="background:#fff;border:1px solid #c4ccda;border-radius:5px;padding:2px 4px"></select>' +
             '<span style="flex:1"></span><button id="weldReset" style="border:none;border-radius:6px;padding:3px 8px;background:#e2e7f0;cursor:pointer;font:inherit">このSchを既定に戻す</button>' +
             '<button id="weldClose" style="border:none;border-radius:6px;padding:3px 10px;background:#2f6fd8;color:#fff;cursor:pointer;font:inherit">閉じる</button></div>' +
-            '<div style="opacity:.75">切寸＝図面長さ−BWギャップ÷2＋差込み深さ（ギャップ0は+0.5）。SOP控え＝フェイス面からの控え（既定＝肉厚×1.414+3）。変えた値だけ記憶・青太字</div>' +
+            '<div style="opacity:.75">面基準：切寸＝図面長さ−SOP控え−BWギャップ÷2（ギャップ0は+0.5）。控え既定＝肉厚×1.414+3。変えた値だけ記憶・青太字</div>' +
             '<div style="overflow:auto"><table id="weldTblUI" style="border-collapse:collapse;width:100%"></table></div>';
           document.body.appendChild(dlg);
           schSel = dlg.querySelector('#weldSch');
