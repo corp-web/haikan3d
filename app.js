@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-L';
+const APP_VER = 'v0730-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4894,7 +4894,7 @@ function cycleMoveOrientation(mode) {   // 自由移動中の3軸45°送り（20
 function cycleSelectedOrientation(mode) { pipeRotate(mode); }
 // ---- パイプ・エルボの回転：線分と同じ仕様（起点まわりに45°／Shift=鉛直／垂直時クロス／長押しで角度スピナー） ----
 let _pipeRotAxis = null, _pipeTipAxis = null, _pipeTipMode = false;
-function resetPipeRotState() { _pipeRotAxis = null; _pipeTipAxis = null; _pipeTipMode = false; _elevStepAxis = null; _elevStepFor = null; }
+function resetPipeRotState() { _pipeRotAxis = null; _pipeTipAxis = null; _pipeTipMode = false; _elevStepAxis = null; _elevStepFor = null; _azStepAxis = null; _azStepFor = null; }
 // SW継手の回転・向き挙動は対応するBW形状に合わせる（90E/45E=エルボ／T/TR/CROSS=ティー／CAP=キャップ／その他=レジューサ）。
 function swShapeOf(part) {
   if (!part || part.userData.partType !== 'sw') return null;
@@ -5044,6 +5044,7 @@ function partAxisFor(part, mode) {
   return new THREE.Vector3().crossVectors(n, v).normalize();
 }
 let _elevStepAxis = null, _elevStepFor = null;   // 立面角ボタン連打中の固定軸（真上・真下を跨いで一周できる）
+let _azStepAxis = null, _azStepFor = null;       // 方位角ボタン連打中の固定軸（寝姿から起きても同じ向きに回り続ける）
 function stepPartRotate(part, mode) {
   mode = rotModeOf(mode);
   // ボスの「回転」＝親パイプの中心（軸）まわりに45°＝外周の上を回って向きを変える（2026-07-29 社長要望）
@@ -5066,12 +5067,16 @@ function stepPartRotate(part, mode) {
   const { pivot } = partRotPivotDir(part);
   let axis, ang = Math.PI / 4;
   if (mode === 'az') {
-    axis = partAxisFor(part, 'az'); ang = -Math.PI / 4;      // 面の縦軸まわり−45°＝方位角+45°（立ち姿では北→東）
+    // 方位角＝常に右回転（上から見て時計回り。2026-07-30 社長仕様）。連打中は軸をラッチ＝一周同じ向き
+    if (_azStepFor !== part || !_azStepAxis) { _azStepAxis = partAxisFor(part, 'az'); _azStepFor = part; }
+    axis = _azStepAxis; ang = -Math.PI / 4;
     _elevStepAxis = null; _elevStepFor = null;               // 方位を変えたら立面の固定軸は作り直す
   } else if (mode === 'el') {
-    // 連打中は最初に決めた軸で回し続ける＝頂点で軸が反転して90°⇄45°を往復する不具合の対策（2026-07-29 社長報告）
+    // 立面角＝常に選択面に対して同じ向きに回る（起こす方向から一周。2026-07-30 社長仕様＝往復しない）。
+    // 連打中は最初に決めた軸で回し続ける＝頂点で軸が反転して往復する不具合の対策
     if (_elevStepFor !== part || !_elevStepAxis) { _elevStepAxis = partAxisFor(part, 'el'); _elevStepFor = part; }
     axis = _elevStepAxis;
+    _azStepAxis = null; _azStepFor = null;                   // 立面を動かしたら方位の固定軸は作り直す
   } else {
     axis = partAxisFor(part, mode);   // 回転＝フェイス法線（ロールでは法線が変わらないので固定不要）
   }
