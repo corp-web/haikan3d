@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-E';
+const APP_VER = 'v0730-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1465,6 +1465,10 @@ function makeBentPipe(opts) {
   g.userData.partType = 'bentpipe';
   g.userData.bent = { ...o };
   g.userData.gripLocal = g.userData.backLocal.clone();   // 起点＝始端（工作点は遠方になるため既定にしない）
+  // 背面端の法線を外向きへ反転（makeBendCoreは進行方向＝管の内向きで返す・エルボの流儀）。
+  // 直管の端と同じ「端の法線は管の外へ向く」に揃え、末端フランジの向き合わせ（mate）が
+  // 両端とも正しくなる（背側だけ片フランジが逆向き・合いフランジから管がはみ出す不具合の真因。2026-07-30 社長報告）
+  g.userData.backNormal = g.userData.backNormal.clone().negate();
   return g;
 }
 
