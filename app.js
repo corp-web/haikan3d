@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-J';
+const APP_VER = 'v0730-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5044,20 +5044,10 @@ function stepPartRotate(part, mode) {
     rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 4));
     return;
   }
-  // フランジ等が真上/真下を向いた姿勢（フェイス法線が鉛直）では、方位角＝世界Yまわりが
-  // 回転（法線まわり）と同じになってしまう。ボスと同じ「起点中心に世界方位で振る」へ切替える：
-  // 方位角＝東西へ振る（南北軸まわり）／立面角＝南北へ振る（東西軸まわり）（2026-07-29 社長要望）
-  if ((mode === 'az' || mode === 'el') && part.userData.partType !== 'pipe') {
-    const nUp = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion);
-    if (Math.abs(nUp.y) > 0.985) {
-      const axis2 = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
-      const { pivot } = partRotPivotDir(part);
-      rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis2, Math.PI / 4));
-      if (mode === 'el') { _elevStepAxis = axis2; _elevStepFor = part; }   // 連打も同じ軸で回し続ける
-      else { _elevStepAxis = null; _elevStepFor = null; }
-      return;
-    }
-  }
+  // 方位角・立面角・回転は常に「今向いているフェイス面」を基準にする（2026-07-30 社長仕様）。
+  // 真上/真下向きでも特別扱いしない（旧v0729-Uの世界方位振りは廃止）：
+  //  方位角＝鉛直軸まわり（面の向き直し。寝ている面では面内の向き＝プロパティの方位角と同じ）
+  //  立面角＝面の水平直交軸まわり（寝ている面はローカルXまわり）／回転＝フェイス法線まわり（中芯は法線軸上）
   const { pivot } = partRotPivotDir(part);
   let axis, ang = Math.PI / 4;
   if (mode === 'az') {
@@ -5102,16 +5092,7 @@ function pipeRotateSpinStart(mode) {
     _pipeSpin = { part, pivot: pivot.clone(), axis, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
     return true;
   }
-  // 真上/真下を向いた部品（パイプ以外）のスピナーもボスと同じ世界方位の振りへ（ボタンと同挙動）
-  if ((mode === 'az' || mode === 'el') && part.userData.partType !== 'pipe') {
-    const nUp = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion);
-    if (Math.abs(nUp.y) > 0.985) {
-      const axis2 = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
-      const { pivot } = partRotPivotDir(part);
-      _pipeSpin = { part, pivot: pivot.clone(), axis: axis2, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
-      return true;
-    }
-  }
+  // スピナーも常に面基準（2026-07-30 社長仕様。旧v0729-Uの世界方位振りは廃止）
   const { pivot } = partRotPivotDir(part);
   const n360 = v => ((v % 360) + 360) % 360;
   let axis, baseDeg = 0;   // スピナーの初期表示角＝プロパティの方位角/立面角/回転と同じ絶対角
