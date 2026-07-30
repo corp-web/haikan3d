@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-K';
+const APP_VER = 'v0730-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5021,12 +5021,27 @@ function partRotAxis(part, shift, dirRef) {   // エルボ/ティー：右クリ
 // 互換：mode に従来の boolean が来たら false='az'（旧・向き）／true='roll'（旧・回転）と読む。
 function rotModeOf(m) { return m === true ? 'roll' : m === false ? 'az' : (m || 'az'); }
 function partAxisFor(part, mode) {
-  const n = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();   // フェイス法線
+  // 基準となる面＝「今選んでいる起点の端面」（2026-07-30 社長仕様：エルボ等は選択端の面。
+  // 工作点（角）を起点にしている時はフェイス側の面）。フランジ等はローカル+Y＝従来どおり
+  const u = part.userData;
+  let n;
+  const gl = (typeof gripLocalOf === 'function') ? gripLocalOf(part) : null;
+  if (gl && u.cornerLocal && gl.distanceTo(u.cornerLocal) < 1e-6 && u.faceNormal) {
+    n = u.faceNormal.clone().applyQuaternion(part.quaternion).normalize();
+  } else if (typeof gripFaceNormal === 'function') {
+    n = gripFaceNormal(part);
+  } else {
+    n = new THREE.Vector3(0, 1, 0).applyQuaternion(part.quaternion).normalize();
+  }
   if (mode === 'roll') return n;
-  // 立面角＝n×Y（方位の水平直交軸。+45°で起きる）。真上/真下はローカルXで代用
-  const a = new THREE.Vector3(-n.z, 0, n.x);
-  if (a.lengthSq() > 1e-12) return a.normalize();
-  return new THREE.Vector3(1, 0, 0).applyQuaternion(part.quaternion).normalize();
+  // 面の「縦・横」：面内で世界の鉛直に最も近い軸v（縦）と、それに直交する面内軸h（横）。
+  // 方位角＝vまわり＝面が水平方向に動く／立面角＝hまわり＝面が垂直方向に動く（2026-07-30 社長仕様）。
+  // 面が寝ている（法線が鉛直）時はvが決まらないので、部品ローカルZを縦の代わりに使う＝必ず面が動く
+  let v = new THREE.Vector3(0, 1, 0).addScaledVector(n, -n.y);
+  if (v.lengthSq() < 1e-6) v = new THREE.Vector3(0, 0, 1).applyQuaternion(part.quaternion);
+  v.normalize();
+  if (mode === 'az') return v;
+  return new THREE.Vector3().crossVectors(n, v).normalize();
 }
 let _elevStepAxis = null, _elevStepFor = null;   // 立面角ボタン連打中の固定軸（真上・真下を跨いで一周できる）
 function stepPartRotate(part, mode) {
@@ -5051,7 +5066,7 @@ function stepPartRotate(part, mode) {
   const { pivot } = partRotPivotDir(part);
   let axis, ang = Math.PI / 4;
   if (mode === 'az') {
-    axis = new THREE.Vector3(0, 1, 0); ang = -Math.PI / 4;   // 世界Yの−45°＝方位角+45°（北→東）
+    axis = partAxisFor(part, 'az'); ang = -Math.PI / 4;      // 面の縦軸まわり−45°＝方位角+45°（立ち姿では北→東）
     _elevStepAxis = null; _elevStepFor = null;               // 方位を変えたら立面の固定軸は作り直す
   } else if (mode === 'el') {
     // 連打中は最初に決めた軸で回し続ける＝頂点で軸が反転して90°⇄45°を往復する不具合の対策（2026-07-29 社長報告）
@@ -5097,7 +5112,7 @@ function pipeRotateSpinStart(mode) {
   const n360 = v => ((v % 360) + 360) % 360;
   let axis, baseDeg = 0;   // スピナーの初期表示角＝プロパティの方位角/立面角/回転と同じ絶対角
   if (mode === 'az') {
-    axis = new THREE.Vector3(0, -1, 0);   // スピナー＋方向＝方位角＋（北→東）
+    axis = partAxisFor(part, 'az').negate();   // 面の縦軸まわり。スピナー＋方向＝方位角＋（立ち姿では北→東）
     if (window.__partFaceBearing) baseDeg = n360(window.__partFaceBearing(part));
   } else {
     axis = partAxisFor(part, mode);

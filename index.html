@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0730K — SKT-HD ♦</title>
+<title>配管3D v0730L — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260730">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0730K">
+<meta name="apple-mobile-web-app-title" content="配管3D v0730L">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -358,38 +358,32 @@
   body.light #saveMenu button { background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #saveMenu button:hover { background: rgba(31,111,208,.10); border-color: #aebcd6; }
 
-  /* 展開＝取消を中心に「一周の円」で囲む（2026-07-30 社長指示）。取消は左角から円の中心（少し右上）へ
-     ずれて開き、たたむと左角へ戻る（全ボタンが取消へ吸い込まれる） */
+  /* 下端（取消ボタン）を固定点にした縦並び。折りたたみは取消の位置へ畳み、そこから開く
+     （円弧・一周など試作の末、2026-07-30 社長指示で元の縦一列に確定）。
+     gapではなくmargin-bottomで間隔を作る＝たたむ時に間隔もアニメーションできる */
   #touchCtrl { position: fixed; left: 12px; bottom: 58px; z-index: 28; display: none;
-    width: 200px; height: 200px; pointer-events: none; }
-  body.tc-on #touchCtrl { display: block; }
-  #touchCtrl button { position: absolute; left: 0; bottom: 0; pointer-events: auto;
-    transition: left .42s cubic-bezier(.25,.9,.3,1), bottom .42s cubic-bezier(.25,.9,.3,1),
-                transform .42s cubic-bezier(.25,.9,.3,1), opacity .3s ease;
+    flex-direction: column; gap: 0; }
+  #touchCtrl button { margin-bottom: 9px; }
+  #touchCtrl button:last-child { margin-bottom: 0; }
+  body.tc-on #touchCtrl { display: flex; }
+  #touchCtrl button { flex: none; overflow: hidden;
+    transition: height .42s cubic-bezier(.25,.9,.3,1), margin-bottom .42s cubic-bezier(.25,.9,.3,1),
+                transform .42s cubic-bezier(.25,.9,.3,1), opacity .3s ease, border-width .42s ease;
     width: 54px; height: 54px; border-radius: 50%; border: 1px solid #3c4f7e;
     background: rgba(20,28,51,.92); color: #dbe4f3; cursor: pointer; user-select: none;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 1px; box-shadow: 0 3px 10px rgba(0,0,0,.45); font-family: inherit;
     -webkit-tap-highlight-color: transparent; touch-action: none;
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }   /* iPad：長押しでテキスト選択や吹き出しを出さない（角度スピナーの長押しを妨げない） */
-  /* 一周の円（中心＝取消(72,72)・半径72px・60°刻み）。#touchCtrl button より強く効くよう二重IDで指定 */
-  #touchCtrl #tcAz    { left: 72px;  bottom: 144px; }   /* 90°=真上 */
-  #touchCtrl #tcElev  { left: 134px; bottom: 108px; }   /* 30° */
-  #touchCtrl #tcRoll  { left: 134px; bottom: 36px; }    /* 330° */
-  #touchCtrl #tcDel   { left: 72px;  bottom: 0px; }     /* 270°=真下 */
-  #touchCtrl #tcCtrl  { left: 10px;  bottom: 36px; }    /* 210° */
-  #touchCtrl #tcShift { left: 10px;  bottom: 108px; }   /* 150° */
-  #touchCtrl #tcEsc   { left: 72px;  bottom: 72px; z-index: 2; }   /* 展開時＝円の中心（左角から右上へずれる） */
-  #touchCtrl.collapsed #tcEsc { left: 0; bottom: 0; }              /* たたみ時＝左角へ戻る */
   #touchCtrl button:active { background: rgba(47,123,255,.40); border-color: #2f7bff; }
   #touchCtrl button.on { background: rgba(47,123,255,.55); border-color: #2f7bff; box-shadow: 0 0 0 2px rgba(47,123,255,.5); }
   #touchCtrl button.on .lb { color: #fff; }
   #touchCtrl button .ic { font-size: 21px; line-height: 1; }
   #touchCtrl button .lb { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: #aebfe0; }
-  /* 取消長押しでボタンを1個に集約＝取消ボタン（中心・位置は不動）へ吸い込まれるように畳む */
+  /* 取消長押しでボタン列を1個に集約＝取消ボタン（最下段・位置は不動）へ吸い込まれるように畳む */
   #touchCtrl.collapsed button:not(#tcEsc) {
-    left: 0; bottom: 0; opacity: 0; pointer-events: none;
-    transform: scale(.4); }
+    height: 0; margin-bottom: 0; opacity: 0; border-width: 0; pointer-events: none;
+    transform: translateY(26px) scale(.55); }
   #touchCtrl .tc-zoom { font-size: 26px; font-weight: 700; }
 
   /* ===== ホワイトモード（body.light）：主要UIを明色に ===== */
