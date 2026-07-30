@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0730I — SKT-HD ♦</title>
+<title>配管3D v0730J — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260730">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0730I">
+<meta name="apple-mobile-web-app-title" content="配管3D v0730J">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -358,10 +358,10 @@
   body.light #saveMenu button { background: #fff; color: #2a3550; border-color: #c4ccda; }
   body.light #saveMenu button:hover { background: rgba(31,111,208,.10); border-color: #aebcd6; }
 
-  /* 取消ボタンを中心（不動点）に、1/4円弧の扇形3段で開く（2026-07-30 社長指示）：
-     中心＝取消 → 内弧＝Shift・Ctrl・削除 → 外弧＝方位角・立面角・回転。折りたたみは取消へ吸い込む */
+  /* 取消ボタンを中心（不動点）に、一重の1/4円弧で囲む（2026-07-30 社長指示：内弧/外弧の2段は廃止）。
+     折りたたみは取消へ吸い込む */
   #touchCtrl { position: fixed; left: 12px; bottom: 58px; z-index: 28; display: none;
-    width: 202px; height: 202px; pointer-events: none; }
+    width: 246px; height: 246px; pointer-events: none; }
   body.tc-on #touchCtrl { display: block; }
   #touchCtrl button { position: absolute; left: 0; bottom: 0; pointer-events: auto;
     transition: left .42s cubic-bezier(.25,.9,.3,1), bottom .42s cubic-bezier(.25,.9,.3,1),
@@ -372,14 +372,14 @@
     gap: 1px; box-shadow: 0 3px 10px rgba(0,0,0,.45); font-family: inherit;
     -webkit-tap-highlight-color: transparent; touch-action: none;
     -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }   /* iPad：長押しでテキスト選択や吹き出しを出さない（角度スピナーの長押しを妨げない） */
-  /* 扇形3段の配置（90°=真上・45°=斜め・0°=真横。内弧r=80px／外弧r=145px）。
+  /* 一重の1/4円弧（中心＝取消・半径190px・90°=真上→0°=真横を18°刻み）。
      #touchCtrl button より強く効くよう二重IDで指定 */
-  #touchCtrl #tcShift { left: 0px;   bottom: 80px; }
-  #touchCtrl #tcCtrl  { left: 57px;  bottom: 57px; }
-  #touchCtrl #tcDel   { left: 80px;  bottom: 0px; }
-  #touchCtrl #tcAz    { left: 0px;   bottom: 145px; }
-  #touchCtrl #tcElev  { left: 103px; bottom: 103px; }
-  #touchCtrl #tcRoll  { left: 145px; bottom: 0px; }
+  #touchCtrl #tcAz    { left: 0px;   bottom: 190px; }
+  #touchCtrl #tcElev  { left: 59px;  bottom: 181px; }
+  #touchCtrl #tcRoll  { left: 112px; bottom: 154px; }
+  #touchCtrl #tcShift { left: 154px; bottom: 112px; }
+  #touchCtrl #tcCtrl  { left: 181px; bottom: 59px; }
+  #touchCtrl #tcDel   { left: 190px; bottom: 0px; }
   #touchCtrl #tcEsc   { left: 0; bottom: 0; z-index: 2; }
   #touchCtrl button:active { background: rgba(47,123,255,.40); border-color: #2f7bff; }
   #touchCtrl button.on { background: rgba(47,123,255,.55); border-color: #2f7bff; box-shadow: 0 0 0 2px rgba(47,123,255,.5); }
