@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-M';
+const APP_VER = 'v0730-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8848,9 +8848,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const xlineObjs = new Set();
     if (window.__annXlineObjs) for (const o of window.__annXlineObjs()) o.traverse(c => xlineObjs.add(c));
     const annBackup = [];
-    annGroup.traverse(o => {
+    const annSeen = new Set();   // 破線・一点鎖線はセグメント群が1材質を共有＝二重に控えると
+    annGroup.traverse(o => {     // 「黒くした後の色」を控えてしまい復元で黒が残る（2026-07-30 社長報告の真因）
       const m = o.material;
-      if ((o.isMesh || o.isLine || o.isLineSegments) && m && m.color) {
+      if ((o.isMesh || o.isLine || o.isLineSegments) && m && m.color && !annSeen.has(m)) {
+        annSeen.add(m);
         annBackup.push([m, m.color.getHex(), m.blending, m.opacity]);
         m.color.setHex(xlineObjs.has(o) ? PRINT_XLINE_COLOR : 0x1a1a1a);
         m.blending = THREE.NormalBlending;
@@ -9076,11 +9078,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const { parts, anns } = itemsInRect(x0, y0, x1, y1);
     if (!parts.length && !anns.length) { if (window.__toast) window.__toast('枠の中にアイテムがありません'); return; }
     const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
-    if (exist >= 0) {                                   // 同じ範囲を再度囲む＝取り消し
-      const gid = detailAreas[exist].id;
-      detailAreas.splice(exist, 1); relabelDetails(); updateDetailBtn();
-      recordHistory();
-      if (window.__toast) window.__toast(`詳細${gid} を取り消しました`);
+    if (exist >= 0) {   // 同じ範囲の再囲みでは取り消さない（2026-07-30 社長指示：削除は一覧のプレビューからのみ）
+      if (window.__toast) window.__toast(`この範囲は 詳細${detailAreas[exist].id} として登録済みです（削除は詳細図ボタン長押し→一覧→プレビューから）`);
       return;
     }
     if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
@@ -9100,7 +9099,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const parts = [...selectedParts], anns = [...selAnns];
     if (parts.length || anns.length) {
       const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
-      if (exist >= 0) { const gid = detailAreas[exist].id; detailAreas.splice(exist, 1); relabelDetails(); updateDetailBtn(); recordHistory(); if (window.__toast) window.__toast(`詳細${gid} を取り消しました`); return; }
+      if (exist >= 0) { if (window.__toast) window.__toast(`この範囲は 詳細${detailAreas[exist].id} として登録済みです（削除は詳細図ボタン長押し→一覧→プレビューから）`); return; }
       if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
       const nr = screenRectOf(parts, anns);
       if (!nr) { if (window.__toast) window.__toast('画面に映っていません（対象が見える向きにしてから登録してください）'); return; }
@@ -9473,7 +9472,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ${(() => { let bot = 10; return details.map(d => {   /* 詳細図＝左下から上へ積み上げ（2026-07-30 社長指示） */
         const dw = 86, dih = Math.max(34, Math.min(70, dw / (d.aspect || 1.4)));
         const html = `<div class="detail" style="left:${INSET + 2}mm;bottom:${bot}mm;width:${dw}mm">
-      <div class="dttl">${esc(d.name)}（拡大）</div><img src="${d.url}" style="height:${dih.toFixed(0)}mm">
+      <div class="dttl">${esc(d.name)}</div><img src="${d.url}" style="height:${dih.toFixed(0)}mm">
     </div>`;
         bot += dih + 14; return html; }).join(''); })()}
     ${axisSvg}
