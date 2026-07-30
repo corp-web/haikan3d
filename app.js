@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-B';
+const APP_VER = 'v0730-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7990,6 +7990,32 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     s = s || {};
     for (const [id, k] of DWG_SPEC_FIELDS) { const el = $(id); if (el) el.value = s[k] || ''; }
   }
+  // ---- 円弧（部分削除で口が開いた円）の共通ヘルパ（2026-07-30 社長要望） ----
+  // 円は style.arcA0/arcA1（離心角・rad・arcA1>arcA0）があれば、その範囲だけを描く「円弧」になる。
+  // 起動時の自動保存復元（applyData→buildAnn）でも使うため、宣言はこの位置（restore より前）に置く。
+  const TAU = Math.PI * 2;
+  const norm2pi = x => ((x % TAU) + TAU) % TAU;
+  function arcRange(style) {   // 描かれている角度範囲。円弧でなければ全周
+    if (!style || style.arcA0 == null || style.arcA1 == null) return { a0: 0, a1: TAU, full: true };
+    return { a0: style.arcA0, a1: style.arcA1, full: false };
+  }
+  function circPt(rec, th) {   // 離心角θ→円周上の点（modelローカル）
+    const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+    return rec.a.clone().add(new V3(Math.cos(th) * rx, 0, Math.sin(th) * rz).applyQuaternion(q));
+  }
+  function circleThetaAt(rec, cx, cy) {   // カーソル光線→円の面との交点の離心角（0..2π）。面と平行なら null
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    pickRay.setFromCamera({ x: ((cx - rect.left) / rect.width) * 2 - 1, y: -((cy - rect.top) / rect.height) * 2 + 1 }, cam);
+    const O = modelGroup.worldToLocal(pickRay.ray.origin.clone());
+    const D = modelGroup.worldToLocal(pickRay.ray.origin.clone().addScaledVector(pickRay.ray.direction, 1)).sub(O).normalize();
+    const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+    const n = new V3(0, 1, 0).applyQuaternion(q);
+    const denom = D.dot(n); if (Math.abs(denom) < 1e-9) return null;
+    const t = rec.a.clone().sub(O).dot(n) / denom; if (t <= 0) return null;
+    const local = O.clone().addScaledVector(D, t).sub(rec.a).applyQuaternion(q.clone().invert());
+    return norm2pi(Math.atan2(local.z / rz, local.x / rx));
+  }
+
   // 詳細図の記憶域（宣言は serialize/applyData より前＝起動時の自動保存復元でも参照できる位置に置く）
   const detailAreas = [];   // [{ id, name, key, rect, aspect, url, parts:[], anns:[] }]
   const detailPhotos = new Map();   // key→写真dataURL（アンドゥ履歴の文字列を重くしないための側持ち）
@@ -9802,9 +9828,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const { rx, rz } = circleRadii(style, a, b);
       const q = quatFromStyle(style);
       const mat = new THREE.MeshBasicMaterial({ color: col, depthTest: false, transparent: true, opacity: 0.98 });
-      const N = 160, pts = [];
+      const rr = arcRange(style);   // 部分削除された円＝円弧はその範囲だけ描く
+      const N = Math.max(8, Math.ceil(160 * (rr.a1 - rr.a0) / (Math.PI * 2))), pts = [];
       for (let i = 0; i <= N; i++) {
-        const t = (i / N) * Math.PI * 2;
+        const t = rr.a0 + ((rr.a1 - rr.a0) * i) / N;
         pts.push(a.clone().add(new V3(Math.cos(t) * rx, 0, Math.sin(t) * rz).applyQuaternion(q)));
       }
       dashPolyline(pts, (LTYPES[style.ltype] || LTYPES.solid).pat, style.width || 0.0006, mat, grp);
@@ -9875,7 +9902,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return best;
   }
   function addAnnotation(type, a, b, style) {
-    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat, textOff: style.textOff ? { t: style.textOff.t, n: style.textOff.n } : undefined } : styleFor(type);
+    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat, arcA0: style.arcA0, arcA1: style.arcA1, textOff: style.textOff ? { t: style.textOff.t, n: style.textOff.n } : undefined } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
@@ -9979,7 +10006,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (rec.type === 'circle') {
       const c = rec.a, { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
       const P = (lx, lz) => c.clone().add(new V3(lx, 0, lz).applyQuaternion(q));
-      return [c.clone(), P(rx, 0), P(-rx, 0), P(0, rz), P(0, -rz)];   // 中心＋四半円点(±X,±Z・向き込み)
+      const rr = arcRange(rec.style);
+      if (rr.full) return [c.clone(), P(rx, 0), P(-rx, 0), P(0, rz), P(0, -rz)];   // 中心＋四半円点(±X,±Z・向き込み)
+      // 円弧：中心＋両端点（起点として吸着・掴める）＋描かれている範囲内の四半円点
+      const pts = [c.clone(), circPt(rec, rr.a0), circPt(rec, rr.a1)];
+      [[0, P(rx, 0)], [Math.PI / 2, P(0, rz)], [Math.PI, P(-rx, 0)], [Math.PI * 1.5, P(0, -rz)]]
+        .forEach(([th, p]) => { if (norm2pi(th - rr.a0) <= rr.a1 - rr.a0) pts.push(p); });
+      return pts;
     }
     if (rec.type === 'line') return [rec.a.clone(), rec.b.clone(), rec.a.clone().add(rec.b).multiplyScalar(0.5)];   // 端点＋中点
     return [rec.a.clone(), rec.b.clone()];
@@ -10442,6 +10475,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (lnYBox) lnYBox.style.display = 'none';
       if (Math.abs(dx) > 1e-4 && Math.abs(dz) > 1e-4) placeDistanceBox(start, end);   // 斜め時だけ距離L。軸方向のみの時は重なるので隠す
       else if (lnDBox) lnDBox.style.display = 'none';
+      return;
+    }
+    if (lineDrag && lineDrag.mode === 'arcend') {       // 円弧の端点伸縮中：小窓は出さない
+      [lnXBox, lnZBox, lnYBox, lnDBox].forEach(b => { if (b) b.style.display = 'none'; }); hideXlineAngle(); hideDimOffLabel();
       return;
     }
     if (lineDrag && lineDrag.mode === 'circleaxis') {   // 円/楕円の半径変更中：掴んだ軸の半径ラベルを表示
@@ -11242,6 +11279,21 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const h of cands) { const s = scr(h.pt); if (s.z >= 1) continue; const d = Math.hypot(s.x - cx, s.y - cy); if (d < bestD) { bestD = d; best = h; } }
     return best;
   }
+  // 円弧の端点ハンドル（部分削除で開いた口）。カーソル近傍なら {which:0|1, theta} を返す
+  function arcEndHandleAt(rec, cx, cy) {
+    if (rec.type !== 'circle') return null;
+    const rr = arcRange(rec.style);
+    if (rr.full) return null;
+    const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
+    let best = null, bestD = SNAP_PX + 6;
+    [[0, rr.a0], [1, rr.a1]].forEach(([which, th]) => {
+      const n = modelGroup.localToWorld(circPt(rec, th)).project(cam);
+      if (n.z >= 1) return;
+      const d = Math.hypot(rect.left + (n.x * 0.5 + 0.5) * rect.width - cx, rect.top + (-n.y * 0.5 + 0.5) * rect.height - cy);
+      if (d < bestD) { bestD = d; best = { which, theta: th }; }
+    });
+    return best;
+  }
   let dimValOpen = false;                      // 値フォームを開くのは「値クリック」時のみ（オブジェクト選択では出さない）
   let dimValEditing = false;                   // true＝既存値の編集（引出ラベル「編集」）／false＝新規入力（引出ラベル「入力」）
   function selectLine(rec, additive) {
@@ -11349,77 +11401,159 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (rec.type === 'xline' || rec.type === 'line') updateXlinePts();
     if (typeof updateForm === 'function') updateForm();
   };
-  // ===== 線の部分削除（2026-07-30 社長要望） =====
-  // 線分の指定区間だけを消す（構築線・寸法は対象外）。ボタン→1点目→2点目のタップで実行。
-  // 点は起点（端点）と接近点（線上の最寄り点＝視線と線分の3D最接近点）に吸着する。
-  let trimState = null;            // { rec, t1, marker }（nullなら停止中）
-  const TRIM_PICK_PX = 14;         // 線を拾う画面距離
+  // ===== 線の部分削除（2026-07-30 社長要望・同日拡張） =====
+  // 線分・円/円弧の指定区間を消す（構築線・寸法は対象外）。ボタン→1点目→2点目のタップで実行。
+  // いつもの十字カーソル・吸着（起点・交点・四半円点など）を効かせ、1点目の後は消える区間を赤で予告する。
+  // 円は残りが円弧（style.arcA0/arcA1）になり、端点をつかんで伸ばせば円に戻せる。
+  let trimState = null;            // { rec, kind, t1|th1, thC, marker }（nullなら停止中）
+  const TRIM_PICK_PX = 14;         // 対象を拾う画面距離
   const TRIM_END_PX = 14;          // 端点（起点）吸着の画面距離
   function trimBtnLit(on) { const b = document.getElementById('cmdTrim'); if (b) b.classList.toggle('active', on); }
-  // 画面座標→線分上の点。{rec, t, pt(model)} を返す（対象＝type:'line'・非表示を除く）
-  function trimPickAt(cx, cy) {
+  // 画面座標→対象（線分/円）とその上の点。通常の吸着点が対象上に乗ればそれを優先し、無ければ接近点。
+  function trimResolve(cx, cy) {
     const cam = activeCam(); cam.updateMatrixWorld();
     const rect = renderer.domElement.getBoundingClientRect();
-    let best = null;
-    for (const rec of annStore) {
-      if (rec.type !== 'line' || rec.hidden) continue;
-      const wa = modelGroup.localToWorld(rec.a.clone()), wb = modelGroup.localToWorld(rec.b.clone());
-      const na = wa.clone().project(cam), nb = wb.clone().project(cam);
-      if (na.z >= 1 || nb.z >= 1) continue;
-      const A = { x: rect.left + (na.x * 0.5 + 0.5) * rect.width, y: rect.top + (-na.y * 0.5 + 0.5) * rect.height };
-      const B = { x: rect.left + (nb.x * 0.5 + 0.5) * rect.width, y: rect.top + (-nb.y * 0.5 + 0.5) * rect.height };
+    const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam);
+      return n.z < 1 ? { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height } : null; };
+    const segPx = (A, B) => { if (!A || !B) return 1e9;
       const vx = B.x - A.x, vy = B.y - A.y, L2 = vx * vx + vy * vy;
       let ts = L2 > 1e-9 ? ((cx - A.x) * vx + (cy - A.y) * vy) / L2 : 0;
       ts = Math.max(0, Math.min(1, ts));
-      const px = Math.hypot(cx - (A.x + vx * ts), cy - (A.y + vy * ts));
-      if (px > TRIM_PICK_PX || (best && px >= best.px)) continue;
-      let t;
-      if (Math.hypot(cx - A.x, cy - A.y) < TRIM_END_PX) t = 0;          // 起点（端点）吸着
-      else if (Math.hypot(cx - B.x, cy - B.y) < TRIM_END_PX) t = 1;
-      else {                                                             // 接近点＝視線と線分の3D最接近点
-        pickRay.setFromCamera({ x: ((cx - rect.left) / rect.width) * 2 - 1, y: -((cy - rect.top) / rect.height) * 2 + 1 }, cam);
-        const dseg = new THREE.Vector3().subVectors(wb, wa);
-        const w0 = new THREE.Vector3().subVectors(wa, pickRay.ray.origin);
-        const a2 = dseg.dot(dseg), b2 = dseg.dot(pickRay.ray.direction);
-        const d2 = dseg.dot(w0), e2 = pickRay.ray.direction.dot(w0);
-        const den = a2 - b2 * b2;   // c=|ray.direction|²=1
-        t = Math.abs(den) > 1e-12 ? Math.max(0, Math.min(1, (b2 * e2 - d2) / den)) : ts;
+      return Math.hypot(cx - (A.x + vx * ts), cy - (A.y + vy * ts)); };
+    let best = null;   // { rec, kind, px }
+    for (const rec of annStore) {
+      if (rec.hidden) continue;
+      if (rec.type === 'line') {
+        const px = segPx(scr(rec.a), scr(rec.b));
+        if (px <= TRIM_PICK_PX && (!best || px < best.px)) best = { rec, kind: 'line', px };
+      } else if (rec.type === 'circle') {
+        const rr = arcRange(rec.style);
+        const N = 48; let prev = null, mn = 1e9;
+        for (let i = 0; i <= N; i++) {
+          const p = scr(circPt(rec, rr.a0 + ((rr.a1 - rr.a0) * i) / N));
+          if (prev && p) mn = Math.min(mn, segPx(prev, p));
+          prev = p;
+        }
+        if (mn <= TRIM_PICK_PX && (!best || mn < best.px)) best = { rec, kind: 'circle', px: mn };
       }
-      best = { rec, t, px };
     }
-    if (best) best.pt = best.rec.a.clone().lerp(best.rec.b, best.t);
-    return best;
+    if (!best) return null;
+    let sp = null;
+    try { sp = drawSnapPoint(cx, cy); } catch (err) { sp = null; }   // いつもの吸着（起点・交点・四半円点…）
+    if (best.kind === 'line') {
+      const rec = best.rec, ab = rec.b.clone().sub(rec.a), L = ab.length() || 1e-9;
+      let t = null, snapped = false;
+      if (sp) {   // 吸着点が この線の上 に乗っていればそのまま使う
+        const tt = Math.max(0, Math.min(1, sp.clone().sub(rec.a).dot(ab) / (L * L)));
+        if (sp.distanceTo(rec.a.clone().addScaledVector(ab, tt / 1)) < 0.0008) { t = tt; snapped = true; }
+      }
+      if (t == null) {
+        const A = scr(rec.a), B = scr(rec.b);
+        if (A && Math.hypot(cx - A.x, cy - A.y) < TRIM_END_PX) { t = 0; snapped = true; }
+        else if (B && Math.hypot(cx - B.x, cy - B.y) < TRIM_END_PX) { t = 1; snapped = true; }
+        else {   // 接近点＝視線と線分の3D最接近点
+          pickRay.setFromCamera({ x: ((cx - rect.left) / rect.width) * 2 - 1, y: -((cy - rect.top) / rect.height) * 2 + 1 }, cam);
+          const wa = modelGroup.localToWorld(rec.a.clone()), wb = modelGroup.localToWorld(rec.b.clone());
+          const dseg = new THREE.Vector3().subVectors(wb, wa);
+          const w0 = new THREE.Vector3().subVectors(wa, pickRay.ray.origin);
+          const a2 = dseg.dot(dseg), b2 = dseg.dot(pickRay.ray.direction);
+          const d2 = dseg.dot(w0), e2 = pickRay.ray.direction.dot(w0);
+          const den = a2 - b2 * b2;   // c=|ray.direction|²=1
+          t = Math.abs(den) > 1e-12 ? Math.max(0, Math.min(1, (b2 * e2 - d2) / den)) : 0;
+        }
+      }
+      return { rec, kind: 'line', t, pt: rec.a.clone().lerp(rec.b, t), snapped };
+    }
+    // 円/円弧：離心角で表す
+    const rec = best.rec, rr = arcRange(rec.style);
+    let th = null, snapped = false;
+    if (sp) {
+      const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+      const local = sp.clone().sub(rec.a).applyQuaternion(q.clone().invert());
+      if (Math.abs(local.y) < 0.0008 && Math.abs(Math.hypot(local.x / rx, local.z / rz) - 1) < 0.01) {
+        th = norm2pi(Math.atan2(local.z / rz, local.x / rx)); snapped = true;
+      }
+    }
+    if (th == null) th = circleThetaAt(rec, cx, cy);
+    if (th == null) return null;
+    if (!rr.full) {   // 円弧なら描かれている範囲へ入れる（範囲外は近い方の端へ）
+      const rel = norm2pi(th - rr.a0), span = rr.a1 - rr.a0;
+      th = rel <= span ? rr.a0 + rel : (norm2pi(th - rr.a1) < norm2pi(rr.a0 - th) ? rr.a1 : rr.a0);
+    }
+    return { rec, kind: 'circle', th, pt: circPt(rec, th), snapped };
+  }
+  // いつもの十字カーソル＋吸着印＋（1点目の後は）消える区間の赤い予告
+  function trimShowCursor(cx, cy) {
+    clearLineGuide();
+    const r = trimResolve(cx, cy);
+    if (r) {
+      try { showDrawSnapMarkers(r.snapped ? r.pt : null); } catch (err) {}
+      guideCross(r.pt, r.snapped ? 0x39ff8a : 0x49c5ff);
+      if (r.snapped) snapDot(r.pt);
+    } else {
+      try { showDrawSnapMarkers(null); } catch (err) {}
+      const f = pickFirstPoint(cx, cy);
+      if (f.p) guideCross(f.p, 0x49c5ff);
+    }
+    if (trimState && trimState.rec && r && r.rec === trimState.rec) {
+      const mat = new THREE.LineBasicMaterial({ color: 0xff3b30, depthTest: false, transparent: true, opacity: 0.95 });
+      let g = null;
+      if (trimState.kind === 'line') {
+        g = new THREE.BufferGeometry().setFromPoints([trimState.rec.a.clone().lerp(trimState.rec.b, trimState.t1), r.pt.clone()]);
+      } else {
+        let t = r.th;   // 進行方向を連続化＝なぞった側の弧が消える
+        while (t - trimState.thC > Math.PI) t -= TAU;
+        while (t - trimState.thC < -Math.PI) t += TAU;
+        trimState.thC = t;
+        const d = trimState.thC - trimState.th1;
+        const n = Math.max(2, Math.ceil(Math.abs(d) / (Math.PI / 48)));
+        const pts = [];
+        for (let i = 0; i <= n; i++) pts.push(circPt(trimState.rec, trimState.th1 + (d * i) / n));
+        g = new THREE.BufferGeometry().setFromPoints(pts);
+      }
+      const ln = new THREE.Line(g, mat); ln.renderOrder = 998; lineGuideGroup.add(ln);
+    }
+    return r;
   }
   function trimStart() {
     if (trimState) { trimEnd(); if (window.__toast) window.__toast('部分削除：取り消しました'); return; }
     clearOtherCommands('trim');
     if (typeof selectPart === 'function') selectPart(null);
     window.__annClearSel();
-    trimState = { rec: null, t1: null, marker: null };
+    trimState = { rec: null, kind: null, t1: null, th1: null, thC: null, marker: null };
     trimBtnLit(true);
-    if (window.__toast) window.__toast('部分削除：消したい区間の1点目をタップ（線の端・線上の点に吸着。構築線は対象外）');
+    renderer.domElement.style.cursor = DRAW_CURSOR;
+    if (window.__toast) window.__toast('部分削除：消したい区間の1点目をタップ（線分・円。起点や交点に吸着。構築線は対象外）');
   }
   function trimEnd() {
     if (trimState && trimState.marker) { annGroup.remove(trimState.marker); disposeObj(trimState.marker); }
     trimState = null;
     trimBtnLit(false);
+    renderer.domElement.style.cursor = '';
+    clearLineGuide();
+    try { showDrawSnapMarkers(null); } catch (err) {}
   }
   function trimTapAt(cx, cy) {
-    const hit = trimPickAt(cx, cy);
-    if (!hit) { if (window.__toast) window.__toast('線分が見つかりません（構築線・寸法は対象外）'); return; }
+    const hit = trimShowCursor(cx, cy);   // タップ位置でも吸着・赤い予告（円の進行方向の更新）を通す
+    if (!hit) { if (window.__toast) window.__toast('線分・円が見つかりません（構築線・寸法は対象外）'); return; }
     if (!trimState.rec) {
-      trimState.rec = hit.rec; trimState.t1 = hit.t;
+      trimState.rec = hit.rec; trimState.kind = hit.kind;
+      if (hit.kind === 'line') trimState.t1 = hit.t;
+      else { trimState.th1 = hit.th; trimState.thC = hit.th; }
       const world = modelGroup.localToWorld(hit.pt.clone());
       const r = Math.max(activeCam().position.distanceTo(world) * 0.008, 0.002);
       const mk = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8),
         new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.9, depthTest: false }));
       mk.scale.setScalar(r); mk.position.copy(hit.pt); mk.renderOrder = 9;
       annGroup.add(mk); trimState.marker = mk;
-      if (window.__toast) window.__toast('部分削除：消す区間の2点目をタップ（同じ線の上）');
+      if (window.__toast) window.__toast(hit.kind === 'circle'
+        ? '部分削除：消す側をなぞって2点目をタップ（赤い予告が消える範囲）'
+        : '部分削除：消す区間の2点目をタップ（同じ線の上）');
       return;
     }
-    if (hit.rec !== trimState.rec) { if (window.__toast) window.__toast('2点目は同じ線の上をタップしてください'); return; }
-    execTrim(trimState.rec, trimState.t1, hit.t);
+    if (hit.rec !== trimState.rec) { if (window.__toast) window.__toast('2点目は同じ線・円の上をタップしてください'); return; }
+    if (trimState.kind === 'line') execTrim(trimState.rec, trimState.t1, hit.t);
+    else execTrimCircle(trimState.rec, trimState.th1, trimState.thC);
   }
   function execTrim(rec, ta, tb) {
     const lo = Math.min(ta, tb), hi = Math.max(ta, tb);
@@ -11434,8 +11568,48 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     recordHistory();
     if (window.__toast) window.__toast(lo <= EPS && hi >= 1 - EPS ? '線を削除しました' : '線を部分削除しました');
   }
+  function execTrimCircle(rec, th1, th2u) {
+    const rr = arcRange(rec.style);
+    const st = rec.style, gid = rec.groupId;
+    const MIN = Math.PI / 360;   // 0.5°未満の欠片は残さない
+    if (rr.full) {               // まるい円：なぞった側（th1→th2uの向き）の弧を消す→残りが円弧
+      const d = th2u - th1;
+      if (Math.abs(d) < 1e-4) { if (window.__toast) window.__toast('2点が同じ場所です（別の点をタップしてください）'); return; }
+      if (Math.abs(d) >= TAU - MIN) {   // ほぼ一周なぞった＝丸ごと削除
+        window.__annDeleteRec(rec); trimEnd(); recordHistory();
+        if (window.__toast) window.__toast('円を削除しました'); return;
+      }
+      const a0 = d > 0 ? norm2pi(th2u) : norm2pi(th1);
+      st.arcA0 = a0; st.arcA1 = a0 + (TAU - Math.abs(d));
+      rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+      trimEnd(); recordHistory();
+      if (window.__toast) window.__toast('円を部分削除しました（端はつかんで伸ばすと円に戻せます）');
+      return;
+    }
+    // 既に円弧：範囲内の2点間を削除（端まで含めば片側だけ・全部なら削除）
+    const t1c = Math.max(rr.a0, Math.min(rr.a1, th1));
+    const t2c = Math.max(rr.a0, Math.min(rr.a1, th2u));
+    const lo = Math.min(t1c, t2c), hi = Math.max(t1c, t2c);
+    if (hi - lo < 1e-4) { if (window.__toast) window.__toast('2点が同じ場所です（別の点をタップしてください）'); return; }
+    window.__annDeleteRec(rec);
+    const mkArc = (p0, p1) => {
+      if (p1 - p0 < MIN) return;
+      const st2 = Object.assign({}, st, { arcA0: norm2pi(p0), arcA1: norm2pi(p0) + (p1 - p0) });
+      addAnnotation('circle', rec.a.clone(), rec.b.clone(), st2);
+      const nr = annStore[annStore.length - 1];
+      if (gid != null) nr.groupId = gid;
+    };
+    mkArc(rr.a0, lo); mkArc(hi, rr.a1);
+    trimEnd();
+    recordHistory();
+    if (window.__toast) window.__toast(lo - rr.a0 < MIN && rr.a1 - hi < MIN ? '円弧を削除しました' : '円弧を部分削除しました');
+  }
   // タップの横取り（詳細図の枠モードと同じ流儀：モード中だけ window capture で受ける）
   let _trimDown = null;
+  window.addEventListener('pointermove', e => {
+    if (!trimState) return;
+    trimShowCursor(e.clientX, e.clientY);   // いつもの十字カーソル・吸着印・赤い予告
+  }, true);
   window.addEventListener('pointerdown', e => {
     if (!trimState || e.button !== 0 || e.target !== renderer.domElement) return;
     e.stopImmediatePropagation(); e.preventDefault();
@@ -12226,11 +12400,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     };
     for (const rec of annStore) {
       if (rec.hidden) continue;                          // 非表示はクリックで拾わない
-      if (rec.type === 'circle') {                       // 円/楕円：外周をクリックで選べるよう、周を多角形に分けて当てる
+      if (rec.type === 'circle') {                       // 円/楕円：外周をクリックで選べるよう、周を多角形に分けて当てる（円弧は描画範囲だけ）
         const { rx, rz } = circleRadii(rec.style, rec.a, rec.b), q = quatFromStyle(rec.style);
+        const rr = arcRange(rec.style);
         const N = 64; let prev = null;
         for (let i = 0; i <= N; i++) {
-          const t = (i / N) * Math.PI * 2;
+          const t = rr.a0 + ((rr.a1 - rr.a0) * i) / N;
           const p = rec.a.clone().add(new V3(Math.cos(t) * rx, 0, Math.sin(t) * rz).applyQuaternion(q));
           if (prev) testSeg(rec, clipProjectSeg(prev, p, rect, cam, inv), false);
           prev = p;
@@ -12459,6 +12634,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     if (lineSel && selAnns.has(lineSel)) {               // 実際に選択中の線の端点を掴む → 長さ変更/付け替え
       if (lineSel.type === 'circle') {                   // 円：四半円点ハンドルを掴む → 半径変更（Shift＝その軸だけ＝楕円）
+        // 円弧の端点（部分削除で開いた口）を先に判定 → 円周に沿って伸縮。届いたらつながって円に戻る
+        const ae = arcEndHandleAt(lineSel, e.clientX, e.clientY);
+        if (ae) {
+          lineDrag = { mode: 'arcend', rec: lineSel, which: ae.which, theta: ae.theta, downX: e.clientX, downY: e.clientY, moved: false };
+          e.stopImmediatePropagation(); return;
+        }
         const h = circleHandleAt(lineSel, e.clientX, e.clientY);
         if (h) {
           lineDrag = { mode: 'circleaxis', rec: lineSel, axis: h.axis, dir: h.dir.clone(), downX: e.clientX, downY: e.clientY, moved: false };
@@ -12570,6 +12751,36 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (window.__updateDimTextFacing) window.__updateDimTextFacing();   // 位置・向き・サイズを即時追従（次フレームを待たない）
       e.stopImmediatePropagation();
       return;
+    }
+    if (lineDrag.mode === 'arcend') {                    // 円弧の端点を円周に沿って伸縮。もう片方の端に届いたらつながって円に戻る
+      const rec = lineDrag.rec, st = rec.style, rr = arcRange(st);
+      if (rr.full) return;
+      let th = circleThetaAt(rec, e.clientX, e.clientY);
+      if (th == null) return;
+      lineDrag.moved = true;
+      while (th - lineDrag.theta > Math.PI) th -= TAU;   // 連続化＝円周をぐるっと回って伸ばせる
+      while (th - lineDrag.theta < -Math.PI) th += TAU;
+      const MINSPAN = Math.PI / 90;                      // 2°より短くはしない（消す時は部分削除で）
+      let a0 = rr.a0, a1 = rr.a1;
+      if (lineDrag.which === 0) a0 = Math.min(th, a1 - MINSPAN); else a1 = Math.max(th, a0 + MINSPAN);
+      const span = a1 - a0;
+      // つながる判定：ほぼ一周、または（半周超のとき）掴んだ端がもう片方の端の画面12px以内
+      const cam2 = activeCam(); const rect2 = renderer.domElement.getBoundingClientRect();
+      const sO = modelGroup.localToWorld(circPt(rec, lineDrag.which === 0 ? rr.a1 : rr.a0)).project(cam2);
+      const sN = modelGroup.localToWorld(circPt(rec, lineDrag.which === 0 ? a0 : a1)).project(cam2);
+      const pxGap = Math.hypot((sO.x - sN.x) * 0.5 * rect2.width, (sO.y - sN.y) * 0.5 * rect2.height);
+      if (span >= TAU - Math.PI / 90 || (span > Math.PI && pxGap < 12)) {
+        delete st.arcA0; delete st.arcA1;                // 端どうしがつながった＝円に戻す
+        rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+        lineDrag = null;
+        scheduleHistory();
+        if (window.__toast) window.__toast('端がつながり、円に戻りました');
+        e.stopImmediatePropagation(); return;
+      }
+      st.arcA0 = norm2pi(a0); st.arcA1 = st.arcA0 + span;
+      lineDrag.theta = lineDrag.which === 0 ? st.arcA0 : st.arcA1;   // 正規化後の値に基準を合わせ直す（次の連続化用）
+      rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+      e.stopImmediatePropagation(); return;
     }
     if (lineDrag.mode === 'circleaxis') {                // 円：四半円点を掴んで半径変更。通常＝真円・Shift＝その軸だけ＝楕円
       const rec = lineDrag.rec, c = rec.a;
@@ -12695,7 +12906,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     lineDrag = null;
     if (translated) finishMoveCommand();   // 線・寸法等を1回動かしたら「移動」コマンドを自動終了（部品と同じ）
     e.stopImmediatePropagation();
-    if (mode === 'circleaxis') {                   // 円/楕円の半径変更を確定（選択は維持・ハンドル再表示）
+    if (mode === 'arcend') {                       // 円弧の端点伸縮を確定（選択は維持）
+      refreshHandles(); refreshAnnHi();
+      if (typeof updateForm === 'function') updateForm();
+      if (moved) scheduleHistory();
+    } else if (mode === 'circleaxis') {            // 円/楕円の半径変更を確定（選択は維持・ハンドル再表示）
       if (typeof hideCircleR === 'function') hideCircleR();
       refreshHandles(); refreshAnnHi();
       if (typeof updateForm === 'function') updateForm();

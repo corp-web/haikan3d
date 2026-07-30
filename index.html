@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0730B — SKT-HD ♦</title>
+<title>配管3D v0730C — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝発光する立方体）。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260727">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0730B">
+<meta name="apple-mobile-web-app-title" content="配管3D v0730C">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -544,7 +544,7 @@
         <button id="cmdGroup"  title="選択中の複数アイテムをグループ化（以後ひとつとして選択・移動）"><span class="ic">▣</span>グループ</button>
         <button id="cmdUngroup" title="選択中のグループを解除"><span class="ic">▢</span>解除</button>
         <button id="cmdDetail" title="詳細図：押してから拡大したい所を枠で囲むと、印刷の左上に拡大図（詳細A/B/C）が付き、本図には囲んだ枠が入る。同じ範囲をもう一度囲むと取り消し。アイテムを選んでから押しても登録できます"><span class="ic">🔍</span>詳細図</button>
-        <button id="cmdTrim" title="部分削除：線分の指定した区間だけを消す。押してから、消したい区間の1点目→2点目をタップ（線の端・線上の点に吸着。構築線・寸法は対象外。Esc・再押下で取消）"><span class="ic"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" style="vertical-align:-2px"><path d="M1.5 13.5 L4.8 10.2 M10.2 4.8 L13.5 1.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M6.4 8.6 L8.6 6.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0.1 2.4" opacity="0.55"/></svg></span>部分削除</button>
+        <button id="cmdTrim" title="部分削除：線分・円の指定した区間だけを消す。押してから、消したい区間の1点目→2点目をタップ（起点・交点・線上の点に吸着。1点目の後は消える範囲が赤く予告される。円は残りが円弧になり、端をつかんで伸ばせば円に戻せる。構築線・寸法は対象外。Esc・再押下で取消）"><span class="ic"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" style="vertical-align:-2px"><path d="M1.5 13.5 L4.8 10.2 M10.2 4.8 L13.5 1.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M6.4 8.6 L8.6 6.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="0.1 2.4" opacity="0.55"/></svg></span>部分削除</button>
         <button id="cmdHide" title="非表示コマンド：選択中のアイテムを隠す／選択なしで押すと次にタップしたアイテムを隠す（1回で終了・Esc・再押下で取消）"><span class="ic">◌</span>非表示</button>
         <button id="cmdShow" title="非表示にしたアイテムをすべて再表示"><span class="ic">◉</span>再表示</button>
         <button id="cmdProps" title="プロパティ：選択したオブジェクト（部品・線・寸法・文字・円）の位置や値を一覧で表示・編集"><span class="ic">☰</span>ﾌﾟﾛﾊﾟﾃｨ</button>
