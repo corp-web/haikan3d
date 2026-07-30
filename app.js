@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-C';
+const APP_VER = 'v0730-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1450,6 +1450,21 @@ function makeElbow(opts) {
   const g = makeBendCore(R, angle, ro, ri, mat);
   g.userData.partType = 'elbow';
   g.userData.elbow = { ...o };
+  return g;
+}
+
+// R曲げパイプ（円/円弧のスイープ用・2026-07-30 社長要望）。opts={sizeA, sch, R(m・中心線半径), angleDeg}
+// 実際のパイプベンダーによるR曲げ加工品を表す。管口は円弧の接線に直角（＝切断面が中心からの放射面）で、
+// makeBendCore が backLocal/faceLocal と接線の法線を設定するので、フランジ等をそのまま末端に配置できる。
+function makeBentPipe(opts) {
+  const o = Object.assign({ sizeA: '25A', sch: 'Sch40', R: 0.3, angleDeg: 90 }, opts || {});
+  const ro = (FLG_BORE[o.sizeA] || 114) / 2 / 1000;
+  const ri = Math.max(ro - pipeWall(o.sizeA, o.sch) / 1000, ro * 0.3);
+  const mat = FLANGE_MAT.clone(); mat.side = THREE.DoubleSide; mat.needsUpdate = true;
+  const g = makeBendCore(o.R, Math.min(Math.max(o.angleDeg, 1), 360), ro, ri, mat);
+  g.userData.partType = 'bentpipe';
+  g.userData.bent = { ...o };
+  g.userData.gripLocal = g.userData.backLocal.clone();   // 起点＝始端（工作点は遠方になるため既定にしない）
   return g;
 }
 
@@ -3669,7 +3684,7 @@ function quadLocalsOf(p) {
              center.clone().addScaledVector(u2, R), center.clone().addScaledVector(u2, -R));
   };
   const odR = s => ((FLG_BORE[s] || 60) / 2) / 1000;   // 管外径の半径(m)
-  const spec = u.pipe || u.elbow || u.tee || u.reducer || u.cap || u.sw || u.flange || {};
+  const spec = u.pipe || u.bent || u.elbow || u.tee || u.reducer || u.cap || u.sw || u.flange || {};
   const RA = odR(spec.sizeA || '50A');
   if (t === 'flange') {                                 // フェイス側の板外周（外径D）
     const fd = flangeDim((u.flange && u.flange.cls) || 'JIS 10K', (u.flange && u.flange.sizeA) || '50A');
@@ -5577,6 +5592,7 @@ function partColumns(p) {
     case 'flange': { const o = u.flange || {}; return { kind: 'フランジ', type: o.type || '', size: o.sizeA || '', cls: o.cls || '' }; }
     case 'gasket': { const o = u.gasket || {}; return { kind: 'ガスケット', type: `t${o.t != null ? o.t : 3}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'pipe':   { const o = u.pipe || {};   return { kind: 'パイプ', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.sch || '' }; }
+    case 'bentpipe': { const o = u.bent || {}; const len = Math.round((o.R || 0) * (o.angleDeg || 0) * Math.PI / 180 * 1000); return { kind: 'パイプ', type: `R曲げR${Math.round((o.R || 0) * 1000)} 展開L${len}`, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'elbow':  { const o = u.elbow || {};  const nm = {'90L':'90°エルボ','90S':'90°エルボ','45L':'45°エルボ','45S':'45°エルボ','180L':'180°エルボ','180S':'180°エルボ'}; let tp = (o.kind && o.kind.endsWith('S')) ? 'BW(S)' : 'BW(L)'; if (o.cutAngle > 0) tp += `切${Math.round(o.cutAngle * 10) / 10}°`; return { kind: nm[o.kind] || 'エルボ', type: tp, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'cap':    { const o = u.cap || {};    return { kind: 'キャップ', type: 'BW', size: o.sizeA || '', cls: o.sch || '' }; }
     case 'tee':    { const o = u.tee || {};    const rt = (o.sizeB && o.sizeB !== o.sizeA); return { kind: 'ティー', type: rt ? 'BW(RT)' : 'BW(T)', size: rt ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: o.sch || '' }; }
@@ -5595,6 +5611,7 @@ TOOLS.forEach((t, i) => { _typeOrder[t.type] = i; });
 function partTypeRank(p) {
   const u = p.userData;
   const r = fam => (_typeOrder[fam] != null ? _typeOrder[fam] : 99);
+  if (u.partType === 'bentpipe') return r('pipe');
   if (u.partType === 'tee')     return r('tee');
   if (u.partType === 'reducer') return r('reducer');
   if (u.partType === 'cap')     return r('cap');
@@ -7129,12 +7146,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const V3 = THREE.Vector3;
 
   // ---- 部品仕様(userData)からメッシュを再生成（複製・読込・鏡で共用） ----
-  const SPEC_FIELD = { flange: 'flange', gasket: 'gasket', pipe: 'pipe', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve', flex: 'flex', sight: 'sight', pg: 'pg' };
+  const SPEC_FIELD = { flange: 'flange', gasket: 'gasket', pipe: 'pipe', bentpipe: 'bent', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve', flex: 'flex', sight: 'sight', pg: 'pg' };
   function buildFromSpec(u) {
     switch (u.partType) {
       case 'flange':  return makeFlange(u.flange);
       case 'gasket':  return makeGasket(u.gasket);
       case 'pipe':    return makePipe(u.pipe);
+      case 'bentpipe': return makeBentPipe(u.bent);
       case 'elbow':   return makeElbow(u.elbow);
       case 'cap':     return makeCap(u.cap);
       case 'tee':     return makeTee(u.tee);
@@ -7613,10 +7631,43 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     return { elbows, pipes };
   }
+  // 円/円弧のスイープ＝R曲げパイプ（継手なし・2026-07-30 社長要望）。
+  // 実際のR曲げ加工と同じく、細い径しか曲がらない：曲げ半径R＜外径×3 は「無理」と断る。
+  function execSweepCircle(sizeA, sch) {
+    const rec = sweepMode.circle;
+    const { rx, rz } = circleRadii(rec.style, rec.a, rec.b);
+    if (Math.abs(rx - rz) > 0.0001) { if (window.__toast) window.__toast('楕円はR曲げできません（真円のみ対応）'); return; }
+    const R = rx;
+    const od = (FLG_BORE[sizeA] || 114) / 1000;   // 管外径(m)
+    if (R < od * 3) {
+      if (window.__toast) window.__toast(`${sizeA}はR${Math.round(R * 1000)}mmに曲げられません（目安：曲げ半径は外径の3倍＝${Math.ceil(od * 3 * 1000)}mm以上）`);
+      return;   // 箱は開けたまま＝径を変えて再実行できる
+    }
+    const rr = arcRange(rec.style), span = rr.a1 - rr.a0;
+    const o = makeBentPipe({ sizeA, sch, R, angleDeg: span * 180 / Math.PI });
+    computeConns(o);
+    // 曲げローカル（XY平面・始端180°・角度を減らす向き）→ 円ローカル（XZ平面・θ=a0から+θ回り）へ：
+    // X軸まわり−90°でXY→XZ（向きが+θ回りに反転）、Y軸まわり−(π+a0)で始端をθ=a0へ合わせる。
+    const M = new THREE.Quaternion().setFromAxisAngle(new V3(0, 1, 0), -Math.PI - rr.a0)
+      .multiply(new THREE.Quaternion().setFromAxisAngle(new V3(1, 0, 0), -Math.PI / 2));
+    o.quaternion.copy(quatFromStyle(rec.style)).multiply(M);
+    o.position.copy(rec.a);
+    o.userData.orient = 0; o.userData.roll = 0;
+    registerPart(o);
+    if (window.__annClearSel) window.__annClearSel();
+    selectPart(null);
+    refreshItemList();
+    if (typeof updateForm === 'function') updateForm();
+    if (typeof _idleSig !== 'undefined') _idleSig = null;
+    if (window.__recordHistory) window.__recordHistory();
+    if (window.__toast) window.__toast(`スイープ：R曲げパイプを配置しました（${sizeA} ${sch}・R${Math.round(R * 1000)}mm・${Math.round(span * 180 / Math.PI)}°・展開${Math.round(R * span * 1000)}mm）`);
+    endSweepMode();
+  }
   // 実行＝計画どおりに一括配置（Undoは1回でまとめて戻る）
   function execSweep() {
     if (!sweepMode) return;
     const sizeA = sweepSize.value, sch = sweepSch.value;
+    if (sweepMode.circle) { execSweepCircle(sizeA, sch); return; }
     const plan = sweepPlan(sweepMode.pts, sizeA);
     if (plan.err) { if (window.__toast) window.__toast(plan.err); return; }   // 箱は開けたまま＝径を変えて再実行できる
     const yAxis = new V3(0, 1, 0);
@@ -7676,10 +7727,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ensureSweepBox();
     if (ELBOW_90L[pipeOpts.sizeA] != null) sweepSize.value = pipeOpts.sizeA;   // パレットのパイプ設定を既定にする
     if (PIPE_SCHEDULES.includes(pipeOpts.sch)) sweepSch.value = pipeOpts.sch;
-    let total = 0;
-    for (let i = 1; i < sweepMode.pts.length; i++) total += sweepMode.pts[i].distanceTo(sweepMode.pts[i - 1]);
-    sweepBox.querySelector('#swpInfo').textContent = `線分${sweepMode.lineCount}本・曲り${sweepMode.pts.length - 2}箇所・芯々${Math.round(total * 1000)}mm`;
-    const c = sweepMode.pts.reduce((s, p) => s.add(p), new V3()).multiplyScalar(1 / sweepMode.pts.length);
+    let c;
+    if (sweepMode.circle) {   // 円/円弧＝R曲げパイプ
+      const rec = sweepMode.circle, { rx } = circleRadii(rec.style, rec.a, rec.b);
+      const rr = arcRange(rec.style), span = rr.a1 - rr.a0;
+      sweepBox.querySelector('#swpInfo').textContent =
+        `円弧 R${Math.round(rx * 1000)}mm・${Math.round(span * 180 / Math.PI)}°・展開${Math.round(rx * span * 1000)}mm`;
+      c = rec.a.clone();
+    } else {
+      let total = 0;
+      for (let i = 1; i < sweepMode.pts.length; i++) total += sweepMode.pts[i].distanceTo(sweepMode.pts[i - 1]);
+      sweepBox.querySelector('#swpInfo').textContent = `線分${sweepMode.lineCount}本・曲り${sweepMode.pts.length - 2}箇所・芯々${Math.round(total * 1000)}mm`;
+      c = sweepMode.pts.reduce((s, p) => s.add(p), new V3()).multiplyScalar(1 / sweepMode.pts.length);
+    }
     const rect = renderer.domElement.getBoundingClientRect();
     const ndc = modelGroup.localToWorld(c.clone()).project(activeCam());
     const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
@@ -7691,7 +7751,18 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (sweepMode) { endSweepMode(); return; }             // もう一度押す＝取消
     if (pendingCmd === 'sweep') { setPendingCmd(null); return; }   // 待ち受け中にもう一度押す＝取消
     const seed = [...selAnns].filter(r => r.type === 'line' && !r.hidden);
-    if (!seed.length) { setPendingCmd('sweep', 'スイープ：ルートの線分をタップで選んでください（1本選べば、つながった線分を自動でたどります）'); return; }
+    const seedC = [...selAnns].filter(r => r.type === 'circle' && !r.hidden);
+    if (!seed.length && seedC.length) {   // 円/円弧＝R曲げパイプのスイープ（2026-07-30 社長要望）
+      setPendingCmd(null);
+      if (typeof clearOtherCommands === 'function') clearOtherCommands('sweep');
+      sweepMode = { circle: seedC[0] };
+      selectLine(seedC[0]);
+      syncCmdLights();
+      showSweepBox();
+      if (window.__toast) window.__toast('スイープ：呼び径とSchを確認して「実行」を押してください（円＝R曲げパイプ）');
+      return;
+    }
+    if (!seed.length) { setPendingCmd('sweep', 'スイープ：ルートの線分か円をタップで選んでください（線分は1本選べば、つながった線分を自動でたどります）'); return; }
     setPendingCmd(null);
     if (typeof clearOtherCommands === 'function') clearOtherCommands('sweep');   // 他のコマンドは解除
     const tr = sweepTrace(seed);
@@ -7718,7 +7789,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__sweepCmd = sweepCmd;
   window.__sweepExec = execSweep;
   window.__sweepSet = (sizeA, sch) => { ensureSweepBox(); if (sizeA) sweepSize.value = sizeA; if (sch) sweepSch.value = sch; };
-  window.__sweepState = () => sweepMode ? { pts: sweepMode.pts.map(p => p.toArray()), lines: sweepMode.lineCount } : null;
+  window.__sweepState = () => sweepMode
+    ? (sweepMode.circle ? { circle: true } : { pts: sweepMode.pts.map(p => p.toArray()), lines: sweepMode.lineCount })
+    : null;
   window.__sweepPlanFor = (sizeA) => {
     if (!sweepMode) return null;
     const pl = sweepPlan(sweepMode.pts, sizeA);
@@ -12752,7 +12825,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       e.stopImmediatePropagation();
       return;
     }
-    if (lineDrag.mode === 'arcend') {                    // 円弧の端点を円周に沿って伸縮。もう片方の端に届いたらつながって円に戻る
+    if (lineDrag.mode === 'arcend') {                    // 円弧の端点を円周に沿って伸縮（つないでも円には戻さない＝切断のまま・2026-07-30 社長指示）
       const rec = lineDrag.rec, st = rec.style, rr = arcRange(st);
       if (rr.full) return;
       let th = circleThetaAt(rec, e.clientX, e.clientY);
@@ -12760,26 +12833,35 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       lineDrag.moved = true;
       while (th - lineDrag.theta > Math.PI) th -= TAU;   // 連続化＝円周をぐるっと回って伸ばせる
       while (th - lineDrag.theta < -Math.PI) th += TAU;
+      // 吸着：四半円点（0/90/180/270°）ともう片方の端点。画面12px以内なら角度をそろえる（2026-07-30 社長要望）
+      let snapped = false;
+      {
+        const rect3 = renderer.domElement.getBoundingClientRect(), cam3 = activeCam();
+        let bestPx = 12;
+        for (const cand0 of [0, Math.PI / 2, Math.PI, Math.PI * 1.5, lineDrag.which === 0 ? rr.a1 : rr.a0]) {
+          let cand = cand0;
+          while (cand - th > Math.PI) cand -= TAU;
+          while (cand - th < -Math.PI) cand += TAU;
+          const n = modelGroup.localToWorld(circPt(rec, cand)).project(cam3);
+          if (n.z >= 1) continue;
+          const px = Math.hypot(rect3.left + (n.x * 0.5 + 0.5) * rect3.width - e.clientX,
+                                rect3.top + (-n.y * 0.5 + 0.5) * rect3.height - e.clientY);
+          if (px < bestPx) { bestPx = px; th = cand; snapped = true; }
+        }
+      }
+      lineDrag.theta = th;
       const MINSPAN = Math.PI / 90;                      // 2°より短くはしない（消す時は部分削除で）
       let a0 = rr.a0, a1 = rr.a1;
-      if (lineDrag.which === 0) a0 = Math.min(th, a1 - MINSPAN); else a1 = Math.max(th, a0 + MINSPAN);
+      // 最大でも一周＝端が重なっても別々の端のまま（切断された円弧として保たれる）
+      if (lineDrag.which === 0) a0 = Math.min(Math.max(th, a1 - TAU), a1 - MINSPAN);
+      else a1 = Math.max(Math.min(th, a0 + TAU), a0 + MINSPAN);
       const span = a1 - a0;
-      // つながる判定：ほぼ一周、または（半周超のとき）掴んだ端がもう片方の端の画面12px以内
-      const cam2 = activeCam(); const rect2 = renderer.domElement.getBoundingClientRect();
-      const sO = modelGroup.localToWorld(circPt(rec, lineDrag.which === 0 ? rr.a1 : rr.a0)).project(cam2);
-      const sN = modelGroup.localToWorld(circPt(rec, lineDrag.which === 0 ? a0 : a1)).project(cam2);
-      const pxGap = Math.hypot((sO.x - sN.x) * 0.5 * rect2.width, (sO.y - sN.y) * 0.5 * rect2.height);
-      if (span >= TAU - Math.PI / 90 || (span > Math.PI && pxGap < 12)) {
-        delete st.arcA0; delete st.arcA1;                // 端どうしがつながった＝円に戻す
-        rebuildAnn(rec); refreshAnnHi(); refreshHandles();
-        lineDrag = null;
-        scheduleHistory();
-        if (window.__toast) window.__toast('端がつながり、円に戻りました');
-        e.stopImmediatePropagation(); return;
-      }
       st.arcA0 = norm2pi(a0); st.arcA1 = st.arcA0 + span;
       lineDrag.theta = lineDrag.which === 0 ? st.arcA0 : st.arcA1;   // 正規化後の値に基準を合わせ直す（次の連続化用）
       rebuildAnn(rec); refreshAnnHi(); refreshHandles();
+      // 線分の端点編集と同じく、動かしている端に緑の起点マーカーを出す（吸着中は大きく）
+      clearMarkers();
+      addMarker(circPt(rec, lineDrag.which === 0 ? st.arcA0 : st.arcA1), 0x39ff8a, markerRadiusFor(null, snapped));
       e.stopImmediatePropagation(); return;
     }
     if (lineDrag.mode === 'circleaxis') {                // 円：四半円点を掴んで半径変更。通常＝真円・Shift＝その軸だけ＝楕円
@@ -12907,6 +12989,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (translated) finishMoveCommand();   // 線・寸法等を1回動かしたら「移動」コマンドを自動終了（部品と同じ）
     e.stopImmediatePropagation();
     if (mode === 'arcend') {                       // 円弧の端点伸縮を確定（選択は維持）
+      clearMarkers();
       refreshHandles(); refreshAnnHi();
       if (typeof updateForm === 'function') updateForm();
       if (moved) scheduleHistory();
