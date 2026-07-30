@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-A';
+const APP_VER = 'v0731-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -822,11 +822,11 @@ let weldTbl = {};
 try { weldTbl = JSON.parse(localStorage.getItem('p3d_weld_tbl') || '{}') || {}; } catch (e) { weldTbl = {}; }
 function weldDefaults(sizeA, sch) {
   const t = pipeWall(sizeA, sch);
-  return { sop: Math.round((t * Math.SQRT2 + 3) * 10) / 10, gap: t < 4 ? 2.5 : (t < 8 ? 3 : 4) };
+  return { sop: Math.round((t * Math.SQRT2 + 3) * 10) / 10, gap: t < 4 ? 2.5 : (t < 8 ? 3 : 4), swc: 2 };   // swc＝SWクリアランス（既定2mm・2026-07-31 社長指示）
 }
 function weldValsOf(sizeA, sch) {
   const d = weldDefaults(sizeA, sch), o = weldTbl[sizeA + '|' + sch] || {};
-  return { sop: (o.sop > 0 ? o.sop : d.sop), gap: (o.gap >= 0 ? o.gap : d.gap) };
+  return { sop: (o.sop > 0 ? o.sop : d.sop), gap: (o.gap >= 0 ? o.gap : d.gap), swc: (o.swc >= 0 ? o.swc : d.swc) };
 }
 function setWeldVal(sizeA, sch, key, v) {
   const k = sizeA + '|' + sch, d = weldDefaults(sizeA, sch);
@@ -4654,7 +4654,9 @@ function insertItemIntoPipe(obj, hit) {
 //    ギャップ0mmの時は縮み代として+0.5mm。例：フランジ→エルボ 25A SGP 面→芯100・ギャップ3mm
 //    ＝パイプ図面61.9（=100−38.1）→ 61.9−7.5−1.5＝52.9→53mm（社長の検算と一致）
 //  ・SOP/LJフランジの背面＝差し込み（フランジ全高−フェイスからの控え）ぶん長く
-//  ・SW（差込み溶接継手・SWフランジ・SW形バルブ）＝ソケット深さ−浮かし1.6mmぶん長く（JIS B2316の流儀）
+//  ・SW（差込み溶接継手・SWフランジ・SW形バルブ）＝ソケット深さ−SWクリアランス（既定2mm・設定で変更可）ぶん長く。
+//    例：25A SGP フランジ→SW90°エルボ 面→芯100＝100−SOP控え7.5−（中心→ソケット底22.2）−クリアランス2＝68.3（社長の検算と一致）
+//  ・ボス（SW BOSS）＝クリアランスに加えてルートギャップも控える（2026-07-31 社長指示）
 //  ・どこにも繋がっていない端・ガスケット面など＝そのまま
 function pipeEndJoint(pipe, endLocal) {
   const P = connModelPos(pipe, endLocal);
@@ -4700,18 +4702,21 @@ function pipeEndJoint(pipe, endLocal) {
         if (o.type === 'WN') return { kind: 'BW', with: 'WN' };    // 首の先でBW
         if (o.type === 'SW') {
           const C = SW_C_E[o.sizeA] || 0;                          // ソケット深さ（規格表）
-          return C > 0 ? { kind: 'SW', with: 'SWフランジ', depth: Math.max(C - 1.6, 0) } : { kind: 'none' };
+          return C > 0 ? { kind: 'SW', with: 'SWフランジ', depth: Math.max(C - weldValsOf(pp.sizeA, pp.sch).swc, 0) } : { kind: 'none' };
         }
         return { kind: 'none' };                                   // SOP/LJは上の領域判定で処理済み。BL等はなし
       }
       if (u.partType === 'sw') {
         const k = u.sw.kind || '';
         const C = (k === '45E' ? SW_C_45 : k === 'CAP' ? SW_C_CAP : SW_C_E)[u.sw.sizeA] || 0;
-        return C > 0 ? { kind: 'SW', with: 'SW継手', depth: Math.max(C - 1.6, 0) } : { kind: 'none' };
+        const wv = weldValsOf(pp.sizeA, pp.sch);
+        // ボス＝クリアランスに加えてルートギャップも控える（2026-07-31 社長指示）
+        const ded = k === 'BOSS' ? (wv.swc + wv.gap) : wv.swc;
+        return C > 0 ? { kind: 'SW', with: k === 'BOSS' ? 'ボス' : 'SW継手', depth: Math.max(C - ded, 0) } : { kind: 'none' };
       }
       if (u.partType === 'valve' && ['swgate', 'swglobe'].includes((u.valve && u.valve.kind) || '')) {
         const C = SW_C_E[u.valve.sizeA] || 0;
-        return C > 0 ? { kind: 'SW', with: 'SWバルブ', depth: Math.max(C - 1.6, 0) } : { kind: 'none' };
+        return C > 0 ? { kind: 'SW', with: 'SWバルブ', depth: Math.max(C - weldValsOf(pp.sizeA, pp.sch).swc, 0) } : { kind: 'none' };
       }
       return { kind: 'none' };                                     // ガスケット・フランジ形機器など
     }
@@ -13433,8 +13438,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
               selSpec('タイプ', 'type', () => typesForClass(spec().cls).map(t => t.code));
               selSpec('呼び径', 'sizeA', () => flangeAvailableSizes(spec().cls, spec().type));
               selSpec('クラス', 'cls', () => classesForType(spec().type));
-              // SchはWN（首の管厚）とSW（差込み）だけ。SOP/LJ/BLには不要（2026-07-31 社長指摘）
-              if (spec().type === 'WN' || spec().type === 'SW') selSpec('Sch', 'sch', () => SCHEDULES);
+              // SchはWN（首の管厚）・SW（差込み）・LJ（ラップジョイント＝スタブエンド込み）に表示。SOP/BLには不要（2026-07-31 社長指摘）
+              if (['WN', 'SW', 'LJ'].includes(spec().type)) selSpec('Sch', 'sch', () => SCHEDULES);
               break;
             case 'pipe':
               selSpec('呼び径', 'sizeA', () => FLANGE_SIZES);
@@ -13688,7 +13693,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           schSel.addEventListener('change', renderTbl);
           dlg.querySelector('#weldClose').onclick = () => { dlg.style.display = 'none'; };
           dlg.querySelector('#weldReset').onclick = () => {
-            for (const s of FLANGE_SIZES) { setWeldVal(s, schSel.value, 'sop', ''); setWeldVal(s, schSel.value, 'gap', ''); }
+            for (const s of FLANGE_SIZES) { setWeldVal(s, schSel.value, 'sop', ''); setWeldVal(s, schSel.value, 'gap', ''); setWeldVal(s, schSel.value, 'swc', ''); }
             renderTbl();
           };
           ['pointerdown', 'click'].forEach(ev => dlg.addEventListener(ev, e => e.stopPropagation()));
@@ -13696,14 +13701,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const renderTbl = () => {
           const tb = dlg.querySelector('#weldTblUI'), sch = schSel.value;
           const cell = 'border:1px solid #d5dce8;padding:3px 6px;text-align:center';
-          let h = `<tr><th style="${cell}">呼び径</th><th style="${cell}">肉厚</th><th style="${cell}">SOP控え(mm)</th><th style="${cell}">ﾙｰﾄｷﾞｬｯﾌﾟ(mm)</th></tr>`;
+          let h = `<tr><th style="${cell}">呼び径</th><th style="${cell}">肉厚</th><th style="${cell}">SOP控え(mm)</th><th style="${cell}">ﾙｰﾄｷﾞｬｯﾌﾟ(mm)</th><th style="${cell}">SWｸﾘｱﾗﾝｽ(mm)</th></tr>`;
           for (const s of FLANGE_SIZES) {
             const v = weldValsOf(s, sch);
             const ov = weldTbl[s + '|' + sch] || {};
             const inp = (key, val, isOv) => `<input data-size="${s}" data-key="${key}" type="number" step="0.1" min="0" value="${val}" ` +
               `style="width:56px;text-align:right;border:1px solid #c4ccda;border-radius:4px;padding:1px 3px;background:#fff;color:${isOv ? '#1d5fd0' : '#2a3550'};font-weight:${isOv ? '700' : '400'}">`;
             h += `<tr><td style="${cell}">${s}</td><td style="${cell}">${pipeWall(s, sch)}</td>` +
-                 `<td style="${cell}">${inp('sop', v.sop, ov.sop != null)}</td><td style="${cell}">${inp('gap', v.gap, ov.gap != null)}</td></tr>`;
+                 `<td style="${cell}">${inp('sop', v.sop, ov.sop != null)}</td><td style="${cell}">${inp('gap', v.gap, ov.gap != null)}</td><td style="${cell}">${inp('swc', v.swc, ov.swc != null)}</td></tr>`;
           }
           tb.innerHTML = h;
           tb.querySelectorAll('input').forEach(el => el.addEventListener('change', () => {
