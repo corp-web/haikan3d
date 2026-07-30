@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-G';
+const APP_VER = 'v0730-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3316,7 +3316,11 @@ let showBoltPts = false;
 try { showBoltPts = localStorage.getItem('p3d_show_boltpt') === '1'; } catch (e) {}
 // 四半円点（部品外径のN/E/S/Wリム点）＝既定OFF（2026-07-20 社長・同日改訂）
 let autoGasket = true;    // フランジ面どうしを合わせた時にガスケットを自動で挟む（2026-07-20 社長要望・既定ON）
-try { autoGasket = localStorage.getItem('p3d_auto_gasket') !== '0'; } catch (e) {}
+try {
+  // 既定ON（2026-07-30 社長指示で再確認）。過去にOFFへ倒した端末も一度だけONへ戻す（以後の切替は記憶）
+  if (!localStorage.getItem('p3d_ag_defon')) { localStorage.setItem('p3d_ag_defon', '1'); localStorage.setItem('p3d_auto_gasket', '1'); }
+  autoGasket = localStorage.getItem('p3d_auto_gasket') !== '0';
+} catch (e) {}
 let showQuadPts = false;
 try { showQuadPts = localStorage.getItem('p3d_show_quad') === '1'; } catch (e) {}
 const SNAP_RED = 0xff4040;   // 四半円点・ボルト穴に吸着した時の起点マーク＝赤（スナップ接近時のみ表示・2026-07-20 社長）
@@ -9465,12 +9469,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
 </style></head><body>
   <div class="pg">
     <div class="dwg"><img src="${img}">${slSvg}</div>
-    ${(() => { let top = 36; return details.map(d => {
+    ${(() => { let bot = 10; return details.map(d => {   /* 詳細図＝左下から上へ積み上げ（2026-07-30 社長指示） */
         const dw = 86, dih = Math.max(34, Math.min(70, dw / (d.aspect || 1.4)));
-        const html = `<div class="detail" style="left:${INSET + 2}mm;top:${top}mm;width:${dw}mm">
+        const html = `<div class="detail" style="left:${INSET + 2}mm;bottom:${bot}mm;width:${dw}mm">
       <div class="dttl">${esc(d.name)}（拡大）</div><img src="${d.url}" style="height:${dih.toFixed(0)}mm">
     </div>`;
-        top += dih + 8; return html; }).join(''); })()}
+        bot += dih + 14; return html; }).join(''); })()}
     ${axisSvg}
     <div class="panel">
       ${ilCollapsed ? '' : `<div class="hd">アイテムリスト</div>
@@ -13769,8 +13773,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!body) return;
     const sBox = document.createElement('input');
     sBox.id = 'helpSearch'; sBox.type = 'search';
-    sBox.placeholder = 'キーワード検索（例：寸法 スナップ 印刷）';
+    sBox.placeholder = 'キーワード検索（例：スイープ 部分削除 切寸 印刷）';
     body.prepend(sBox);
+    // キーワード検索のみ＝一覧は出さない（2026-07-30 社長指示）。空欄の間は案内文だけ
+    const hint = document.createElement('div');
+    hint.id = 'helpHint';
+    hint.style.cssText = 'color:#9fb2d6;font-size:12px;line-height:1.8;padding:4px 2px 8px;';
+    hint.textContent = 'キーワードを入力すると、該当する使い方だけが表示されます。複数語はスペース区切り（AND）。例：「スイープ 円」「フランジ 挿入」「切寸 ギャップ」「印刷 詳細図」';
+    sBox.after(hint);
     // h3ごとに<details>（折りたたみ）へ包み直す。既定＝すべてたたむ
     const secs = [];
     for (const h of [...body.querySelectorAll('h3')]) {
@@ -13781,21 +13791,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       let n = h.nextSibling;
       while (n && !(n.nodeType === 1 && n.tagName === 'H3')) { const nx = n.nextSibling; det.appendChild(n); n = nx; }
       h.replaceWith(det);
+      det.style.display = 'none';   // 検索のみ＝初期状態では一覧を出さない
       secs.push(det);
     }
-    // 検索＝スペース区切りのAND。ヒットした行(li)だけ表示し、その項目を開く。空欄＝全部たたんで全行表示
+    // 検索＝スペース区切りのAND。ヒットした行(li)だけ表示し、その項目を開く。空欄＝何も出さない（検索のみ）
     sBox.addEventListener('input', () => {
       const terms = sBox.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      hint.style.display = terms.length ? 'none' : '';
       for (const det of secs) {
         const titleHit = terms.length && terms.every(w => det.querySelector('summary').textContent.toLowerCase().includes(w));
         let secHit = titleHit;
         for (const li of det.querySelectorAll('li')) {
-          const hit = !terms.length || titleHit || terms.every(w => li.textContent.toLowerCase().includes(w));
+          const hit = titleHit || (terms.length && terms.every(w => li.textContent.toLowerCase().includes(w)));
           li.style.display = hit ? '' : 'none';
-          if (hit && terms.length) secHit = true;
+          if (hit) secHit = true;
         }
-        det.style.display = (!terms.length || secHit) ? '' : 'none';
-        det.open = terms.length ? secHit : false;
+        det.style.display = (terms.length && secHit) ? '' : 'none';
+        det.open = !!(terms.length && secHit);
       }
     });
     sBox.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); sBox.blur(); } });   // Escはヘルプを閉じずに検索欄だけ抜ける
