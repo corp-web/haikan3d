@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-N';
+const APP_VER = 'v0731-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3212,9 +3212,9 @@ function beginMoveAfterOrigin(cx, cy) {
     };
     if (window.__annHasSel && window.__annHasSel()) { window.__annMoveStart(); dirDrag.annFollow = true; }
     controls.enabled = false;
-    if (window.__toast) window.__toast('移動：スライドで方向と距離を決め、タップで確定してください（Shiftで鉛直・Escで取消）');
+
   } else if (window.__annHasSel && window.__annHasSel() && typeof startAnnPlace === 'function' && startAnnPlace()) {
-    if (window.__toast) window.__toast('移動：スライドで動かし、タップで確定してください（Escで取消）');
+
   }
 }
 // 起点選びを始める（選択済みの状態で「移動」に入った時と、「移動」を押してから選んだ時の両方から呼ぶ）
@@ -3236,7 +3236,7 @@ function setMoveMode(on) {
     clearOtherCommands('move');                         // 他のコマンドは解除（同時に光らせない）
     const nSel = selectedParts.size + (window.__annSelCount ? window.__annSelCount() : 0);
     if (nSel > 0) beginMovePickOrigin();                // 選択済みなら、まず起点を選んでもらう
-    else if (window.__toast) window.__toast('移動：オブジェクトを選択してください。そのあと起点をタップして選んでください');
+
   } else {
     endMovePickOrigin();
     if (movingPart) dropMovingPart();                   // 進行中の自由移動は現在位置で確定
@@ -5701,7 +5701,7 @@ function hideCommand() {   // リボン「非表示」ボタン
   } else {
     clearOtherCommands('hide');                          // 他のコマンドは解除（同時に光らせない）
     setHideArmed(true);
-    if (window.__toast) window.__toast('非表示：隠すアイテムをタップしてください（1回で終了・Esc/再押下で取消）');
+
   }
 }
 function showAllHidden() {   // リボン「再表示」ボタン＝隠した全アイテムを戻す
@@ -6499,7 +6499,7 @@ window.addEventListener('pointerup', e => {
     movePicking = false; movePickAwait = true;
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     if (r && r.p) movePickParked = r.p.clone();
-    if (window.__toast) window.__toast('移動：この位置でよければタップして起点を確定してください');
+
     return;
   }
   if (movePickCursorShown) {     // 起点選びの十字を片付ける（ドラッグ中はガイド側が上書きする）
@@ -7346,7 +7346,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (name && typeof clearOtherCommands === 'function') clearOtherCommands('pending');   // 他のコマンドは解除
     pendingCmd = name || null;
     syncCmdLights();
-    if (pendingCmd && msg && window.__toast) window.__toast(msg);
+    // 案内トーストは出さない（2026-07-31 社長指示：操作の補足はヘルプのキーワード検索に集約）
   }
   window.__clearPendingCmd = () => { if (pendingCmd) setPendingCmd(null); };
   window.__hasPendingCmd = () => !!pendingCmd;
@@ -7468,7 +7468,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     rotateMode = { parts, anns, p1: null, ang: 0 };
     syncCmdLights();                          // 実行中はボタンを光らせる
     renderer.domElement.style.cursor = DRAW_CURSOR;
-    if (window.__toast) window.__toast('回転：回転の起点（中心）をタップしてください');
+
   }
   function rotAngleFrom(cx, cy, shift) {
     const p1 = rotateMode.p1;
@@ -7586,7 +7586,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (r && r.p) rotateMode.parked = r.p.clone();
     } else if (!rotateMode.aiming) {                       // ②最初のタッチ＝角度を決め始める（まだ実行しない）
       rotateMode.aiming = true; rotateMode.touching = true;
-      if (window.__toast) window.__toast('回転：スライドで角度を決め、離してからタップで確定してください');
+
     } else {                                               // ③タップで確定
       // 決めた角度で回す。タップした位置から角度を取り直すと、確定のタップの方向へ回ってしまう
       //（2026-07-28 社長指摘）
@@ -7616,7 +7616,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     rotateMode.picking = false; rotateMode.await = true;
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     if (r && r.p) rotateMode.parked = r.p.clone();
-    if (window.__toast) window.__toast('回転：この位置でよければタップして起点を確定してください');
+
   }, true);
   window.addEventListener('pointermove', e => {
     if (!rotateMode || !rotateMode.p1) return;
@@ -7890,7 +7890,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       selectLine(seedC[0]);
       syncCmdLights();
       showSweepBox();
-      if (window.__toast) window.__toast('スイープ：呼び径とSchを確認して「実行」を押してください（円＝R曲げパイプ）');
+
       return;
     }
     if (!seed.length) { setPendingCmd('sweep', 'スイープ：ルートの線分か円をタップで選んでください（線分は1本選べば、つながった線分を自動でたどります）'); return; }
@@ -7910,7 +7910,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     syncCmdLights();
     showSweepBox();
-    if (window.__toast) window.__toast('スイープ：呼び径とSchを確認して「実行」を押してください');
+
   }
   window.addEventListener('keydown', e => {
     if (!sweepMode) return;
@@ -7941,7 +7941,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     syncCmdLights();                          // 実行中はボタンを光らせる
     renderer.domElement.style.cursor = DRAW_CURSOR;
     // 次に何をすればよいか分かるように案内する（2026-07-27 社長要望：起点を選ぶワンタップを明示）
-    if (window.__toast) window.__toast('鏡：反転の起点（基準点）をタップしてください');
+
   }
   // 鏡の変換行列を求める。カーソルが指す方向（45°刻み）へ反転（鉛直面での鏡映）。
   // ※Shift の特殊機能は廃止（2026-06-13 社長指示）
@@ -8102,7 +8102,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (r && r.p) mirrorMode.parked = r.p.clone();
     } else if (!mirrorMode.aiming) {                       // ②最初のタッチ＝方向を決め始める（まだ実行しない）
       mirrorMode.aiming = true; mirrorMode.touching = true;
-      if (window.__toast) window.__toast('鏡：スライドで方向を決め、離してからタップで確定してください');
+
     } else {                                               // ③タップで確定
       // 決めた方向で返す。タップした位置から取り直すと、確定のタップの方向へ返ってしまう
       //（2026-07-28 社長指摘）
@@ -8119,7 +8119,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     clearMirrorGuide();
     mirrorMode.previewKey = 'mir:1.000,0.000';
     buildMirrorPreview(reflectMatrixAbout(p, new V3(1, 0, 0)));   // 初期＝X方向へ反転
-    if (window.__toast) window.__toast('鏡：反転する方向をタップしてください（45°刻み）');
+
   }
   window.addEventListener('pointerup', e => {
     if (!mirrorMode || e.button !== 0) return;
@@ -8128,7 +8128,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     mirrorMode.picking = false; mirrorMode.await = true;
     const r = window.__originPickCursor ? window.__originPickCursor(e.clientX, e.clientY) : null;
     if (r && r.p) mirrorMode.parked = r.p.clone();
-    if (window.__toast) window.__toast('鏡：この位置でよければタップして起点を確定してください');
+
   }, true);
   window.addEventListener('pointermove', e => {
     if (!mirrorMode) return;
@@ -9187,8 +9187,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof clearOtherCommands === 'function') clearOtherCommands('detail');   // 他のコマンドは解除
     if (detailFrame) { endDetailFrame(); return; }
     detailFrame = { down: null };
+    // ヒント（中央上の帯）は出さない（2026-07-31 社長指示：使い方はヘルプで「詳細図」を検索）
     renderer.domElement.style.cursor = 'crosshair';
-    detailHint.style.display = 'block';
     controls.enabled = false;   // 枠を囲む間は視点を固定（社長要望：詳細を押したら画面が回らない）
     updateDetailBtn();          // ボタンを点灯（社長要望）
   }
@@ -9211,10 +9211,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const isDbl = (e.timeStamp - (detailFrame.tapT || -1e9) < 350)
                && Math.hypot(e.clientX - (detailFrame.tapX || 0), e.clientY - (detailFrame.tapY || 0)) < 12;
     detailFrame.tapT = e.timeStamp; detailFrame.tapX = e.clientX; detailFrame.tapY = e.clientY;
-    if (!isDbl) {
-      if (window.__toast) window.__toast('詳細図：もう一度タップして、そのまま囲んでください（ダブルタップで枠開始）');
-      return;
-    }
+    if (!isDbl) return;   // 案内トーストは出さない（2026-07-31 社長指示）
     detailFrame.down = { x: e.clientX, y: e.clientY };
     Object.assign(detailBoxEl.style, { display: 'block', left: e.clientX + 'px', top: e.clientY + 'px', width: '0px', height: '0px' });
   }, true);
@@ -9425,11 +9422,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       `<tr><td class="k" colspan="3">図番</td><td colspan="16">${no}</td><td class="k" colspan="3">改訂</td><td colspan="2">${sv('rev')}</td></tr>` +
       `<tr><td class="k" colspan="3">名称</td><td colspan="9">${name}</td><td class="k" colspan="3">場所</td><td colspan="9">${place}</td></tr>` +
       `<tr><td class="k" colspan="3">年月日</td><td colspan="9">${date}</td><td class="k" colspan="3">社名</td><td colspan="9" class="company">${sv('company')}</td></tr>`;
-    // モデル空間で折りたたんでいたら、印刷でもそのセクションを省略する
-    const specEl = document.getElementById('specBodyWrap');
-    const specCollapsed = !!(specEl && specEl.style.display === 'none');
-    const ilEl = document.getElementById('ilBodyWrap');
-    const ilCollapsed = !!(ilEl && ilEl.classList.contains('fold'));   // v0720-Y：折りたたみはclassで表現
+    // 印刷に載せる欄は設定で選ぶ（2026-07-31 社長指示：画面の折りたたみ状態とは切り離す。既定＝すべて載せる）
+    const lsGet = k => { try { return localStorage.getItem(k) !== '0'; } catch (e) { return true; } };
+    const prIl = lsGet('p3d_print_il'), prSpec = lsGet('p3d_print_spec'), prInfo = lsGet('p3d_print_info');
+    const specCollapsed = !prSpec;
+    const ilCollapsed = !prIl;
     const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
@@ -9476,15 +9473,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     </div>`;
         bot += dih + 14; return html; }).join(''); })()}
     ${axisSvg}
-    <div class="panel">
+    ${(prIl || prSpec || prInfo) ? `<div class="panel">
       ${ilCollapsed ? '' : `<div class="hd">アイテムリスト</div>
       <div class="sc"><table class="items">
         <tr><td class="hcell n">#</td><td class="hcell">種別</td><td class="hcell">タイプ</td><td class="hcell">サイズ</td><td class="hcell">クラス</td><td class="hcell q">数量</td><td class="hcell">材質</td></tr>
         ${ilRows}
       </table></div>`}
       ${specCollapsed ? '' : `<div class="sec"><div class="t">設計仕様</div><table class="kv">${specHtml}</table></div>`}
-      <div class="sec"><table class="kv info">${infoHtml}</table></div>
-    </div>
+      ${prInfo ? `<div class="sec"><table class="kv info">${infoHtml}</table></div>` : ''}
+    </div>` : ''}
     <div class="frame"></div>
   </div>
 </body></html>`;
@@ -11742,7 +11739,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     trimState = { rec: null, kind: null, t1: null, th1: null, thC: null, marker: null };
     trimBtnLit(true);
     renderer.domElement.style.cursor = DRAW_CURSOR;
-    if (window.__toast) window.__toast('部分削除：消したい区間の1点目をタップ（線分・円。起点や交点に吸着。構築線は対象外）');
+    // 案内トーストは出さない（2026-07-31 社長指示：使い方はヘルプで「部分削除」を検索）
   }
   function trimEnd() {
     if (trimState && trimState.marker) { annGroup.remove(trimState.marker); disposeObj(trimState.marker); }
@@ -11765,9 +11762,6 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.9, depthTest: false }));
       mk.scale.setScalar(r); mk.position.copy(hit.pt); mk.renderOrder = 9;
       annGroup.add(mk); trimState.marker = mk;
-      if (window.__toast) window.__toast(hit.kind === 'circle'
-        ? '部分削除：消す側をなぞって2点目をタップ（赤い予告が消える範囲）'
-        : '部分削除：消す区間の2点目をタップ（同じ線の上）');
       return;
     }
     if (hit.rec !== trimState.rec) { if (window.__toast) window.__toast('2点目は同じ線・円の上をタップしてください'); return; }
@@ -13439,7 +13433,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
               selSpec('タイプ', 'type', () => typesForClass(spec().cls).map(t => t.code));
               selSpec('呼び径', 'sizeA', () => flangeAvailableSizes(spec().cls, spec().type));
               selSpec('クラス', 'cls', () => classesForType(spec().type));
-              selSpec('Sch', 'sch', () => SCHEDULES);
+              // SchはWN（首の管厚）とSW（差込み）だけ。SOP/LJ/BLには不要（2026-07-31 社長指摘）
+              if (spec().type === 'WN' || spec().type === 'SW') selSpec('Sch', 'sch', () => SCHEDULES);
               break;
             case 'pipe':
               selSpec('呼び径', 'sizeA', () => FLANGE_SIZES);
@@ -13662,6 +13657,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbB) cbB.addEventListener('change', () => { showBoltPts = cbB.checked; _idleSig = null; try { localStorage.setItem('p3d_show_boltpt', showBoltPts ? '1' : '0'); } catch (e) {} });
     if (cbQ) cbQ.addEventListener('change', () => { showQuadPts = cbQ.checked; _idleSig = null; try { localStorage.setItem('p3d_show_quad', showQuadPts ? '1' : '0'); } catch (e) {} });
     if (cbAG) cbAG.addEventListener('change', () => { autoGasket = cbAG.checked; try { localStorage.setItem('p3d_auto_gasket', autoGasket ? '1' : '0'); } catch (e) {} });
+    // ---- 印刷に載せる欄（既定＝すべて載せる。2026-07-31 社長指示で画面の折りたたみと分離） ----
+    for (const [id, key] of [['setPrintIl', 'p3d_print_il'], ['setPrintSpec', 'p3d_print_spec'], ['setPrintInfo', 'p3d_print_info']]) {
+      const cb = document.getElementById(id);
+      if (!cb) continue;
+      try { cb.checked = localStorage.getItem(key) !== '0'; } catch (e) { cb.checked = true; }
+      cb.addEventListener('change', () => { try { localStorage.setItem(key, cb.checked ? '1' : '0'); } catch (e) {} });
+    }
     // ---- 溶接・切寸の設定（配管化③）：SOP控え・BWルートギャップを呼び径×Schで編集 ----
     { const bW = document.getElementById('setWeld');
       if (bW) {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0730N — SKT-HD ♦</title>
+<title>配管3D v0731A — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260730">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0730N">
+<meta name="apple-mobile-web-app-title" content="配管3D v0731A">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -118,8 +118,8 @@
   #itemList .il-caret { position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
     font-size: 10px; color: #7fa8e8; letter-spacing: 0; }
   /* 折りたたみはゆっくり開閉（2026-07-20 社長要望）。表示/非表示ではなく高さと不透明度を補間する */
-  #itemList .il-body { overflow-y: auto; flex: 1 1 auto; min-height: 44px; max-height: 60vh;
-    transition: max-height .42s cubic-bezier(.25,.9,.3,1), opacity .34s ease; }
+  #itemList .il-body { overflow-y: auto; flex: 1 1 auto; min-height: 128px; max-height: 60vh;   /* 設計仕様・図面情報を開いても数行は見える（2026-07-31 社長要望） */
+    transition: max-height .42s cubic-bezier(.25,.9,.3,1), min-height .42s cubic-bezier(.25,.9,.3,1), opacity .34s ease; }
   #itemList .il-body.fold { max-height: 0; min-height: 0; opacity: 0; overflow: hidden; }
   #itemList table { width: 100%; border-collapse: collapse; font-size: 11px; }
   #itemList thead th { position: sticky; top: 0; background: #2a3656; color: #b9c7e6;
@@ -759,7 +759,7 @@
       <div class="dwg-row"><span>名称</span><input id="dwgName" type="text"></div>
       <div class="dwg-row"><span>図番</span><input id="dwgNo" type="text"></div>
       <div class="dwg-row"><span>社名</span><input id="dwgCompany" type="text"></div>
-      <button id="cmdTplSave" type="button" title="設計仕様・場所・社名を既定値として記憶し、新規図面に自動で入れる">この内容を既定として記憶（新規図面に自動反映）</button>
+      <!-- 「既定として記憶」ボタンは設定メニューへ移設（2026-07-31 社長指示） -->
     </div>
   </div>
   <!-- 選択部品の脇に出る高さ入力フォーム（高さ/COP を入れて Enter で確定） -->
@@ -776,6 +776,10 @@
     <label><input type="checkbox" id="setBolt"><span>ボルト穴</span></label>
     <label><input type="checkbox" id="setGround"><span>地面の表示</span></label>
     <label><input type="checkbox" id="setAutoGsk"><span>ガスケット自動挿入</span></label>
+    <label><input type="checkbox" id="setPrintIl"><span>印刷にアイテムリスト</span></label>
+    <label><input type="checkbox" id="setPrintSpec"><span>印刷に設計仕様</span></label>
+    <label><input type="checkbox" id="setPrintInfo"><span>印刷に図面情報</span></label>
+    <button id="cmdTplSave" type="button" title="設計仕様・場所・社名を既定値として記憶し、新規図面に自動で入れる" style="margin-top:4px;border:none;border-radius:6px;padding:4px 8px;background:#e2e7f0;color:#33405c;cursor:pointer;font:inherit;text-align:left">図面情報を既定として記憶…</button>
     <button id="setWeld" title="切寸の計算に使うSOP控え・BWルートギャップを呼び径×Schで設定する（部品表CSVのパイプ切寸表に反映）" style="margin-top:4px;border:none;border-radius:6px;padding:4px 8px;background:#e2e7f0;color:#33405c;cursor:pointer;font:inherit;text-align:left">溶接・切寸の設定…</button>
   </div>
   <div id="rotForm"><span id="rotLabel">角度</span><span id="rotWrap"><input id="rotA" type="number" step="0.5" value="0"><span id="rotBtns"><button id="rotUp" type="button" title="+0.5°">▲</button><button id="rotDn" type="button" title="−0.5°">▼</button></span></span><span id="rotUnit">°</span></div>
