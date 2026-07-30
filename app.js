@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-F';
+const APP_VER = 'v0730-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8955,31 +8955,50 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // 地面(XZ平面)に乗った3Dコンパス：視点に合わせて傾く楕円リング＋赤い北磁針＋N/E/S/W＋上方向ヒント。
   // 北＝ワールド -Z。現在ビューの向きで投影して描くので、視点を回すとコンパスも傾く。
+  // 印刷の左上＝格子舞台（新キューブ）のモノクロ縮刷（2026-07-30 社長指示。方位指針は廃止）。
+  // X/Zの矢・文字は出さない。鉛直の矢1本だけ「上」表記（モノクロ）。方位文字は北南東西、
+  // 正対でこちら/向こうへ潰れるものは省く。現在の視点の向きで描く。
   function buildAxisGlyph() {
-    const C = 40, Rt = 24;
+    const C = 40, Rt = 21;
     try {
       const cam = activeCam(); cam.updateMatrixWorld();
-      const base = (typeof controls !== 'undefined' && controls.target) ? controls.target.clone() : new V3(0, 0, 0);
-      const o = base.clone().project(cam);
-      const proj = v => { const p = base.clone().add(new V3(v[0], v[1], v[2])).project(cam); return { x: p.x - o.x, y: -(p.y - o.y) }; };  // SVGはy下向き
-      const E = proj([1, 0, 0]), S = proj([0, 0, 1]), U = proj([0, 1, 0]);
-      const mag = Math.max(Math.hypot(E.x, E.y), Math.hypot(S.x, S.y), 1e-6);
+      // カメラの向きだけを使った平行投影＝透視の歪みなく、画面と同じ向きの整った舞台を刷る
+      const right = new V3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+      const upv = new V3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+      const proj = v => { const p = new V3(v[0], v[1], v[2]); return { x: p.dot(right), y: -p.dot(upv) }; };  // SVGはy下向き
+      const E1 = proj([1, 0, 0]), S1 = proj([0, 0, 1]);
+      const mag = Math.max(Math.hypot(E1.x, E1.y), Math.hypot(S1.x, S1.y), 1e-6);
       const f = Rt / mag;
-      const ex = E.x * f, ey = E.y * f, sx = S.x * f, sy = S.y * f, ux = U.x * f, uy = U.y * f;
-      const rf = 0.68;   // W-E線の長さ基準（円リングは廃止）
-      const N = { x: C - sx, y: C - sy }, So = { x: C + sx, y: C + sy }, Ea = { x: C + ex, y: C + ey }, Wa = { x: C - ex, y: C - ey };
-      const nlen = Math.hypot(sx, sy) || 1e-6, perpx = -sy / nlen, perpy = sx / nlen, ww = 3.4;
-      const wL = { x: C + perpx * ww, y: C + perpy * ww }, wR = { x: C - perpx * ww, y: C - perpy * ww };
-      const lab = (p, t) => `<text x="${(C + (p.x - C) * 1.22).toFixed(1)}" y="${(C + (p.y - C) * 1.22 + 3.2).toFixed(1)}" text-anchor="middle" font-size="9" font-weight="700" fill="#333">${t}</text>`;
+      const P = v => { const p = proj(v); return { x: C + p.x * f, y: C + p.y * f }; };
+      const viewDir = new V3().setFromMatrixColumn(cam.matrixWorld, 2).normalize();   // 注視点→カメラの向き
       let body = '';
-      body += `<line x1="${(C - ex * rf * 0.7).toFixed(1)}" y1="${(C - ey * rf * 0.7).toFixed(1)}" x2="${(C + ex * rf * 0.7).toFixed(1)}" y2="${(C + ey * rf * 0.7).toFixed(1)}" stroke="#8a8f99" stroke-width="0.9" stroke-linecap="round"/>`;
-      body += `<polygon points="${So.x.toFixed(1)},${So.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/>`;
-      body += `<polygon points="${N.x.toFixed(1)},${N.y.toFixed(1)} ${wL.x.toFixed(1)},${wL.y.toFixed(1)} ${wR.x.toFixed(1)},${wR.y.toFixed(1)}" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/>`;
-      body += `<circle cx="40" cy="40" r="2.2" fill="#2a3550"/>`;
-      body += lab(N, 'N');
+      // 舞台＝5×5の格子（外枠も同じ太さ）
+      for (let i = 0; i <= 4; i++) {
+        const t = -1 + (2 / 4) * i;
+        const a1 = P([t, 0, -1]), b1 = P([t, 0, 1]);
+        const a2 = P([-1, 0, t]), b2 = P([1, 0, t]);
+        body += `<line x1="${a1.x.toFixed(1)}" y1="${a1.y.toFixed(1)}" x2="${b1.x.toFixed(1)}" y2="${b1.y.toFixed(1)}" stroke="#6b7280" stroke-width="0.55"/>`;
+        body += `<line x1="${a2.x.toFixed(1)}" y1="${a2.y.toFixed(1)}" x2="${b2.x.toFixed(1)}" y2="${b2.y.toFixed(1)}" stroke="#6b7280" stroke-width="0.55"/>`;
+      }
+      // 鉛直の矢（モノクロ）＋「上」。真上/真下の正対では潰れるので省く
+      const O2 = P([0, 0, 0]), T2 = P([0, 1.15, 0]);
+      let ux = T2.x - O2.x, uy = T2.y - O2.y; const L2 = Math.hypot(ux, uy);
+      if (L2 > 3) {
+        ux /= L2; uy /= L2;
+        const bx = T2.x - ux * 4, by = T2.y - uy * 4;
+        body += `<line x1="${O2.x.toFixed(1)}" y1="${O2.y.toFixed(1)}" x2="${bx.toFixed(1)}" y2="${by.toFixed(1)}" stroke="#111" stroke-width="1.3" stroke-linecap="round"/>`;
+        body += `<polygon points="${(T2.x + ux * 2).toFixed(1)},${(T2.y + uy * 2).toFixed(1)} ${(bx - uy * 2.6).toFixed(1)},${(by + ux * 2.6).toFixed(1)} ${(bx + uy * 2.6).toFixed(1)},${(by - ux * 2.6).toFixed(1)}" fill="#111"/>`;
+        body += `<text x="${(T2.x + ux * 8).toFixed(1)}" y="${(T2.y + uy * 8 + 3).toFixed(1)}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#111">上</text>`;
+      }
+      // 方位の文字（北は太字）
+      for (const [t, d] of [['北', [0, 0, -1]], ['南', [0, 0, 1]], ['東', [1, 0, 0]], ['西', [-1, 0, 0]]]) {
+        if (Math.abs(d[0] * viewDir.x + d[2] * viewDir.z + 0 * viewDir.y) > 0.985 * Math.max(Math.hypot(viewDir.x, viewDir.z), 1e-6) && Math.abs(viewDir.y) < 0.2) continue;   // 真横正対＝中央に重なる方位は省く
+        const q = P([d[0] * 1.45, 0.02, d[2] * 1.45]);
+        body += `<text x="${q.x.toFixed(1)}" y="${(q.y + 3).toFixed(1)}" text-anchor="middle" font-size="8.5" ${t === '北' ? 'font-weight="700"' : ''} fill="#333">${t}</text>`;
+      }
       return `<svg class="north" viewBox="0 0 80 80">${body}</svg>`;
     } catch (e) {
-      return `<svg class="north" viewBox="0 0 80 80"><line x1="29" y1="42" x2="51" y2="42" stroke="#8a8f99" stroke-width="0.9"/><polygon points="40,62 43.2,42 36.8,42" fill="#ffffff" stroke="#6b7280" stroke-width="0.6"/><polygon points="40,22 43.2,42 36.8,42" fill="#9aa3b2" stroke="#5a6172" stroke-width="0.5"/><circle cx="40" cy="42" r="2.2" fill="#2a3550"/><text x="40" y="17" text-anchor="middle" font-size="9" font-weight="700" fill="#333">N</text></svg>`;
+      return `<svg class="north" viewBox="0 0 80 80"></svg>`;
     }
   }
   // ===== 詳細図（部分拡大）＝2026-07-21 社長要望 =====
