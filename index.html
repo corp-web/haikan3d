@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0731B — SKT-HD ♦</title>
+<title>配管3D v0731C — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260730">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0731B">
+<meta name="apple-mobile-web-app-title" content="配管3D v0731C">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -109,7 +109,7 @@
   #setMenu input[type="checkbox"] { width: 15px; height: 15px; }
   body.light #setMenu { background: rgba(248,250,253,.97); border-color: #c4ccda; color: #33405c; }
   body.light #setMenu .sm-title { color: #1f6fd0; border-bottom-color: #cdd4e0; }
-  #itemList { position: fixed; right: 10px; bottom: 56px; width: 424px; max-height: calc(100vh - 140px);   /* 一覧の最小高を確保しても図面情報まで収まる高さ（2026-07-31 図面情報が押し出される不具合の修正） */
+  #itemList { position: fixed; right: 10px; bottom: 56px; width: 424px; max-height: calc(100vh - 270px);   /* 図面情報まで収まる高さ・かつ右上の格子舞台には重ねない（2026-07-31 社長指摘） */
     background: rgba(20,28,51,.94); border: 1px solid #36436b; border-radius: 10px;
     box-shadow: 0 4px 14px rgba(0,0,0,.4); display: flex; flex-direction: column; overflow: hidden; }
   #itemList .il-head { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
@@ -161,7 +161,7 @@
   #itemList .il-spechead { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
     padding: 5px 8px; border-top: 1px solid #36436b; letter-spacing: 1px; cursor: pointer; user-select: none; flex: none; }
   #itemList .il-spechead:hover { color: #cfe0fb; background: rgba(127,168,232,.10); }
-  #itemList .il-specbody { padding: 7px 8px; display: flex; flex-direction: column; gap: 5px; flex: none;
+  #itemList .il-specbody { padding: 7px 8px; display: flex; flex-direction: column; gap: 5px; flex: 0 1 auto; min-height: 60px; overflow-y: auto;   /* 収まらない時は設計仕様が縮んでスクロール（図面情報は押し出さない） */
     max-height: 30vh; overflow-y: auto; border-top: 1px solid #2a3450; }
   #itemList .il-specbody .dwg-row, #itemList .il-specbody .dwg-row2 { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #9fb2d6; }
   #itemList .il-specbody .dwg-row > span { width: 64px; flex: none; }

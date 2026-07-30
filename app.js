@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-B';
+const APP_VER = 'v0731-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4022,7 +4022,12 @@ function updateFollowPreview(clientX, clientY) {
   // 巻き戻されて「回転が効かない」ように見えた。2026-07-29 社長報告の一因）
   if (followQuat) followPreview.quaternion.copy(followQuat);
   else orientRotation(followPreview, followOrient, followRoll);
-  // ボスのプレビューは従来どおりの通常スナップ（外面への移動は「置いた後」に行う。2026-07-29 社長指示）
+  // ボスのプレビューは従来どおりの通常スナップ（外面への移動は「置いた後」）。
+  // 合いフランジ同様、両端までの距離ボックスは出す（数値入力＋Enterで確定も可。2026-07-31 社長要望）
+  if (isBossTool(followPreview)) {
+    const bh = bossFitAt(clientX, clientY);
+    if (bh) showInsDist(clientX, clientY, bh);
+  }
   // 配管化②：挿入系アイテム＝吸着点（中点・交点など）が芯線上ならその点へ、無ければ画面距離で挿入予告
   if (INSERTABLE_TYPES[followPreview.userData.partType] && insertAxialOk(followPreview)) {
     const insT = insertTargetAt(clientX, clientY);
@@ -4324,14 +4329,16 @@ function showInsDist(cx, cy, hit) {
   const L = hit.pipe.userData.partType === 'bentpipe' ? Math.round(bentArcLenMm(hit.pipe)) : hit.pipe.userData.pipe.length;
   if (document.activeElement !== _insL) _insL.value = Math.round(hit.tMm);
   if (document.activeElement !== _insR) _insR.value = Math.round(L - hit.tMm);
-  // 箱はカーソルを追わず、出す時に一度だけ画面上部の定位置へ置く。
-  // カーソル脇に出すと、入力しに行く途中でプレビューが動いてしまう（2026-07-29 社長報告）
+  // 箱はカーソルを追わず、出す時に一度だけ「調整中のオブジェクトの少し上」へ置く
+  //（画面上部の定位置は遠すぎる：2026-07-31 社長要望。追従させると入力しに行く途中で動くので固定のまま）
   if (_insDistBox.style.display !== 'flex') {
     _insDistBox.style.display = 'flex';
     const rect = renderer.domElement.getBoundingClientRect();
     const bw = _insDistBox.offsetWidth || 260;
-    _insDistBox.style.left = Math.round(rect.left + (rect.width - bw) / 2) + 'px';
-    _insDistBox.style.top = Math.round(rect.top + 12) + 'px';
+    const lx = Math.min(Math.max(cx - bw / 2, rect.left + 8), rect.right - bw - 8);
+    const ly = Math.max(cy - 130, rect.top + 8);
+    _insDistBox.style.left = Math.round(lx) + 'px';
+    _insDistBox.style.top = Math.round(ly) + 'px';
   }
 }
 function hideInsDist() {
@@ -4654,9 +4661,10 @@ function insertItemIntoPipe(obj, hit) {
 //    ギャップ0mmの時は縮み代として+0.5mm。例：フランジ→エルボ 25A SGP 面→芯100・ギャップ3mm
 //    ＝パイプ図面61.9（=100−38.1）→ 61.9−7.5−1.5＝52.9→53mm（社長の検算と一致）
 //  ・SOP/LJフランジの背面＝差し込み（フランジ全高−フェイスからの控え）ぶん長く
-//  ・SW（差込み溶接継手・SWフランジ・SW形バルブ）＝ソケット深さ−SWクリアランス（既定2mm・設定で変更可）ぶん長く。
+//  ・SW継手（エルボ・ティー・ボス等＝機点がソケット底）＝図面はソケット底まで描かれるので、
+//    切寸は「SWクリアランス（既定2mm・設定で変更可）だけ短く」。ボスはクリアランス＋ルートギャップ。
 //    例：25A SGP フランジ→SW90°エルボ 面→芯100＝100−SOP控え7.5−（中心→ソケット底22.2）−クリアランス2＝68.3（社長の検算と一致）
-//  ・ボス（SW BOSS）＝クリアランスに加えてルートギャップも控える（2026-07-31 社長指示）
+//  ・SWフランジ・SW形バルブ（機点＝差込み口）＝ソケット深さ−クリアランスぶん長く
 //  ・どこにも繋がっていない端・ガスケット面など＝そのまま
 function pipeEndJoint(pipe, endLocal) {
   const P = connModelPos(pipe, endLocal);
@@ -4708,11 +4716,10 @@ function pipeEndJoint(pipe, endLocal) {
       }
       if (u.partType === 'sw') {
         const k = u.sw.kind || '';
-        const C = (k === '45E' ? SW_C_45 : k === 'CAP' ? SW_C_CAP : SW_C_E)[u.sw.sizeA] || 0;
+        // makeSWの機点＝ソケット底＝図面のパイプは奥まで差した表現。切寸は「クリアランス分だけ引く」。
+        // ボスはクリアランス＋ルートギャップを引く（2026-07-31 社長検算：SW90E 25A 面→芯100 → 68.3mm）
         const wv = weldValsOf(pp.sizeA, pp.sch);
-        // ボス＝クリアランスに加えてルートギャップも控える（2026-07-31 社長指示）
-        const ded = k === 'BOSS' ? (wv.swc + wv.gap) : wv.swc;
-        return C > 0 ? { kind: 'SW', with: k === 'BOSS' ? 'ボス' : 'SW継手', depth: Math.max(C - ded, 0) } : { kind: 'none' };
+        return { kind: 'SW', with: k === 'BOSS' ? 'ボス' : 'SW継手', depth: -(k === 'BOSS' ? (wv.swc + wv.gap) : wv.swc) };
       }
       if (u.partType === 'valve' && ['swgate', 'swglobe'].includes((u.valve && u.valve.kind) || '')) {
         const C = SW_C_E[u.valve.sizeA] || 0;
@@ -5727,7 +5734,11 @@ function partColumns(p) {
   switch (u.partType) {
     case 'flange': { const o = u.flange || {}; return { kind: 'フランジ', type: o.type || '', size: o.sizeA || '', cls: o.cls || '' }; }
     case 'gasket': { const o = u.gasket || {}; return { kind: 'ガスケット', type: `t${o.t != null ? o.t : 3}`, size: o.sizeA || '', cls: o.cls || '' }; }
-    case 'pipe':   { const o = u.pipe || {};   return { kind: 'パイプ', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.sch || '' }; }
+    case 'pipe':   { const o = u.pipe || {};
+      // 表示はCSVの切寸表と同じ「切寸」に揃える（2026-07-31 社長指示）。未配置（プレビュー等）は図面長のまま
+      let L = Math.round((o.length || 0) * 10) / 10;
+      try { if (u.placed && typeof pipeCutInfo === 'function') L = pipeCutInfo(p).cut; } catch (e) {}
+      return { kind: 'パイプ', type: `L${L}`, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'bentpipe': { const o = u.bent || {}; const len = Math.round((o.R || 0) * (o.angleDeg || 0) * Math.PI / 180 * 1000); return { kind: 'パイプ', type: `R曲げR${Math.round((o.R || 0) * 1000)} 展開L${len}`, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'elbow':  { const o = u.elbow || {};  const nm = {'90L':'90°エルボ','90S':'90°エルボ','45L':'45°エルボ','45S':'45°エルボ','180L':'180°エルボ','180S':'180°エルボ'}; let tp = (o.kind && o.kind.endsWith('S')) ? 'BW(S)' : 'BW(L)'; if (o.cutAngle > 0) tp += `切${Math.round(o.cutAngle * 10) / 10}°`; return { kind: nm[o.kind] || 'エルボ', type: tp, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'cap':    { const o = u.cap || {};    return { kind: 'キャップ', type: 'BW', size: o.sizeA || '', cls: o.sch || '' }; }
@@ -7647,7 +7658,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ・パイプ長＝芯々からエルボの中心-端(cE=R·tan(角/2))を差し引いた値＝線分の寸法がそのまま芯々寸法。
   // ・線分（芯線）は消さずに残す（採寸の記録。不要なら選んで削除）。
   let sweepMode = null;   // { pts:V3[], lineCount }
-  let sweepBox = null, sweepSize = null, sweepSch = null;
+  let sweepBox = null, sweepSize = null, sweepSch = null, sweepJoint = null;
   const SWEEP_TOL = 0.001;        // 端点一致 1mm（構築線交点の endTol と同じ）
   const SWEEP_ANG_TOL = 0.25;     // 90°/45°ちょうどとみなす角度差
   function endSweepMode() {
@@ -7710,7 +7721,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return { pts, count: used.size, lines: [...used] };
   }
   // 点列→部品割り付け（エルボの種類・切断角・パイプ長）。err か {elbows, pipes} を返す。
-  function sweepPlan(pts, sizeA) {
+  function sweepPlan(pts, sizeA, joint) {
     const D2R = Math.PI / 180;
     const corners = [];
     for (let i = 1; i < pts.length - 1; i++) {
@@ -7721,6 +7732,35 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const base = th <= 45 + SWEEP_ANG_TOL ? '45' : th <= 90 + SWEEP_ANG_TOL ? '90' : '180';
       const exact = base !== '180' && Math.abs(th - (base === '45' ? 45 : 90)) <= SWEEP_ANG_TOL;
       corners.push({ i, th, base, exact, short: false, dIn, dOut });
+    }
+    // SW（差込み溶接・50Aまで）＝規格の90°/45°だけ。切断・ショート切替は無し（2026-07-31 社長要望）。
+    // 機点＝ソケット底なので cE＝中心→ソケット底（L−C）。パイプは底まで届き、切寸でクリアランスを引く。
+    if (joint === 'SW') {
+      if (SW_S[sizeA] == null) return { err: `スイープ：SW継手は50Aまでです（${sizeA}は規格外）` };
+      for (const c of corners) {
+        if (c.base === '180' || !c.exact) return { err: `スイープ：SWエルボは90°と45°だけです（${Math.round(c.th * 10) / 10}°の角は切断できません。BWをお使いください）` };
+      }
+      const elbows = corners.map(c => ({
+        i: c.i, th: c.th, dIn: c.dIn, dOut: c.dOut, sw: true, cutAngle: 0,
+        kind: c.base === '45' ? '45E' : '90E',
+        cE: (c.base === '45' ? SW_L_45[sizeA] - SW_C_45[sizeA] : SW_L_90[sizeA] - SW_C_E[sizeA]) / 1000,
+      }));
+      for (let s = 0; s < pts.length - 1; s++) {
+        const cP = elbows.find(c => c.i === s), cN = elbows.find(c => c.i === s + 1);
+        const L = pts[s].distanceTo(pts[s + 1]) - (cP ? cP.cE : 0) - (cN ? cN.cE : 0);
+        if (L < -1e-6) return { err: `スイープ：区間${s + 1}が短すぎてSWエルボが入りません（あと${Math.ceil(-L * 1000)}mm）` };
+      }
+      const pipes = [];
+      for (let s = 0; s < pts.length - 1; s++) {
+        const cP = elbows.find(c => c.i === s), cN = elbows.find(c => c.i === s + 1);
+        const a = pts[s].clone(), b = pts[s + 1].clone();
+        const d = b.clone().sub(a).normalize();
+        if (cP) a.addScaledVector(d, cP.cE);
+        if (cN) b.addScaledVector(d, -cN.cE);
+        const L = a.distanceTo(b) * 1000;
+        if (L >= 0.5) pipes.push({ a, b, d, L });
+      }
+      return { elbows, pipes };
     }
     // 中心-端 cE(m)＝母材の曲げ半径R×tan(角/2)。規格表に無い径は null。
     function cEof(c) {
@@ -7804,11 +7844,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!sweepMode) return;
     const sizeA = sweepSize.value, sch = sweepSch.value;
     if (sweepMode.circle) { execSweepCircle(sizeA, sch); return; }
-    const plan = sweepPlan(sweepMode.pts, sizeA);
+    const joint = sweepJoint ? sweepJoint.value : 'BW';
+    const plan = sweepPlan(sweepMode.pts, sizeA, joint);
     if (plan.err) { if (window.__toast) window.__toast(plan.err); return; }   // 箱は開けたまま＝径を変えて再実行できる
     const yAxis = new V3(0, 1, 0);
     for (const e of plan.elbows) {
-      const o = makeElbow(Object.assign({ sizeA, sch, kind: e.kind }, e.cutAngle ? { cutAngle: e.cutAngle } : {}));
+      const o = e.sw ? makeSW({ kind: e.kind, sizeA, sch: 'Sch80' })   // SW＝Sch80固定（アプリの規約）
+                     : makeElbow(Object.assign({ sizeA, sch, kind: e.kind }, e.cutAngle ? { cutAngle: e.cutAngle } : {}));
       computeConns(o);
       // 向き＝ローカルの背脚(0,-1,0)を入り側の逆へ、面脚(sinθ,cosθ,0)を出側へ。
       // ローカル法線(0,0,-1)が世界の dIn×dOut に対応するので、基底 y=dIn / z=-(dIn×dOut) / x=y×z で決まる。
@@ -7846,6 +7888,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const btn = 'border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer';
     sweepBox.innerHTML =
       '<span style="font-weight:bold">スイープ</span><span id="swpInfo" style="opacity:.72"></span>' +
+      `<select id="swpJoint" title="継手の形式（BW=突合せ溶接／SW=差込み溶接・50Aまで・90°/45°のみ）" style="${sel}"><option value="BW">BW</option><option value="SW">SW</option></select>` +
       `<select id="swpSize" title="呼び径" style="${sel}"></select>` +
       `<select id="swpSch" title="スケジュール" style="${sel}"></select>` +
       `<button id="swpGo" style="${btn};background:#2f6fd8;color:#fff">実行</button>` +
@@ -7853,6 +7896,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     document.body.appendChild(sweepBox);
     sweepSize = sweepBox.querySelector('#swpSize');
     sweepSch = sweepBox.querySelector('#swpSch');
+    sweepJoint = sweepBox.querySelector('#swpJoint');
     for (const s of FLANGE_SIZES) if (ELBOW_90L[s] != null) sweepSize.add(new Option(s, s));
     for (const s of PIPE_SCHEDULES) sweepSch.add(new Option(s, s));
     sweepBox.querySelector('#swpGo').onclick = execSweep;
@@ -7924,7 +7968,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // e2e検証用フック
   window.__sweepCmd = sweepCmd;
   window.__sweepExec = execSweep;
-  window.__sweepSet = (sizeA, sch) => { ensureSweepBox(); if (sizeA) sweepSize.value = sizeA; if (sch) sweepSch.value = sch; };
+  window.__sweepSet = (sizeA, sch, joint) => { ensureSweepBox(); if (sizeA) sweepSize.value = sizeA; if (sch) sweepSch.value = sch; if (joint && sweepJoint) sweepJoint.value = joint; };
   window.__sweepState = () => sweepMode
     ? (sweepMode.circle ? { circle: true } : { pts: sweepMode.pts.map(p => p.toArray()), lines: sweepMode.lineCount })
     : null;
@@ -11068,13 +11112,36 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   function commitLeader() {                             // 引出：a=矢印先端(1点目)・b=肘(2点目)で確定。棚と文字はbから自動生成
     if (!drawState.first || !drawState.cur || drawState.cur.distanceTo(drawState.first) <= 1e-6) { clearDrawTemp(); return; }
+    const P = drawState.first.clone();                  // 矢の先（1点目）
     const st = Object.assign({}, styleFor('dim'), { dimKind: 'leader' });
     addAnnotation('dim', drawState.first.clone(), drawState.cur.clone(), st);
     const rec = annStore[annStore.length - 1];
     cancelDraw();   // ツールを抜ける
-    // そのまま注記の入力へ：レコードを選択し、入力フォームを開いてフォーカス（新規入力＝ラベル「入力」）
+    // 矢の先が部品を指していたら、その名称・仕様を注記の初期値に（編集可。2026-07-31 社長要望）
+    let label = null;
+    try {
+      let best = null, bd = 0.002;
+      for (const q of placedParts) {
+        if (q.userData.hidden || !q.userData.faceLocal) continue;
+        for (const l of connsOf(q)) { const d2 = connModelPos(q, l).distanceTo(P); if (d2 < bd) { bd = d2; best = q; } }
+        if (typeof quadLocalsOf === 'function') for (const l of quadLocalsOf(q)) { const d2 = connModelPos(q, l).distanceTo(P); if (d2 < bd) { bd = d2; best = q; } }
+      }
+      if (!best) {   // 機点で見つからなければ外形の箱で判定（部品の胴を指した時）
+        for (const q of placedParts) {
+          if (q.userData.hidden || !q.userData.faceLocal) continue;
+          const bb = new THREE.Box3().setFromObject(q).expandByScalar(0.002);
+          if (bb.containsPoint(P)) { best = q; break; }
+        }
+      }
+      if (best && typeof partColumns === 'function') {
+        const c = partColumns(best);
+        label = [c.kind, c.type, c.size, c.cls].filter(Boolean).join(' ');
+      }
+    } catch (err) {}
+    if (label) { rec.style.dimText = label; rebuildAnn(rec); }
+    // そのまま注記の入力へ：初期値がある時は「編集」として開く（値が入った状態・書き換え可）
     selectLine(rec);
-    if (window.__openDimValueForm) window.__openDimValueForm(false);
+    if (window.__openDimValueForm) window.__openDimValueForm(!!label);
     if (window.__focusDimValueInput) window.__focusDimValueInput();
   }
   function commitGuide() {                              // first→cur を確定
