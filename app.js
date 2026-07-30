@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0730-D';
+const APP_VER = 'v0730-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4019,11 +4019,19 @@ function updateFollowPreview(clientX, clientY) {
   if (INSERTABLE_TYPES[followPreview.userData.partType] && insertAxialOk(followPreview)) {
     const insT = insertTargetAt(clientX, clientY);
     if (insT) {
-      const back = connModelPos(insT.pipe, insT.pipe.userData.backLocal);
-      const face = connModelPos(insT.pipe, insT.pipe.userData.faceLocal);
-      const dir = face.clone().sub(back).normalize();
-      const pt = back.clone().addScaledVector(dir, insT.tMm / 1000);
-      followPreview.quaternion.copy(insT.pipe.quaternion);
+      let pt, dir, qIns;
+      if (insT.pipe.userData.partType === 'bentpipe') {   // R曲げ管＝接線に合わせる
+        pt = bentPointAt(insT.pipe, insT.tMm);
+        dir = bentAxisAt(insT.pipe, insT.tMm);
+        qIns = bentQuatAt(insT.pipe, insT.tMm);
+      } else {
+        const back = connModelPos(insT.pipe, insT.pipe.userData.backLocal);
+        const face = connModelPos(insT.pipe, insT.pipe.userData.faceLocal);
+        dir = face.clone().sub(back).normalize();
+        pt = back.clone().addScaledVector(dir, insT.tMm / 1000);
+        qIns = insT.pipe.quaternion;
+      }
+      followPreview.quaternion.copy(qIns);
       const fu = followPreview.userData;
       const sopFl = fu.partType === 'flange' && ['SOP', 'LJ'].includes((fu.flange || {}).type);
       if (sopFl) {
@@ -4080,6 +4088,42 @@ function cycleFollowOrientation(mode) {
 // ・レジューサーは径が合う側を既存パイプへ向け、反対側のパイプは新しい径で作り直す。
 // ・入らない長さなら理由を出して中止（何も置かない）。エルボ挿入（ルート変更）は対象外。
 const INSERTABLE_TYPES = { flange: 1, valve: 1, flex: 1, sight: 1 };   // レジューサーの途中挿入は廃止（2026-07-29 社長指示）
+// ---- R曲げパイプ（bentpipe）の芯線ヘルパ（2026-07-30 社長要望：道中にフランジ挿入）----
+// tMm＝背面端（ローカルφ=π）からの弧長。局所円弧＝(R cosφ, R sinφ, 0)・φは面側へ向かって減る。
+const _n2pi = x => ((x % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+function bentArcLenMm(p) { const b = p.userData.bent; return b.R * (b.angleDeg * Math.PI / 180) * 1000; }
+function bentPhiAt(p, tMm) { return Math.PI - (tMm / 1000) / p.userData.bent.R; }
+function bentPointAt(p, tMm) {   // 芯線上の点（model座標）
+  const b = p.userData.bent, phi = bentPhiAt(p, tMm);
+  return new THREE.Vector3(b.R * Math.cos(phi), b.R * Math.sin(phi), 0).applyQuaternion(p.quaternion).add(p.position);
+}
+function bentAxisAt(p, tMm) {    // 背→面向きの接線（model座標・単位）
+  const phi = bentPhiAt(p, tMm);
+  return new THREE.Vector3(Math.sin(phi), -Math.cos(phi), 0).applyQuaternion(p.quaternion).normalize();
+}
+function bentQuatAt(p, tMm) {    // ローカル+Yを接線に合わせた姿勢（挿入部品・プレビュー用）
+  const phi = bentPhiAt(p, tMm);
+  const qL = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(Math.sin(phi), -Math.cos(phi), 0));
+  return p.quaternion.clone().multiply(qL);
+}
+// 曲げ角だけ変えて作り直す（背面端＝ローカルφ=πは形状上不動なので position/quaternion は変えない）
+function rebuildBentPipe(part, newAngleDeg) {
+  const bent = part.userData.bent;
+  const fresh = makeBentPipe(Object.assign({}, bent, { angleDeg: newAngleDeg }));
+  while (part.children.length) {
+    const c = part.children.pop();
+    if (c.traverse) c.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
+  }
+  while (fresh.children.length) part.add(fresh.children[0]);
+  bent.angleDeg = newAngleDeg;
+  part.userData.backLocal = fresh.userData.backLocal;
+  part.userData.faceLocal = fresh.userData.faceLocal;
+  part.userData.backNormal = fresh.userData.backNormal;
+  part.userData.faceNormal = fresh.userData.faceNormal;
+  part.userData.cornerLocal = fresh.userData.cornerLocal;
+  part.userData.extraLocals = fresh.userData.extraLocals;
+  part.userData.gripLocal = part.userData.backLocal.clone();
+}
 const INSERT_SNAP_PX = 16;      // 画面上でこの距離までパイプ芯線に近ければ「挿入」と解釈
 const INSERT_END_MARGIN = 1;    // 端から1mm以内は挿入しない（端への通常の突き合わせと区別）
 // 軸方向にまっすぐ通り抜ける部品か（安全弁=アングル形や偏心レジューサーは芯がずれるので対象外）
@@ -4095,6 +4139,21 @@ function pipeAxisTargetAt(clientX, clientY, maxPx) {
   const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, cam);
   let best = null;
   for (const p of placedParts) {
+    if (p.userData.partType === 'bentpipe' && !p.userData.hidden) {   // R曲げ管＝円弧に沿って最寄り点を探す
+      const Lmm = bentArcLenMm(p);
+      const N = Math.max(16, Math.ceil(Lmm / 25));
+      for (let i = 0; i <= N; i++) {
+        const t = (Lmm * i) / N;
+        const scr = modelGroup.localToWorld(bentPointAt(p, t)).project(cam);
+        if (scr.z >= 1) continue;
+        const sx = rect.left + (scr.x * 0.5 + 0.5) * rect.width;
+        const sy = rect.top + (-scr.y * 0.5 + 0.5) * rect.height;
+        const px = Math.hypot(sx - clientX, sy - clientY);
+        if (px > limitPx) continue;
+        if (!best || px < best.px) best = { pipe: p, tMm: t, px };
+      }
+      continue;
+    }
     if (p.userData.partType !== 'pipe' || p.userData.hidden || !p.userData.faceLocal) continue;
     const a = modelGroup.localToWorld(connModelPos(p, p.userData.backLocal).clone());
     const b = modelGroup.localToWorld(connModelPos(p, p.userData.faceLocal).clone());
@@ -4116,7 +4175,7 @@ function pipeAxisTargetAt(clientX, clientY, maxPx) {
     if (!best || px < best.px) best = { pipe: p, tMm: t * 1000, px };
   }
   if (best) {
-    const Lmm = best.pipe.userData.pipe.length;
+    const Lmm = best.pipe.userData.partType === 'bentpipe' ? bentArcLenMm(best.pipe) : best.pipe.userData.pipe.length;
     if (best.tMm < INSERT_END_MARGIN || best.tMm > Lmm - INSERT_END_MARGIN) return null;
   }
   return best;
@@ -4125,6 +4184,16 @@ function pipeAxisTargetAt(clientX, clientY, maxPx) {
 // 中点・交点などの吸着点で「きちっとした位置」へ挿入するための判定（2026-07-29 社長要望）。
 function pipeAxisHitAtPoint(pt) {
   for (const p of placedParts) {
+    if (p.userData.partType === 'bentpipe' && !p.userData.hidden) {   // R曲げ管：円弧の上（半径1mm以内・端1mm除く）
+      const b = p.userData.bent, ang = b.angleDeg * Math.PI / 180;
+      const l = pt.clone().sub(p.position).applyQuaternion(p.quaternion.clone().invert());
+      const rr = Math.hypot(l.x, l.y);
+      if (Math.abs(l.z) > 0.001 || Math.abs(rr - b.R) > 0.001) continue;
+      const s = _n2pi(Math.PI - Math.atan2(l.y, l.x)) * b.R;   // 背面端からの弧長(m)
+      const tMm = s * 1000, Lmm = bentArcLenMm(p);
+      if (tMm < INSERT_END_MARGIN || tMm > Lmm - INSERT_END_MARGIN) continue;
+      return { pipe: p, tMm };
+    }
     if (p.userData.partType !== 'pipe' || p.userData.hidden || !p.userData.faceLocal) continue;
     const a = connModelPos(p, p.userData.backLocal), b = connModelPos(p, p.userData.faceLocal);
     const ab = b.clone().sub(a), L = ab.length();
@@ -4224,7 +4293,7 @@ function ensureInsDistBox() {
   _insR = _insDistBox.querySelector('#insDistR');
   const commit = (side) => {
     if (!_insPrev || !followTool) return;
-    const L = _insPrev.pipe.userData.pipe.length;
+    const L = _insPrev.pipe.userData.partType === 'bentpipe' ? bentArcLenMm(_insPrev.pipe) : _insPrev.pipe.userData.pipe.length;
     const v = parseFloat(side === 'L' ? _insL.value : _insR.value);
     if (!isFinite(v)) return;
     let tMm = side === 'L' ? v : L - v;
@@ -4244,7 +4313,7 @@ function ensureInsDistBox() {
 function showInsDist(cx, cy, hit) {
   ensureInsDistBox();
   _insPrev = { pipe: hit.pipe, tMm: hit.tMm, radial: hit.radial || null, quat: hit.quat || null };   // ボスは半径方向も控える
-  const L = hit.pipe.userData.pipe.length;
+  const L = hit.pipe.userData.partType === 'bentpipe' ? Math.round(bentArcLenMm(hit.pipe)) : hit.pipe.userData.pipe.length;
   if (document.activeElement !== _insL) _insL.value = Math.round(hit.tMm);
   if (document.activeElement !== _insR) _insR.value = Math.round(L - hit.tMm);
   // 箱はカーソルを追わず、出す時に一度だけ画面上部の定位置へ置く。
@@ -4469,8 +4538,61 @@ function buildInsertTrain(obj, pipe) {
   }
   return { train, span, dsSize };
 }
+// R曲げ管の途中へのフランジ挿入（2026-07-30 社長要望）。管を切ってフランジを溶接する想定＝
+// フランジのみ対応（バルブ等は両フェイスが平行にならず現実に入らないため断る）。
+// 挿入部品は挿入点の接線に沿って置き、曲げ管は弧長で L1/L2 に分割する（面基準＝SOPは長さ消費なし）。
+function insertItemIntoBentPipe(obj, hit) {
+  const pipe = hit.pipe, bent = pipe.userData.bent;
+  const disposeOf = (o) => o.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
+  if (obj.userData.partType !== 'flange') {
+    if (window.__toast) window.__toast('R曲げ管の途中に挿入できるのはフランジだけです（管を切って溶接する想定。バルブ等は両面が平行にならないため入りません）');
+    return false;
+  }
+  const plan = buildInsertTrain(obj, pipe);
+  const Lmm = bentArcLenMm(pipe);
+  const L1 = hit.tMm - plan.span / 2, L2 = Lmm - hit.tMm - plan.span / 2;
+  if (L1 < 0.5 || L2 < 0.5) {
+    for (const it of plan.train) if (it.obj !== obj) disposeOf(it.obj);
+    if (window.__toast) window.__toast(`挿入できません：挿入には${Math.ceil(plan.span)}mm必要です（展開${Math.round(Lmm)}mm）。もう少し中寄りに置いてください`);
+    return false;
+  }
+  const pt = bentPointAt(pipe, hit.tMm);
+  const dir = bentAxisAt(pipe, hit.tMm);
+  const qIns = bentQuatAt(pipe, hit.tMm);
+  const FLIP2 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+  let s = -plan.span / 2;                                  // 挿入中心からの距離(mm)
+  for (const it of plan.train) {
+    const o = it.obj, q = qIns.clone();
+    if (it.flip) q.multiply(FLIP2);
+    o.quaternion.copy(q);
+    const anchor = (it.sopFl || it.flip) ? o.userData.faceLocal : o.userData.backLocal;
+    o.position.copy(pt).addScaledVector(dir, s / 1000).sub(anchor.clone().applyQuaternion(q));
+    o.userData.placed = true; o.userData.orient = 0; o.userData.roll = 0;
+    if (pipe.userData.groupId != null) o.userData.groupId = pipe.userData.groupId;
+    modelGroup.add(o); placedParts.push(o);
+    s += it.adv;
+  }
+  // 下流側（面側）の新しい曲げ管：φ2＝下流片の背側端の角度へ回して同じ円弧上に載せる
+  const R = bent.R;
+  const p2 = makeBentPipe({ sizeA: bent.sizeA, sch: bent.sch, R, angleDeg: (L2 / 1000 / R) * 180 / Math.PI });
+  computeConns(p2);
+  const phi2 = Math.PI - ((hit.tMm + plan.span / 2) / 1000) / R;
+  p2.quaternion.copy(pipe.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), phi2 - Math.PI));
+  p2.position.copy(pipe.position);
+  p2.userData.placed = true; p2.userData.orient = pipe.userData.orient || 0; p2.userData.roll = pipe.userData.roll || 0;
+  if (pipe.userData.mat) p2.userData.mat = pipe.userData.mat;
+  if (pipe.userData.groupId != null) p2.userData.groupId = pipe.userData.groupId;
+  modelGroup.add(p2); placedParts.push(p2);
+  rebuildBentPipe(pipe, (L1 / 1000 / R) * 180 / Math.PI);  // 上流側＝元の曲げ管を短縮（背面端は不動）
+  if (typeof _idleSig !== 'undefined') _idleSig = null;
+  const extra = plan.span > 0.01 ? `（消費${Math.round(plan.span)}mm）` : '（面基準＝長さ消費なし）';
+  if (window.__toast) window.__toast(`フランジを挿入し、R曲げ管を展開 ${Math.round(L1)}mm＋${Math.round(L2)}mm に分割しました${extra}`);
+  if (window.__scheduleHistory) window.__scheduleHistory();
+  return true;
+}
 // 挿入の実行。成功=true。失敗（長さ不足）はトーストを出して false（同伴部品は破棄）。
 function insertItemIntoPipe(obj, hit) {
+  if (hit.pipe.userData.partType === 'bentpipe') return insertItemIntoBentPipe(obj, hit);
   const pipe = hit.pipe, pu = pipe.userData.pipe;
   const plan = buildInsertTrain(obj, pipe);
   const L = pu.length;
@@ -10931,12 +11053,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (rec) {
       // 2点目で完全に確定する（2026-07-21 社長指示）。描いた線を選択したまま残すと視点が固定され、
       // 解除のためだけに3回目のタップが要る＝「まだ確定していない」感になるため、選択せずに終える。
-      if (rec.type === 'circle') {                    // 円：確定したら脚編集に入らず、その場で次の円を描けるようにする
-        clearDrawTemp();
-      } else {                                        // 線分・構築線：1本描いて終了（連続では描かない・2026-07-20 社長指示）
-        cancelDraw();
-        deselectLine();
-      }
+      // 線分・構築線・円とも1本（1個）描いたら終了＝基本コマンドは1回きり（2026-07-30 社長指示で円も統一）
+      cancelDraw();
+      deselectLine();
     }
     return rec;
   }
@@ -12838,7 +12957,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       {
         const rect3 = renderer.domElement.getBoundingClientRect(), cam3 = activeCam();
         let bestPx = 12;
-        for (const cand0 of [0, Math.PI / 2, Math.PI, Math.PI * 1.5, lineDrag.which === 0 ? rr.a1 : rr.a0]) {
+        // 候補＝四半円点・自分のもう片方の端・同じ円（同心・同半径）の他の円弧の端点（切断相手の端。2026-07-30 社長要望）
+        const candList = [0, Math.PI / 2, Math.PI, Math.PI * 1.5, lineDrag.which === 0 ? rr.a1 : rr.a0];
+        {
+          const { rx: rxs } = circleRadii(st, rec.a, rec.b);
+          for (const r2 of annStore) {
+            if (r2 === rec || r2.type !== 'circle' || r2.hidden || !r2.style || r2.style.arcA0 == null) continue;
+            if (r2.a.distanceTo(rec.a) > 0.0008) continue;
+            const { rx: rx2 } = circleRadii(r2.style, r2.a, r2.b);
+            if (Math.abs(rx2 - rxs) > 0.0008) continue;
+            candList.push(r2.style.arcA0, r2.style.arcA1);
+          }
+        }
+        for (const cand0 of candList) {
           let cand = cand0;
           while (cand - th > Math.PI) cand -= TAU;
           while (cand - th < -Math.PI) cand += TAU;
