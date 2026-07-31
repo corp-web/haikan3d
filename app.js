@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-G';
+const APP_VER = 'v0731-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5882,7 +5882,7 @@ function autoDimRuns() {
     used[i] = true;
     const d0 = dirOf(segs[i]);
     let A = segs[i].a.clone(), B = segs[i].b.clone();
-    const pipes = [segs[i].p];
+    const pipes = [segs[i].p], parts = [segs[i].p];
     let grew = true;
     while (grew) {
       grew = false;
@@ -5891,13 +5891,13 @@ function autoDimRuns() {
         if (Math.abs(dirOf(segs[j]).dot(d0)) < 0.9995) continue;   // 同一直線の向きだけつなぐ
         const pairs = [[segs[j].a, segs[j].b], [segs[j].b, segs[j].a]];
         for (const [pt, other] of pairs) {
-          if (pt.distanceTo(A) < TOL) { A = other.clone(); used[j] = true; if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
-          if (pt.distanceTo(B) < TOL) { B = other.clone(); used[j] = true; if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
+          if (pt.distanceTo(A) < TOL) { A = other.clone(); used[j] = true; parts.push(segs[j].p); if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
+          if (pt.distanceTo(B) < TOL) { B = other.clone(); used[j] = true; parts.push(segs[j].p); if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
         }
         if (grew) break;
       }
     }
-    runs.push({ A, B, dir: d0, pipes });
+    runs.push({ A, B, dir: d0, pipes, parts });
   }
   return runs;
 }
@@ -11473,13 +11473,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const runsK = runs.map(r => ({ r, KA: runEndKeyPoint(r.A), KB: runEndKeyPoint(r.B) }));
     for (const rk of runsK) {
       pushDim(rk.KA.pt, rk.KB.pt);                                        // 芯々（両端が工作点）／端面（端がフランジ面・管端）
-      if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝ELの引出し
+      if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝ELの引出し（水平に500逃がす・2026-07-31 社長指示）
         const mid = rk.KA.pt.clone().add(rk.KB.pt).multiplyScalar(0.5);
         if (!leadExists(mid, 'COP EL')) {
           const perp = new V3(-rk.r.dir.z, 0, rk.r.dir.x).normalize();
-          const knee = mid.clone().add(new V3(0, 0.4, 0)).addScaledVector(perp, 0.3);   // 肘も500相当逃がす（2026-07-31 社長指示）
-          items.push({ a: mid, b: knee, st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: `COP EL${Math.round(mid.y * 1000)}` }) });
+          const knee = mid.clone().addScaledVector(perp, 0.5);
+          const elMm = Math.round(mid.y * 1000);
+          items.push({ a: mid, b: knee, st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: `COP EL${elMm >= 0 ? '+' : ''}${elMm}` }) });
         }
+      }
+      // バルブ・ガスケットの位置＝近い側の基準（工作点/端面）→そちらへ向いた面まで（2026-07-31 社長要望）
+      for (const q of rk.r.parts) {
+        const u = q.userData;
+        if (u.partType !== 'valve' && u.partType !== 'gasket') continue;
+        const f = connModelPos(q, u.faceLocal), bk = connModelPos(q, u.backLocal);
+        const c = f.clone().add(bk).multiplyScalar(0.5);
+        const K = c.distanceTo(rk.KA.pt) <= c.distanceTo(rk.KB.pt) ? rk.KA.pt : rk.KB.pt;
+        const nearEnd = f.distanceTo(K) <= bk.distanceTo(K) ? f : bk;
+        pushDim(K, nearEnd);
       }
     }
     for (const p of placedParts) {                                        // ボス＝近い側の基準（工作点/端面）→取り付け位置
