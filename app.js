@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-F';
+const APP_VER = 'v0731-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -11465,7 +11465,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       let dir;
       if (axis) dir = Math.abs(d.x) > 0.5 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };   // X向き＝Zへ逃がす・Y/Z向き＝Xへ
       else { const u2 = new V3(-d.z, 0, d.x); if (u2.lengthSq() < 1e-9) u2.set(1, 0, 0); u2.normalize(); dir = { x: u2.x, y: u2.y, z: u2.z }; }
-      const st = Object.assign({}, styleFor('dim'), { dimKind: axis ? 'linear' : 'parallel', dimOff: 0.15, dimDir: dir });
+      const st = Object.assign({}, styleFor('dim'), { dimKind: axis ? 'linear' : 'parallel', dimOff: 0.5, dimDir: dir });   // 逃げは基本500以上（2026-07-31 社長指示）
       if (axis) Object.assign(st, linearFixFields(a, b, dir));
       items.push({ a: a.clone(), b: b.clone(), st });
     };
@@ -11477,7 +11477,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const mid = rk.KA.pt.clone().add(rk.KB.pt).multiplyScalar(0.5);
         if (!leadExists(mid, 'COP EL')) {
           const perp = new V3(-rk.r.dir.z, 0, rk.r.dir.x).normalize();
-          const knee = mid.clone().add(new V3(0, 0.12, 0)).addScaledVector(perp, 0.1);
+          const knee = mid.clone().add(new V3(0, 0.4, 0)).addScaledVector(perp, 0.3);   // 肘も500相当逃がす（2026-07-31 社長指示）
           items.push({ a: mid, b: knee, st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: `COP EL${Math.round(mid.y * 1000)}` }) });
         }
       }
@@ -11504,7 +11504,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const j of joints) {
       if (tagged.some(r => r.a.distanceTo(j.pt) < 0.002)) continue;   // 既に番号が付いている口は保持（振り直さない）
       no++;
-      const knee = j.pt.clone().add(new V3(0.07, 0.09, 0.05));
+      const knee = j.pt.clone().add(new V3(0.3, 0.35, 0.2));   // 逃げは基本500以上（2026-07-31 社長指示）
       items.push({ a: j.pt.clone(), b: knee, st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: `W${no}`, weldTag: 1 }) });
     }
     autoGenStart(items, '溶接番号');
