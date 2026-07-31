@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0731E — SKT-HD ♦</title>
+<title>配管3D v0731F — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260730">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0731E">
+<meta name="apple-mobile-web-app-title" content="配管3D v0731F">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -531,7 +531,7 @@
         <button id="cmdLine"  title="線分を引く（2点クリック）"><span class="ic"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" style="vertical-align:-2px"><path d="M1.5 13.5 L5 10 M6.9 8.1 L7.5 7.5 M9.4 5.6 L13 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>線分</button>
         <button id="cmdSweep" title="スイープ：線分で描いたルート（芯線）を選んで押すと、呼び径・Schを指定してパイプとエルボを一括配置する。90°/45°は規格エルボ、その他の角度は切断エルボ、入らない区間は自動でショートに切替。線分1本を選べば、つながった線分を自動でたどる"><span class="ic"><svg width="15" height="15" viewBox="0 0 15 15" fill="none" style="vertical-align:-2px"><path d="M2 2.5 V12.5 H13" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></span>スイープ</button>
         <button id="cmdCircle" title="円を描く（中心をクリック→半径まで広げて確定）"><span class="ic">◯</span>円</button>
-        <button id="cmdDim"   title="寸法（右クリックで 長さ/平行/角度/半径/直径/引出 を選択）"><span class="ic">↔</span>寸法</button>
+        <button id="cmdDim"   title="寸法（右クリックで 長さ/平行/角度/半径/直径/引出・自動採寸・溶接番号）"><span class="ic">↔</span>寸法</button>
         <button id="cmdText"  title="文字を配置（点をクリック→そのまま入力）"><span class="ic">Ｔ</span>文字</button>
       </div>
       <div class="rb-title">描画</div>
@@ -652,7 +652,9 @@
         <li><b>円</b>を選択すると<b>中心＋四半円点（上下左右）</b>が出ます。<b>四半円点を掴んでドラッグ＝半径変更</b>。<b>Shiftを押しながら掴んで動かすと、その軸だけ伸びて楕円</b>になります（通常は真円のまま拡縮）</li>
         <li><b>円も線分と同じ回転</b>：選択して<b>右クリック＝中心まわりに45°回転</b>（Shift＝鉛直面で起こす）。<b>右クリック長押し＝角度スピナー</b>で任意角。楕円の長軸を傾けられます</li>
         <li><b>寸法アイコンを右クリック</b>＝種別を選択：<b>長さ</b>(水平/垂直の距離・既定)／<b>平行</b>(2点間の距離)／<b>角度</b>／<b>半径</b>(R)／<b>直径</b>(φ)／<b>引出</b>(注記)。長さ・平行は2点で測り、長さは逃がした軸方向の成分だけを測ります（CADの長さ寸法）</li>
-        <li><b>引出（リーダー）</b>＝<b>1点目＝矢印で指す点、2点目＝肘（位置）</b>をクリック。肘から<b>水平の棚が自動で伸び、確定と同時に入力フォーム</b>が開くので<b>そのまま文字を入力</b>（既定値なし）。<b>再選択すると入力フォームが開いて再編集</b>できます</li>
+        <li><b>引出（リーダー）</b>＝<b>1点目＝矢印で指す点、2点目＝肘（位置）</b>をクリック。肘から<b>水平の棚が自動で伸び、確定と同時に入力フォーム</b>が開くので<b>そのまま文字を入力</b>。<b>矢印の先が部品を指していると、その名称・仕様が初期値</b>で入ります（編集可）。<b>再選択すると入力フォームが開いて再編集</b>できます</li>
+        <li><b>自動採寸</b>（寸法の右クリックメニュー）＝<b>芯々（エルボの角・ティーの芯どうし）・端面・EL・ボス位置</b>の寸法を一括で下書き表示。<b>要らないものをタップで除外→確定</b>。既に入っている寸法とは重複しません。確定後はふつうの寸法なので自由に直せます</li>
+        <li><b>溶接番号</b>（寸法の右クリックメニュー）＝溶接口へ<b>W1,W2…の引出しを自動付番</b>（端の部品からのたどり順）。タップで除外→確定。<b>一度確定した番号は振り直しません</b>（部品を増やしたら続き番号で追加）。文字は引出しと同じく編集可（例：W1(F)＝現場溶接）。番号が入っているとCSVに<b>溶接一覧</b>（番号・BW/SW・呼び径・Sch・F/S・検査欄）が付きます</li>
         <li><b>角度</b>＝<b>2本の直線（線分・構築線）をそれぞれクリックして選択</b>（選択中は<b>緑にハイライト</b>。直線以外をクリックしても反応しません）。最後に<b>カーソルの象限で角度（θ／180−θ）・円弧半径を決めてクリックで確定</b>（機点・端点・中点・交点に<b>スナップ</b>＝緑印）。補助線は引きますが<b>対象の直線と重なる区間は表示しません</b>。確定後は半径・直径と同じく、<b>線/円弧クリックで選択→Del削除</b>、<b>値クリックで編集</b>できます</li>
         <li><b>寸法の削除</b>＝寸法線・円弧・補助線（＝値以外の部分）を<b>クリックして選択し<kbd>Del</kbd></b>。<b>値の編集</b>＝<b>赤い値をダブルクリック</b>すると入力フォームが開き、数値・文字を上書きできます（Enter/Escまたは他をクリックで確定・閉じる。シングルクリック＝選択）。半径・直径・角度も同じ操作です。<b>値をドラッグすると値だけを好きな位置へ動かせます</b>（寸法線から離すと引出線を自動表示・元の位置近くへ戻すと解除。値が混み合う時の逃がしに）</li>
         <li><b>値の見やすさ（自動）</b>＝値の背面には背景色の下地が敷かれ、線が数字を突き抜けません（印刷では白地）。値の大きさは<b>ズームアウトしても最小サイズを保ち</b>、尺度表示（右上の尺度選択）・印刷では<b>紙の上で常に約3.5mm</b>になるよう自動調整されます。新しく入れた寸法の値が既存の値と重なる場合は<b>自動で1段ずらして配置</b>します</li>

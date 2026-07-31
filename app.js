@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-E';
+const APP_VER = 'v0731-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5853,6 +5853,114 @@ function partTypeRank(p) {
   }
   return r(u.partType);
 }
+// ===== 自動採寸・溶接番号の下ごしらえ（2026-07-31 社長採用） =====
+// 芯線ラン＝パイプと「軸方向へ真っ直ぐ通り抜ける繋ぎ物」（フランジ・ガスケット・バルブ・仮管等）を
+// 同一直線でつないだひとまとまり。芯々寸法はランの両端の工作点（エルボの角・ティーの芯）どうしで取る。
+function _autoDimSegs() {
+  const segs = [];
+  for (const p of placedParts) {
+    const u = p.userData;
+    if (u.hidden || !u.faceLocal || !u.backLocal || !u.placed) continue;
+    if (u.partType === 'pipe') { segs.push({ p, pipe: true, a: connModelPos(p, u.backLocal), b: connModelPos(p, u.faceLocal) }); continue; }
+    if (u.partType === 'elbow' || u.partType === 'tee' || u.partType === 'bentpipe' || u.partType === 'pg') continue;
+    if (u.partType === 'sw' && !['FC', 'HC', 'FCR', 'UNION'].includes((u.sw || {}).kind)) continue;
+    if (!insertAxialOk(p)) continue;
+    const a = connModelPos(p, u.backLocal), b = connModelPos(p, u.faceLocal);
+    if (a.distanceTo(b) < 0.0005) continue;
+    segs.push({ p, pipe: false, a, b });
+  }
+  return segs;
+}
+function autoDimRuns() {
+  const TOL = 0.0015;
+  const segs = _autoDimSegs();
+  const used = new Array(segs.length).fill(false);
+  const runs = [];
+  const dirOf = s => s.b.clone().sub(s.a).normalize();
+  for (let i = 0; i < segs.length; i++) {
+    if (used[i] || !segs[i].pipe) continue;               // ランの本体はパイプから始める（繋ぎ物だけのランは対象外）
+    used[i] = true;
+    const d0 = dirOf(segs[i]);
+    let A = segs[i].a.clone(), B = segs[i].b.clone();
+    const pipes = [segs[i].p];
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (let j = 0; j < segs.length; j++) {
+        if (used[j]) continue;
+        if (Math.abs(dirOf(segs[j]).dot(d0)) < 0.9995) continue;   // 同一直線の向きだけつなぐ
+        const pairs = [[segs[j].a, segs[j].b], [segs[j].b, segs[j].a]];
+        for (const [pt, other] of pairs) {
+          if (pt.distanceTo(A) < TOL) { A = other.clone(); used[j] = true; if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
+          if (pt.distanceTo(B) < TOL) { B = other.clone(); used[j] = true; if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
+        }
+        if (grew) break;
+      }
+    }
+    runs.push({ A, B, dir: d0, pipes });
+  }
+  return runs;
+}
+// ランの端点P → 寸法の基準点。エルボ（BW/SW）＝角の工作点、ティー・クロス＝芯。それ以外＝端面のまま。
+function runEndKeyPoint(P) {
+  const TOL = 0.0015;
+  for (const q of placedParts) {
+    const u = q.userData;
+    if (u.hidden || !u.faceLocal) continue;
+    const isElbow = u.partType === 'elbow' || (u.partType === 'sw' && ['90E', '45E'].includes((u.sw || {}).kind));
+    const isTee = u.partType === 'tee' || (u.partType === 'sw' && ['T', 'TR', 'CROSS'].includes((u.sw || {}).kind));
+    if (!isElbow && !isTee) continue;
+    for (const l of connsOf(q)) {
+      if (connModelPos(q, l).distanceTo(P) > TOL) continue;
+      if (u.cornerLocal) return { pt: connModelPos(q, u.cornerLocal), kind: isElbow ? 'corner' : 'center' };
+      return { pt: q.position.clone(), kind: isElbow ? 'corner' : 'center' };
+    }
+  }
+  return { pt: P.clone(), kind: 'end' };
+}
+// 溶接口の列挙（付属品自動集計と同じ判定）＋ルートたどり順（端の部品からBFS）。溶接番号の下書きに使う。
+function collectWeldJoints() {
+  const TOL = 0.0015;
+  const pts = [];
+  for (const p of placedParts) {
+    const u = p.userData;
+    if (u.hidden || !u.faceLocal) continue;
+    const isFlange = u.partType === 'flange';
+    const swValve = u.partType === 'valve' && ['swgate', 'swglobe'].includes((u.valve || {}).kind);
+    const flangedBody = isFlangedBody(u);
+    const isPG = u.partType === 'pg';
+    const swSide = u.partType === 'sw' || swValve || (isFlange && u.flange && u.flange.type === 'SW');
+    const spec = u.pipe || u.elbow || u.flange || u.sw || u.tee || u.reducer || u.cap || {};
+    for (const cp of connPointsForStats(p)) {
+      pts.push({ p, pos: connModelPos(p, cp.local), size: cp.size, sch: spec.sch || '',
+                 weldable: !(isFlange && cp.face) && !flangedBody && u.partType !== 'gasket' && !isPG, sw: swSide });
+    }
+  }
+  const joints = [];
+  const adj = new Map();
+  const link = (a, b) => { if (!adj.has(a)) adj.set(a, new Set()); adj.get(a).add(b); };
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      const A = pts[i], B = pts[j];
+      if (A.p === B.p || A.pos.distanceTo(B.pos) > TOL) continue;
+      link(A.p, B.p); link(B.p, A.p);
+      if (A.weldable && B.weldable) joints.push({ pt: A.pos.clone(), sw: !!(A.sw || B.sw), size: A.size || B.size, sch: A.sch || B.sch, pA: A.p, pB: B.p });
+    }
+  }
+  // 付番順＝接続の端（つながりが一番少ない部品）からのたどり順＝おおむね上流→下流
+  const idx = new Map(); let k = 0;
+  const deg = p => (adj.get(p) ? adj.get(p).size : 0);
+  const start = placedParts.filter(p => adj.has(p)).sort((a, b) => deg(a) - deg(b))[0];
+  if (start) {
+    const seen = new Set([start]); const q = [start];
+    while (q.length) { const p = q.shift(); idx.set(p, k++); for (const n of (adj.get(p) || [])) if (!seen.has(n)) { seen.add(n); q.push(n); } }
+  }
+  for (const p of placedParts) if (!idx.has(p)) idx.set(p, k++);
+  joints.sort((a, b) => (Math.min(idx.get(a.pA), idx.get(a.pB)) - Math.min(idx.get(b.pA), idx.get(b.pB))) ||
+                        (Math.max(idx.get(a.pA), idx.get(a.pB)) - Math.max(idx.get(b.pA), idx.get(b.pB))));
+  return joints;
+}
+
 // ===== 付属品・溶接・パイプ合計の自動集計（参考値・2026-07-14 社長要望） =====
 // 機点の一致（1.5mm以内）から継手を推定する：
 //  ・フランジのフェイス同士／フェイス×フランジ形バルブ ＝ ガスケット＋ボルト・ナット 1組
@@ -9085,6 +9193,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                     lbl(c.ends[0]), lbl(c.ends[1]), c.cut, c.gap, c.sop].map(esc).join(','));
       });
     }
+    // ---- 溶接一覧（図面に溶接番号 W1,W2… が入っている時だけ）----
+    const wrecs = (window.__annStoreForTest ? window.__annStoreForTest() : [])
+      .filter(r => r.type === 'dim' && !r.hidden && r.style && r.style.weldTag);
+    if (wrecs.length) {
+      const joints = collectWeldJoints();
+      lines.push('');
+      lines.push(esc('溶接一覧（番号＝図面のW表記。形式・呼び径は機点から自動推定した参考値。F/S＝図面の注記から・検査欄は現場で記入）'));
+      lines.push(['番号', '形式', '呼び径', 'Sch', 'F/S', '検査'].join(','));
+      const noOf = r => { const m = /W(\d+)/.exec(String(r.style.dimText || '')); return m ? +m[1] : 9999; };
+      for (const r of wrecs.slice().sort((a, b) => noOf(a) - noOf(b))) {
+        const j = joints.find(jj => jj.pt.distanceTo(r.a) < 0.002);
+        const txt = String(r.style.dimText || '');
+        const fs = /[（(]F[）)]/i.test(txt) ? 'F' : (/[（(]S[）)]/i.test(txt) ? 'S' : '');
+        lines.push([txt.replace(/[（(].*$/, ''), j ? (j.sw ? 'SW' : 'BW') : '', j ? j.size : '', j ? (j.sch || '') : '', fs, ''].map(esc).join(','));
+      }
+    }
     return lines;
   }
   window.__csvText = () => buildCsvLines().join('\n');   // e2e検証用（切寸表の内容確認）
@@ -10270,7 +10394,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return best;
   }
   function addAnnotation(type, a, b, style) {
-    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat, arcA0: style.arcA0, arcA1: style.arcA1, textOff: style.textOff ? { t: style.textOff.t, n: style.textOff.n } : undefined } : styleFor(type);
+    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat, arcA0: style.arcA0, arcA1: style.arcA1, textOff: style.textOff ? { t: style.textOff.t, n: style.textOff.n } : undefined, weldTag: style.weldTag || undefined } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
@@ -11254,6 +11378,152 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (window.__openDimValueForm) window.__openDimValueForm(!!label);
     if (window.__focusDimValueInput) window.__focusDimValueInput();
   }
+  // ===== 自動生成（自動採寸・溶接番号）＝下書きを一括提示→タップで除外→確定（2026-07-31 社長採用） =====
+  // 機械はあくまで下書き。確定後はふつうの寸法・引出しになるので、消す・直す・動かすは人が自由にできる。
+  let autoGen = null;   // { items:[{a,b,st,obj,excluded}], label, box }
+  function autoGenClear() {
+    if (!autoGen) return;
+    for (const it of autoGen.items) {
+      if (!it.obj) continue;
+      annGroup.remove(it.obj);
+      it.obj.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.material.dispose) o.material.dispose(); });
+    }
+    if (autoGen.box) autoGen.box.remove();
+    autoGen = null;
+  }
+  function autoGenSetOpacity(it) {
+    it.obj.traverse(o => { if (o.material) { o.material.transparent = true; o.material.opacity = it.excluded ? 0.12 : 0.55; } });
+  }
+  function autoGenCount() {
+    if (!autoGen) return;
+    const n = autoGen.items.filter(i => !i.excluded).length;
+    const el = autoGen.box.querySelector('.agN'); if (el) el.textContent = `${autoGen.label}：${n}件`;
+  }
+  function autoGenStart(items, label) {
+    cancelDraw(); autoGenClear();
+    if (!items.length) { if (window.__toast) window.__toast(`${label}：追加できるものがありません（既に記入済みか、対象がありません）`); return; }
+    autoGen = { items, label, box: null };
+    for (const it of items) { it.obj = buildAnn('dim', it.a, it.b, it.st); annGroup.add(it.obj); autoGenSetOpacity(it); }
+    const box = document.createElement('div');
+    box.id = 'autoGenBox';
+    box.style.cssText = 'position:fixed;z-index:96;left:50%;transform:translateX(-50%);top:12px;display:flex;align-items:center;gap:8px;' +
+      'padding:6px 10px;font:12px Meiryo,sans-serif;color:#1d2c4f;background:rgba(248,250,253,.97);border:1px solid #7fa8e8;border-radius:8px;box-shadow:0 2px 8px rgba(20,40,80,.18)';
+    box.innerHTML = '<span class="agN"></span><span style="color:#5a6a88">タップで除外/戻す</span>' +
+      '<button id="agOk" style="border:0;border-radius:5px;padding:4px 12px;background:#2f6fd8;color:#fff;font:inherit">確定</button>' +
+      '<button id="agNo" style="border:0;border-radius:5px;padding:4px 12px;background:#e2e7f0;color:#33405c;font:inherit">取消</button>';
+    document.body.appendChild(box);
+    autoGen.box = box;
+    box.querySelector('#agOk').addEventListener('click', autoGenConfirm);
+    box.querySelector('#agNo').addEventListener('click', autoGenClear);
+    ['pointerdown', 'click'].forEach(ev => box.addEventListener(ev, e => e.stopPropagation()));
+    autoGenCount();
+  }
+  function autoGenConfirm() {
+    if (!autoGen) return;
+    const keep = autoGen.items.filter(i => !i.excluded);
+    autoGenClear();
+    const made = [];
+    for (const it of keep) { addAnnotation('dim', it.a.clone(), it.b.clone(), Object.assign({}, it.st)); made.push(annStore[annStore.length - 1]); }
+    for (const r of made) if (r.style && ['linear', 'parallel'].includes(r.style.dimKind)) autoShiftDimText(r);   // 値の重なりは自動で1段ずつ逃がす
+    if (window.__toast) window.__toast(`${made.length}件を記入しました`);
+  }
+  window.addEventListener('pointerdown', e => {           // 下書きのタップ＝除外/復帰
+    if (!autoGen) return;
+    if (autoGen.box && e.target && e.target.nodeType && autoGen.box.contains(e.target)) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const scr = p => { const n = modelGroup.localToWorld(p.clone()).project(cam); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height, z: n.z }; };
+    let best = null, bd = 30;
+    for (const it of autoGen.items) {
+      const dd = it.st.dimDir, off = it.st.dimOff || 0;   // 逃がした寸法線の実表示位置で当てる
+      const ov = dd ? new V3(dd.x, dd.y, dd.z).multiplyScalar(off) : new V3();
+      const A = scr(it.a.clone().add(ov)), B = scr(it.b.clone().add(ov));
+      if (A.z >= 1 && B.z >= 1) continue;
+      const vx = B.x - A.x, vy = B.y - A.y, L2 = vx * vx + vy * vy;
+      let t = L2 > 1e-9 ? ((e.clientX - A.x) * vx + (e.clientY - A.y) * vy) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(e.clientX - (A.x + vx * t), e.clientY - (A.y + vy * t));
+      if (d < bd) { bd = d; best = it; }
+    }
+    if (best) { best.excluded = !best.excluded; autoGenSetOpacity(best); autoGenCount(); }
+  }, true);
+  window.addEventListener('keydown', e => { if (autoGen && e.key === 'Escape') { e.stopImmediatePropagation(); autoGenClear(); } }, true);
+  // ---- 自動採寸：芯々（工作点間）・端面・EL・ボス位置を一括で下書き ----
+  function autoDimStart() {
+    const TOL = 0.0015;
+    const near = (p, q) => p.distanceTo(q) < TOL;
+    const oldDims = annStore.filter(r => r.type === 'dim' && !r.hidden && r.style && ['linear', 'parallel'].includes(r.style.dimKind || 'parallel'));
+    const dimExists = (a, b) => oldDims.some(r => (near(r.a, a) && near(r.b, b)) || (near(r.a, b) && near(r.b, a)));
+    const oldLeads = annStore.filter(r => r.type === 'dim' && !r.hidden && r.style && r.style.dimKind === 'leader');
+    const leadExists = (a, head) => oldLeads.some(r => near(r.a, a) && String(r.style.dimText || '').startsWith(head));
+    const items = [];
+    const pushDim = (a, b) => {
+      if (a.distanceTo(b) < 0.02 || dimExists(a, b)) return;
+      if (items.some(it => it.st.dimKind !== 'leader' && ((near(it.a, a) && near(it.b, b)) || (near(it.a, b) && near(it.b, a))))) return;
+      const d = b.clone().sub(a).normalize();
+      const axis = Math.max(Math.abs(d.x), Math.abs(d.y), Math.abs(d.z)) > 0.9999;
+      let dir;
+      if (axis) dir = Math.abs(d.x) > 0.5 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };   // X向き＝Zへ逃がす・Y/Z向き＝Xへ
+      else { const u2 = new V3(-d.z, 0, d.x); if (u2.lengthSq() < 1e-9) u2.set(1, 0, 0); u2.normalize(); dir = { x: u2.x, y: u2.y, z: u2.z }; }
+      const st = Object.assign({}, styleFor('dim'), { dimKind: axis ? 'linear' : 'parallel', dimOff: 0.15, dimDir: dir });
+      if (axis) Object.assign(st, linearFixFields(a, b, dir));
+      items.push({ a: a.clone(), b: b.clone(), st });
+    };
+    const runs = autoDimRuns();
+    const runsK = runs.map(r => ({ r, KA: runEndKeyPoint(r.A), KB: runEndKeyPoint(r.B) }));
+    for (const rk of runsK) {
+      pushDim(rk.KA.pt, rk.KB.pt);                                        // 芯々（両端が工作点）／端面（端がフランジ面・管端）
+      if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝ELの引出し
+        const mid = rk.KA.pt.clone().add(rk.KB.pt).multiplyScalar(0.5);
+        if (!leadExists(mid, 'COP EL')) {
+          const perp = new V3(-rk.r.dir.z, 0, rk.r.dir.x).normalize();
+          const knee = mid.clone().add(new V3(0, 0.12, 0)).addScaledVector(perp, 0.1);
+          items.push({ a: mid, b: knee, st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: `COP EL${Math.round(mid.y * 1000)}` }) });
+        }
+      }
+    }
+    for (const p of placedParts) {                                        // ボス＝近い側の基準（工作点/端面）→取り付け位置
+      const u = p.userData;
+      if (u.hidden || u.partType !== 'sw' || (u.sw || {}).kind !== 'BOSS' || !u.placed) continue;
+      const host = bossHostPipe(p);
+      if (!host) continue;
+      const rk = runsK.find(x => x.r.pipes.includes(host.pipe));
+      if (!rk) continue;
+      const K = host.axisPt.distanceTo(rk.KA.pt) <= host.axisPt.distanceTo(rk.KB.pt) ? rk.KA.pt : rk.KB.pt;
+      pushDim(K, host.axisPt);
+    }
+    autoGenStart(items, '自動採寸');
+  }
+  // ---- 溶接番号：溶接口へ W1,W2… の引出しを一括で下書き（確定後は文字も番号も編集可） ----
+  function weldNumStart() {
+    const joints = collectWeldJoints();
+    const tagged = annStore.filter(r => r.type === 'dim' && r.style && r.style.weldTag);
+    let no = 0;
+    for (const r of tagged) { const m = /W(\d+)/.exec(String(r.style.dimText || '')); if (m) no = Math.max(no, +m[1]); }
+    const items = [];
+    for (const j of joints) {
+      if (tagged.some(r => r.a.distanceTo(j.pt) < 0.002)) continue;   // 既に番号が付いている口は保持（振り直さない）
+      no++;
+      const knee = j.pt.clone().add(new V3(0.07, 0.09, 0.05));
+      items.push({ a: j.pt.clone(), b: knee, st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: `W${no}`, weldTag: 1 }) });
+    }
+    autoGenStart(items, '溶接番号');
+  }
+  window.__autoDimStart = autoDimStart;   // e2e検証用
+  window.__weldNumStart = weldNumStart;
+  window.__autoGenState = () => autoGen ? { n: autoGen.items.length, kept: autoGen.items.filter(i => !i.excluded).length, label: autoGen.label } : null;
+  window.__autoGenConfirm = autoGenConfirm;
+  window.__autoGenCancel = autoGenClear;
+  window.__autoGenItemScreen = (i) => {   // i番目の下書きの実表示位置（タップ除外のe2e用）
+    if (!autoGen || !autoGen.items[i]) return null;
+    const it = autoGen.items[i];
+    const cam = activeCam(), rect = renderer.domElement.getBoundingClientRect();
+    const dd = it.st.dimDir, off = it.st.dimOff || 0;
+    const ov = dd ? new V3(dd.x, dd.y, dd.z).multiplyScalar(off) : new V3();
+    const mid = it.a.clone().add(it.b).multiplyScalar(0.5).add(ov);
+    const n = modelGroup.localToWorld(mid).project(cam);
+    return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height };
+  };
   function commitGuide() {                              // first→cur を確定
     const rec = commitGuideToStore();
     if (rec) {
@@ -14057,13 +14327,16 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const dimKindMenu = document.createElement('div');
   dimKindMenu.id = 'dimKindMenu';
   dimKindMenu.innerHTML = '<div class="dk-ttl">寸法の種別</div>' +
-    DIM_KINDS.map(([k, n, d]) => `<button class="dk-bt" data-kind="${k}">${n}<small>${d}</small></button>`).join('');
+    DIM_KINDS.map(([k, n, d]) => `<button class="dk-bt" data-kind="${k}">${n}<small>${d}</small></button>`).join('') +
+    '<div class="dk-ttl">自動（下書き→タップで除外→確定）</div>' +
+    '<button class="dk-bt" data-act="autodim">自動採寸<small>芯々・端面・EL・ボス位置を一括記入</small></button>' +
+    '<button class="dk-bt" data-act="weldno">溶接番号<small>溶接口へ W1,W2… を自動付番</small></button>';
   document.body.appendChild(dimKindMenu);
   function markDimKindActive() {
     dimKindMenu.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', b.dataset.kind === dimKind));
   }
   function updateDimBtnTitle() {
-    const b = $('cmdDim'); if (b) b.title = `寸法：${DIM_KIND_LABEL[dimKind] || '長さ'}（右クリックで 長さ/平行/角度/半径/直径/引出 を選択）`;
+    const b = $('cmdDim'); if (b) b.title = `寸法：${DIM_KIND_LABEL[dimKind] || '長さ'}（右クリックで 長さ/平行/角度/半径/直径/引出・自動採寸・溶接番号）`;
   }
   function closeDimKindMenu() { dimKindMenu.style.display = 'none'; }
   function openDimKindMenu(ax, atop) {
@@ -14077,6 +14350,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     dimKindMenu.style.top = Math.max(6, py) + 'px';
   }
   dimKindMenu.addEventListener('click', e => {
+    const act = e.target.closest('[data-act]');
+    if (act) { closeDimKindMenu(); if (act.dataset.act === 'autodim') autoDimStart(); else weldNumStart(); return; }
     const el = e.target.closest('[data-kind]'); if (!el) return;
     dimKind = el.dataset.kind;                            // 以後に引く寸法へ適用（既存の寸法は変えない）
     markDimKindActive(); updateDimBtnTitle();
