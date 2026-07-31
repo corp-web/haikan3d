@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-C';
+const APP_VER = 'v0731-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2155,6 +2155,10 @@ function makeValve(opts) {
 
   g.userData.partType = 'valve';
   g.userData.valve = { kind: k, sizeA: sizeA, rating: cls, style: (k === 'butterfly' ? (o.style || 'flange') : undefined), sizeB: (k === 'safety' ? ((VALVE_SIZES.includes(o.sizeB) ? o.sizeB : sizeA)) : undefined) };
+  // フランジ形（真っ直ぐ両端）＝端フランジのボルト穴を起点・スナップ対象に（フランジ単体と同様。2026-07-31 社長要望）
+  if (['gate', 'globe', 'ball', 'check', 'strainer'].includes(k) || (k === 'butterfly' && o.style !== 'wafer')) {
+    g.userData.boltLocals = flangeBoltRing(cls, sizeA, halfL).concat(flangeBoltRing(cls, sizeA, -halfL));
+  }
   // 面間センターの機点（2026-07-19 社長要望：バルブ中心にも起点候補。安全弁は工作点=中心が既にある）
   if (g.userData.faceLocal && g.userData.backLocal && !g.userData.cornerLocal) {
     const midC = g.userData.faceLocal.clone().add(g.userData.backLocal).multiplyScalar(0.5);
@@ -2162,6 +2166,15 @@ function makeValve(opts) {
     if (!g.userData.extraLocals.some(e => e.distanceTo(midC) < 1e-6)) g.userData.extraLocals.push(midC);
   }
   return g;
+}
+// 端フランジのボルト穴中心（ローカル・フランジ面 y 上）＝バルブ・フレキ等の boltLocals 用（makeFlangeと同じ配置角）
+function flangeBoltRing(cls, sizeA, y) {
+  const fd = flangeDim(cls, sizeA), bcR = fd.C / 2 / 1000, arr = [];
+  for (let i = 0; i < fd.n; i++) {
+    const a = (i / fd.n) * Math.PI * 2 + Math.PI / fd.n;
+    arr.push(new THREE.Vector3(Math.cos(a) * bcR, y, Math.sin(a) * bcR));
+  }
+  return arr;
 }
 // バルブ用：呼び径ドロップダウン表／クランプ
 const VALVE_SIZE_TBL = (() => { const t = {}; VALVE_SIZES.forEach(s => t[s] = 1); return t; })();
@@ -2190,6 +2203,8 @@ const sightOpts = { sizeA: '50A', cls: 'JIS 10K', length: 150 };
 function equipFlangedEnds(g, cls, sizeA, halfL, mat) {
   const f1 = valveEndFlange(cls, sizeA, mat, true); f1.position.y = halfL; g.add(f1);            // ハブ無し＝胴体は自前で作る
   const f2 = valveEndFlange(cls, sizeA, mat, true); f2.position.y = -halfL; f2.rotation.x = Math.PI; g.add(f2);
+  // 端フランジのボルト穴＝起点・スナップ対象（バルブと同様。2026-07-31 社長要望）
+  g.userData.boltLocals = flangeBoltRing(cls, sizeA, halfL).concat(flangeBoltRing(cls, sizeA, -halfL));
   return halfL - VMM(flangeDim(cls, sizeA).t) - EQUIP_RF_H;                                      // 板の背面＝胴体を伸ばせる位置
 }
 // 両端フランジ形の機点（＝バルブと同一規約：フェイス=+Y端／背面=-Y端／中央にも起点候補）
@@ -3680,8 +3695,7 @@ function connsOf(p) {
 // 機点(connsOf)には含めない＝起点(grip)や回転基準・自動集計には影響しない。設定「四半円点」でON/OFF（既定ON）。
 function quadLocalsOf(p) {
   const u = p.userData, t = u.partType;
-  // 機器類（バルブ・フレキシブル・サイドグラス・PG）は外形が管の円筒ではないので四半円点を出さない
-  if (!u.faceLocal || t === 'gasket' || t === 'valve' || t === 'flex' || t === 'sight' || t === 'pg') return [];
+  if (!u.faceLocal || t === 'gasket' || t === 'pg') return [];
   const out = [];
   const ring = (center, nrm, R) => {
     const n = nrm.clone().normalize();
@@ -3692,6 +3706,18 @@ function quadLocalsOf(p) {
              center.clone().addScaledVector(u2, R), center.clone().addScaledVector(u2, -R));
   };
   const odR = s => ((FLG_BORE[s] || 60) / 2) / 1000;   // 管外径の半径(m)
+  // フランジ形の機器（バルブ・フレキ・サイドグラス）＝両端フランジの板外周＝フランジ単体と同じ四半円点
+  //（SW形バルブ・ウエハー形・安全弁は対象外。2026-07-31 社長要望「他のフランジと同様に」）
+  if (t === 'valve' || t === 'flex' || t === 'sight') {
+    if (!isFlangedBody(u)) return [];
+    const vv = u.valve || {};
+    if (vv.kind === 'safety' || (vv.kind === 'butterfly' && vv.style === 'wafer')) return [];
+    const spec2 = u.valve || u.flex || u.sight || {};
+    const fd = flangeDim(spec2.rating || spec2.cls || 'JIS 10K', spec2.sizeA || '50A');
+    ring(u.faceLocal, u.faceNormal || new THREE.Vector3(0, 1, 0), (fd.D / 2) / 1000);
+    ring(u.backLocal, u.backNormal || new THREE.Vector3(0, -1, 0), (fd.D / 2) / 1000);
+    return out;
+  }
   const spec = u.pipe || u.bent || u.elbow || u.tee || u.reducer || u.cap || u.sw || u.flange || {};
   const RA = odR(spec.sizeA || '50A');
   if (t === 'flange') {                                 // フェイス側の板外周（外径D）
@@ -4025,7 +4051,9 @@ function updateFollowPreview(clientX, clientY) {
   // ボスのプレビューは従来どおりの通常スナップ（外面への移動は「置いた後」）。
   // 合いフランジ同様、両端までの距離ボックスは出す（数値入力＋Enterで確定も可。2026-07-31 社長要望）
   if (isBossTool(followPreview)) {
-    const bh = bossFitAt(clientX, clientY);
+    // 距離の基準はタッチ位置ではなく「緑の起点（吸着点）」＝プレビューと同じ点（2026-07-31 社長指摘）
+    const t0 = resolveTarget(clientX, clientY, null);
+    const bh = (t0 && t0.snapped) ? bossFitAtPoint(t0.point, clientX, clientY) : bossFitAt(clientX, clientY);
     if (bh) showInsDist(clientX, clientY, bh);
   }
   // 配管化②：挿入系アイテム＝吸着点（中点・交点など）が芯線上ならその点へ、無ければ画面距離で挿入予告
@@ -7844,7 +7872,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!sweepMode) return;
     const sizeA = sweepSize.value, sch = sweepSch.value;
     if (sweepMode.circle) { execSweepCircle(sizeA, sch); return; }
-    const joint = sweepJoint ? sweepJoint.value : 'BW';
+    const joint = (sweepJoint && sweepJoint.value) || 'BW';
     const plan = sweepPlan(sweepMode.pts, sizeA, joint);
     if (plan.err) { if (window.__toast) window.__toast(plan.err); return; }   // 箱は開けたまま＝径を変えて再実行できる
     const yAxis = new V3(0, 1, 0);
@@ -7899,6 +7927,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     sweepJoint = sweepBox.querySelector('#swpJoint');
     for (const s of FLANGE_SIZES) if (ELBOW_90L[s] != null) sweepSize.add(new Option(s, s));
     for (const s of PIPE_SCHEDULES) sweepSch.add(new Option(s, s));
+    // リストの連動（2026-07-31 社長指摘）：SW選択中＝呼び径は50Aまで／65A以上選択中＝SWの選択肢を出さない
+    sweepJoint.onchange = () => {
+      const cur = sweepSize.value;
+      while (sweepSize.options.length) sweepSize.remove(0);
+      for (const s of FLANGE_SIZES) {
+        if (ELBOW_90L[s] == null) continue;
+        if (sweepJoint.value === 'SW' && SW_S[s] == null) continue;
+        sweepSize.add(new Option(s, s));
+      }
+      sweepSize.value = [...sweepSize.options].some(op => op.value === cur) ? cur : '50A';
+    };
+    sweepSize.onchange = () => {
+      const cur = sweepJoint.value;
+      while (sweepJoint.options.length) sweepJoint.remove(0);
+      sweepJoint.add(new Option('BW', 'BW'));
+      if (SW_S[sweepSize.value] != null) sweepJoint.add(new Option('SW', 'SW'));
+      sweepJoint.value = [...sweepJoint.options].some(op => op.value === cur) ? cur : 'BW';
+    };
     sweepBox.querySelector('#swpGo').onclick = execSweep;
     sweepBox.querySelector('#swpNo').onclick = endSweepMode;
     ['pointerdown', 'click'].forEach(ev => sweepBox.addEventListener(ev, e => e.stopPropagation()));
@@ -7907,6 +7953,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ensureSweepBox();
     if (ELBOW_90L[pipeOpts.sizeA] != null) sweepSize.value = pipeOpts.sizeA;   // パレットのパイプ設定を既定にする
     if (PIPE_SCHEDULES.includes(pipeOpts.sch)) sweepSch.value = pipeOpts.sch;
+    sweepSize.onchange();   // 65A以上ならSWの選択肢を出さない（リスト連動の初期同期）
     let c;
     if (sweepMode.circle) {   // 円/円弧＝R曲げパイプ
       const rec = sweepMode.circle, { rx } = circleRadii(rec.style, rec.a, rec.b);
@@ -7968,7 +8015,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // e2e検証用フック
   window.__sweepCmd = sweepCmd;
   window.__sweepExec = execSweep;
-  window.__sweepSet = (sizeA, sch, joint) => { ensureSweepBox(); if (sizeA) sweepSize.value = sizeA; if (sch) sweepSch.value = sch; if (joint && sweepJoint) sweepJoint.value = joint; };
+  window.__sweepSet = (sizeA, sch, joint) => {
+    ensureSweepBox();
+    if (sizeA) { sweepSize.value = sizeA; sweepSize.onchange(); }
+    if (sch) sweepSch.value = sch;
+    if (joint && sweepJoint) { sweepJoint.value = joint; if (sweepJoint.value === joint) sweepJoint.onchange(); }
+  };
   window.__sweepState = () => sweepMode
     ? (sweepMode.circle ? { circle: true } : { pts: sweepMode.pts.map(p => p.toArray()), lines: sweepMode.lineCount })
     : null;
@@ -11101,6 +11153,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     clearMarkers();                                     // 矢印整列吸着の緑マーカーを消す
     const a = drawState.dimAdjust.a, b = drawState.dimAdjust.b;
     const st = Object.assign({}, styleFor('dim'), { dimOff: drawState.dimOff || 0, dimDir: drawState.dimDir || null });
+    if (dimKind === 'linear' && !st.dimDir) {   // 軸が未定のまま確定された保険＝ABの大きい水平成分が寸法線に残る軸へ
+      const ab = b.clone().sub(a);
+      st.dimDir = Math.abs(ab.x) >= Math.abs(ab.z) ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    }
     if (dimKind === 'linear' && st.dimDir) Object.assign(st, linearFixFields(a, b, st.dimDir));   // 長さ寸法＝軸固定で起票
     addAnnotation('dim', a, b, st);
     const rec = annStore[annStore.length - 1];
@@ -11370,7 +11426,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         cancelDraw();
         return;
       }
-      if (dimAdj) { commitDimWithOffset(); return; }    // タップ＝寸法の逃げをこの位置で確定
+      if (dimAdj) {                                     // タップ＝寸法の逃げをこの位置で確定
+        // ドラッグ無しの直タップだとpointermoveが来ず軸・逃げが未定のまま＝長さ寸法が平行寸法の見た目になる
+        // → タップ位置で軸（水平/垂直）と逃げを決めてから確定（2026-07-31 社長報告）
+        const rr = dimOffsetFromCursor(e.clientX, e.clientY, drawState.dimAdjust.a, drawState.dimAdjust.b, e.shiftKey || touchShift);
+        if (rr) { drawState.dimOff = rr.off; drawState.dimDir = rr.dir; }
+        commitDimWithOffset(); return;
+      }
       placeTouchPoint(e);                               // タップ＝1点目／2点目を確定
       return;
     }
