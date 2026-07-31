@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-H';
+const APP_VER = 'v0731-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5901,7 +5901,9 @@ function autoDimRuns() {
   }
   return runs;
 }
-// ランの端点P → 寸法の基準点。エルボ（BW/SW）＝角の工作点、ティー・クロス＝芯。それ以外＝端面のまま。
+// ランの端点P → 寸法の基準点。エルボ（BW/SW）＝角の工作点、ティー・クロス＝芯、
+// ボスのソケット底＝母管の中心（例：母管→ボス→パイプ→フランジは母管中心からフェイス面まで。2026-07-31 社長指示）。
+// それ以外＝端面のまま。
 function runEndKeyPoint(P) {
   const TOL = 0.0015;
   for (const q of placedParts) {
@@ -5909,9 +5911,11 @@ function runEndKeyPoint(P) {
     if (u.hidden || !u.faceLocal) continue;
     const isElbow = u.partType === 'elbow' || (u.partType === 'sw' && ['90E', '45E'].includes((u.sw || {}).kind));
     const isTee = u.partType === 'tee' || (u.partType === 'sw' && ['T', 'TR', 'CROSS'].includes((u.sw || {}).kind));
-    if (!isElbow && !isTee) continue;
+    const isBoss = u.partType === 'sw' && (u.sw || {}).kind === 'BOSS';
+    if (!isElbow && !isTee && !isBoss) continue;
     for (const l of connsOf(q)) {
       if (connModelPos(q, l).distanceTo(P) > TOL) continue;
+      if (isBoss) { const host = bossHostPipe(q); return { pt: host ? host.axisPt.clone() : P.clone(), kind: 'center' }; }
       if (u.cornerLocal) return { pt: connModelPos(q, u.cornerLocal), kind: isElbow ? 'corner' : 'center' };
       return { pt: q.position.clone(), kind: isElbow ? 'corner' : 'center' };
     }
@@ -11455,7 +11459,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const oldDims = annStore.filter(r => r.type === 'dim' && !r.hidden && r.style && ['linear', 'parallel'].includes(r.style.dimKind || 'parallel'));
     const dimExists = (a, b) => oldDims.some(r => (near(r.a, a) && near(r.b, b)) || (near(r.a, b) && near(r.b, a)));
     const oldLeads = annStore.filter(r => r.type === 'dim' && !r.hidden && r.style && r.style.dimKind === 'leader');
-    const leadExists = (a, head) => oldLeads.some(r => near(r.a, a) && String(r.style.dimText || '').startsWith(head));
+    // 同じ値のEL表記は図面全体で1つ（2026-07-31 社長指示）＝既存・今回の下書きの両方と重複させない
+    const elTaken = (txt) => oldLeads.some(r => String(r.style.dimText || '') === txt);
     const items = [];
     const pushDim = (a, b) => {
       if (a.distanceTo(b) < 0.02 || dimExists(a, b)) return;
@@ -11473,13 +11478,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const runsK = runs.map(r => ({ r, KA: runEndKeyPoint(r.A), KB: runEndKeyPoint(r.B) }));
     for (const rk of runsK) {
       pushDim(rk.KA.pt, rk.KB.pt);                                        // 芯々（両端が工作点）／端面（端がフランジ面・管端）
-      if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝ELの引出し（水平に500逃がす・2026-07-31 社長指示）
+      const pushEl = (pt, txt, perp) => {
+        if (elTaken(txt) || items.some(it => it.st.dimKind === 'leader' && it.st.dimText === txt)) return;
+        items.push({ a: pt.clone(), b: pt.clone().addScaledVector(perp, 0.5), st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: txt }) });
+      };
+      if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝COP EL（水平に500逃がす・同じ値は1つだけ）
         const mid = rk.KA.pt.clone().add(rk.KB.pt).multiplyScalar(0.5);
-        if (!leadExists(mid, 'COP EL')) {
-          const perp = new V3(-rk.r.dir.z, 0, rk.r.dir.x).normalize();
-          const knee = mid.clone().addScaledVector(perp, 0.5);
-          const elMm = Math.round(mid.y * 1000);
-          items.push({ a: mid, b: knee, st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: `COP EL${elMm >= 0 ? '+' : ''}${elMm}` }) });
+        const elMm = Math.round(mid.y * 1000);
+        pushEl(mid, `COP EL${elMm >= 0 ? '+' : ''}${elMm}`, new V3(-rk.r.dir.z, 0, rk.r.dir.x).normalize());
+      } else if (Math.abs(rk.r.dir.y) > 0.98) {                           // 立面ラン＝端面（フランジ面・管端）にEL（2026-07-31 社長指示）
+        for (const K of [rk.KA, rk.KB]) {
+          if (K.kind !== 'end') continue;
+          const elMm = Math.round(K.pt.y * 1000);
+          pushEl(K.pt, `EL${elMm >= 0 ? '+' : ''}${elMm}`, new V3(1, 0, 0));
         }
       }
       // バルブ・ガスケットの位置＝近い側の基準（工作点/端面）→そちらへ向いた面まで（2026-07-31 社長要望）
