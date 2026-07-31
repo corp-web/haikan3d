@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0731-D';
+const APP_VER = 'v0731-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2199,6 +2199,7 @@ const EQUIP_SIZES = VALVE_SIZES;                       // 呼び径はバルブ�
 const EQUIP_RF_H = 0.0018;                             // valveEndFlange のレイズドフェイス高さ(m)と合わせる
 const flexOpts  = { sizeA: '50A', cls: 'JIS 10K', length: 200 };
 const sightOpts = { sizeA: '50A', cls: 'JIS 10K', length: 150 };
+const spoolOpts = { sizeA: '50A', cls: 'JIS 10K', type: 'フランジ', length: 100 };
 // 両端フランジを付け、フランジ板の内側の端(y)を返す共通処理
 function equipFlangedEnds(g, cls, sizeA, halfL, mat) {
   const f1 = valveEndFlange(cls, sizeA, mat, true); f1.position.y = halfL; g.add(f1);            // ハブ無し＝胴体は自前で作る
@@ -2263,6 +2264,37 @@ function makeFlex(opts) {
   equipConns(g, halfL);
   g.userData.partType = 'flex';
   g.userData.flex = { sizeA, cls, length: Math.round(len) };
+  return g;
+}
+// 仮管（スプール・詰め物）＝バタフライ弁からハンドルと弁を除いたイメージ（2026-07-31 社長要望）。
+// タイプ＝フランジ（両端フランジ＋管外径の胴）／スペーサー（ウエハー形＝座面径の無垢リング・中空ボア）。
+// 長さ＝フランジ面間(mm)。フランジ形は両端の板厚＋RFが収まる長さが最短（それ未満は自動で最短へ）。
+function spoolMinLen(type, cls, sizeA) {
+  if (type === 'スペーサー') return 5;
+  const fd = flangeDim(VALVE_RATINGS.includes(cls) ? cls : 'JIS 10K', sizeA || '50A');
+  return Math.ceil((fd.t + 1.8) * 2 + 2);   // 板厚＋RF(1.8mm) ×両端 ＋ 胴の最小2mm
+}
+function makeSpool(opts) {
+  const o = Object.assign({ sizeA: '50A', cls: 'JIS 10K', type: 'フランジ', length: 100 }, opts || {});
+  const sizeA = EQUIP_SIZES.includes(o.sizeA) ? o.sizeA : '50A';
+  const cls = VALVE_RATINGS.includes(o.cls) ? o.cls : 'JIS 10K';
+  const type = o.type === 'スペーサー' ? 'スペーサー' : 'フランジ';
+  const len = Math.max(Number(o.length) || 100, spoolMinLen(type, cls, sizeA));
+  const halfL = VMM(len) / 2;
+  const mat = valveBodyMat();
+  const g = new THREE.Group();
+  const od = FLG_BORE[sizeA] || 60;
+  const boreR = VMM(od * 0.42);            // 中空ボア＝フランジ面がブラインドに見えない（バルブと同じ規約）
+  if (type === 'フランジ') {
+    const yIn = equipFlangedEnds(g, cls, sizeA, halfL, mat);
+    if (yIn > 0.0005) g.add(new THREE.Mesh(ringGeo(VMM(od) / 2, boreR, 2 * yIn), mat));   // 胴＝管外径の中空筒
+  } else {
+    const outR = VMM(rfFaceDia(cls, sizeA) || od * 1.1) / 2;
+    g.add(new THREE.Mesh(ringGeo(outR, boreR, 2 * halfL), mat));
+  }
+  equipConns(g, halfL);
+  g.userData.partType = 'spool';
+  g.userData.spool = { sizeA, cls, type, length: Math.round(len) };
   return g;
 }
 // サイドグラス（のぞき窓形）。opts={sizeA, cls, length[mm]=フランジ面間}
@@ -2626,11 +2658,12 @@ const TOOLS = [
   // 機器類（2026-07-27 社長要望）。継手・バルブの variant 方式ではなく専用のオプション欄を持つ。
   { type: 'flex',  name: 'フレキシブル', equip: true, build: () => makeFlex(flexOpts) },
   { type: 'sight', name: 'サイドグラス', equip: true, build: () => makeSightGlass(sightOpts) },
+  { type: 'spool', name: '仮管',         equip: true, build: () => makeSpool(spoolOpts) },
   { type: 'pg',    name: 'PG(圧力計)',   build: () => makePG(pgOpts) },
 ];
-// 両端フランジ形の機器（フレキシブル・サイドグラス）＝呼び径・クラス・長さの共用オプション欄を使う
-const EQUIP_TYPES = ['flex', 'sight'];
-function equipOptsOf(type) { return type === 'sight' ? sightOpts : flexOpts; }
+// 両端フランジ形の機器（フレキシブル・サイドグラス・仮管）＝呼び径・クラス・長さの共用オプション欄を使う
+const EQUIP_TYPES = ['flex', 'sight', 'spool'];
+function equipOptsOf(type) { return type === 'sight' ? sightOpts : type === 'spool' ? spoolOpts : flexOpts; }
 // 突合せ溶接継手ツールか（パイプ・フランジ以外）／ツール検索／現在選択中のタイプ(variant)
 function isFittingType(type) { return type !== 'flange' && type !== 'pipe'; }
 function toolByType(type) { return TOOLS.find(t => t.type === type); }
@@ -2898,6 +2931,9 @@ function onGasketOptChange() {
 let activeEquipType = 'flex';
 function buildEquipOptions() {
   const o = equipOptsOf(activeEquipType);
+  const tw = document.getElementById('optEqTypeWrap');
+  if (tw) tw.style.display = activeEquipType === 'spool' ? '' : 'none';   // タイプ欄＝仮管だけ
+  if (activeEquipType === 'spool') fillSelect('optEqType', ['フランジ', 'スペーサー'], o.type);
   fillSelect('optEqClass', VALVE_RATINGS, o.cls);
   fillSelect('optEqSize', EQUIP_SIZES, o.sizeA);
   const el = document.getElementById('optEqLen'); if (el) el.value = o.length;
@@ -2907,12 +2943,15 @@ function onEquipOptChange() {
   const o = equipOptsOf(activeEquipType);
   o.sizeA = v('optEqSize') || o.sizeA;
   o.cls = v('optEqClass') || o.cls;
+  if (activeEquipType === 'spool') o.type = v('optEqType') || o.type;
   const L = parseFloat(v('optEqLen'));
-  o.length = (L >= 60) ? Math.round(L) : 60;             // 短すぎると両端フランジがめり込む
+  // 短すぎると両端フランジがめり込む（仮管フランジ形＝板厚×2が最短・スペーサーは5mmまで）
+  const min = activeEquipType === 'spool' ? spoolMinLen(o.type, o.cls, o.sizeA) : 60;
+  o.length = (L >= min) ? Math.round(L) : min;
   buildEquipOptions();
   refreshThumbs();
 }
-['optEqSize', 'optEqClass', 'optEqLen'].forEach(id => {
+['optEqSize', 'optEqClass', 'optEqLen', 'optEqType'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', onEquipOptChange);
 });
@@ -3052,7 +3091,7 @@ function toolTypeOfPart(p) {
     return ({ ball: 'vBall', gate: 'vGate', globe: 'vGlobe', check: 'vCheck', strainer: 'vStrainer', butterfly: 'vButterfly', safety: 'vSafety', swgate: 'vCompact', swglobe: 'vCompact' })[k] || null;
   }
   return ({ flange: 'flange', gasket: 'gasket', pipe: 'pipe', tee: 'tee', reducer: 'reducer', cap: 'cap',
-            flex: 'flex', sight: 'sight', pg: 'pg' })[u.partType] || null;
+            flex: 'flex', sight: 'sight', spool: 'spool', pg: 'pg' })[u.partType] || null;
 }
 // 配置済み部品 → タイプ欄(variantのt)。partColumns と同じ対応。該当なし(フランジ/パイプ等)は null。
 function variantTOfPart(p) {
@@ -3085,7 +3124,7 @@ function syncPaletteToPart(p) {
     } else if (u.partType === 'pipe') {
       Object.assign(pipeOpts, u.pipe || {});
       buildPipeOptions();
-    } else if (u.partType === 'flex' || u.partType === 'sight') {
+    } else if (u.partType === 'flex' || u.partType === 'sight' || u.partType === 'spool') {
       activeEquipType = u.partType;
       Object.assign(equipOptsOf(u.partType), u[u.partType] || {});
       buildEquipOptions();
@@ -3402,8 +3441,9 @@ function rebuildPipe(part, lengthMm, keepEnd) {
 function rebuildEquipLength(part, lengthMm) {
   const u = part.userData;
   const spec = u[u.partType];
-  if (!spec || (u.partType !== 'flex' && u.partType !== 'sight')) return;
-  const L = Math.max(Number(lengthMm) || 0, 60);
+  if (!spec || (u.partType !== 'flex' && u.partType !== 'sight' && u.partType !== 'spool')) return;
+  const minL = u.partType === 'spool' ? spoolMinLen(spec.type, spec.cls, spec.sizeA) : 60;
+  const L = Math.max(Number(lengthMm) || 0, minL);
   const keepLocal = (u.gripLocal === u.backLocal) ? u.backLocal : u.faceLocal;   // つかんでいる端を保持
   const keepIsBack = (keepLocal === u.backLocal);
   const keepPos = connModelPos(part, keepLocal);
@@ -3412,8 +3452,9 @@ function rebuildEquipLength(part, lengthMm) {
     const c = part.children.pop();
     c.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
   }
-  const np = (u.partType === 'flex') ? makeFlex(spec) : makeSightGlass(spec);
+  const np = (u.partType === 'flex') ? makeFlex(spec) : (u.partType === 'spool') ? makeSpool(spec) : makeSightGlass(spec);
   while (np.children.length) part.add(np.children.pop());
+  u.boltLocals = np.userData.boltLocals || undefined;   // 端フランジのボルト穴も新しい面間へ追従（スペーサーは無し）
   const half = (spec.length / 1000) / 2;
   u.faceLocal.set(0, half, 0);
   u.backLocal.set(0, -half, 0);
@@ -3706,16 +3747,19 @@ function quadLocalsOf(p) {
              center.clone().addScaledVector(u2, R), center.clone().addScaledVector(u2, -R));
   };
   const odR = s => ((FLG_BORE[s] || 60) / 2) / 1000;   // 管外径の半径(m)
-  // フランジ形の機器（バルブ・フレキ・サイドグラス）＝両端フランジの板外周＝フランジ単体と同じ四半円点
-  //（SW形バルブ・ウエハー形・安全弁は対象外。2026-07-31 社長要望「他のフランジと同様に」）
-  if (t === 'valve' || t === 'flex' || t === 'sight') {
+  // フランジ形の機器（バルブ・フレキ・サイドグラス・仮管）＝両端フランジの板外周＝フランジ単体と同じ四半円点
+  //（SW形バルブ・ウエハー形・安全弁は対象外。仮管スペーサーは座面径のリム。2026-07-31 社長要望「他のフランジと同様に」）
+  if (t === 'valve' || t === 'flex' || t === 'sight' || t === 'spool') {
     if (!isFlangedBody(u)) return [];
     const vv = u.valve || {};
     if (vv.kind === 'safety' || (vv.kind === 'butterfly' && vv.style === 'wafer')) return [];
-    const spec2 = u.valve || u.flex || u.sight || {};
-    const fd = flangeDim(spec2.rating || spec2.cls || 'JIS 10K', spec2.sizeA || '50A');
-    ring(u.faceLocal, u.faceNormal || new THREE.Vector3(0, 1, 0), (fd.D / 2) / 1000);
-    ring(u.backLocal, u.backNormal || new THREE.Vector3(0, -1, 0), (fd.D / 2) / 1000);
+    const spec2 = u.valve || u.flex || u.sight || u.spool || {};
+    const cls2 = spec2.rating || spec2.cls || 'JIS 10K', szA = spec2.sizeA || '50A';
+    const R2 = (t === 'spool' && spec2.type === 'スペーサー')
+      ? VMM(rfFaceDia(cls2, szA) || (FLG_BORE[szA] || 60) * 1.1) / 2
+      : (flangeDim(cls2, szA).D / 2) / 1000;
+    ring(u.faceLocal, u.faceNormal || new THREE.Vector3(0, 1, 0), R2);
+    ring(u.backLocal, u.backNormal || new THREE.Vector3(0, -1, 0), R2);
     return out;
   }
   const spec = u.pipe || u.bent || u.elbow || u.tee || u.reducer || u.cap || u.sw || u.flange || {};
@@ -3788,6 +3832,7 @@ function isBoltLocal(p, local) { return !!(p.userData.boltLocals && p.userData.b
 function isFlangedBody(u) {
   if (!u) return false;
   if (u.partType === 'flex' || u.partType === 'sight') return true;
+  if (u.partType === 'spool') return true;   // 仮管＝フランジ形もスペーサー(ウエハー)形も両端ガスケット留め
   if (u.partType === 'valve') return !['swgate', 'swglobe'].includes((u.valve && u.valve.kind) || '');
   return false;
 }
@@ -3796,6 +3841,7 @@ function bodyRatingOf(u) {
   if (u.partType === 'valve') return (u.valve && u.valve.rating) || '';
   if (u.partType === 'flex') return (u.flex && u.flex.cls) || '';
   if (u.partType === 'sight') return (u.sight && u.sight.cls) || '';
+  if (u.partType === 'spool') return (u.spool && u.spool.cls) || '';
   return '';
 }
 function connNormalOf(p, local) {
@@ -4128,7 +4174,7 @@ function cycleFollowOrientation(mode) {
 //   自動で付けて挿入する（クラス＝機器のレーティング、Sch＝パイプのSch、タイプ＝パレットのフランジ設定）。
 // ・レジューサーは径が合う側を既存パイプへ向け、反対側のパイプは新しい径で作り直す。
 // ・入らない長さなら理由を出して中止（何も置かない）。エルボ挿入（ルート変更）は対象外。
-const INSERTABLE_TYPES = { flange: 1, valve: 1, flex: 1, sight: 1 };   // レジューサーの途中挿入は廃止（2026-07-29 社長指示）
+const INSERTABLE_TYPES = { flange: 1, valve: 1, flex: 1, sight: 1, spool: 1 };   // レジューサーの途中挿入は廃止（2026-07-29 社長指示）
 // ---- R曲げパイプ（bentpipe）の芯線ヘルパ（2026-07-30 社長要望：道中にフランジ挿入）----
 // tMm＝背面端（ローカルφ=π）からの弧長。局所円弧＝(R cosφ, R sinφ, 0)・φは面側へ向かって減る。
 const _n2pi = x => ((x % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
@@ -4290,7 +4336,7 @@ function insertTargetAt(clientX, clientY) {
   return byPt || pipeAxisTargetAt(clientX, clientY);
 }
 // ---- 吸着した相手の向きへ合わせる（2026-07-29 社長要望：フランジ等を相手のフランジへ置く時、毎回回さなくて済むように）----
-const MATE_TYPES = { flange: 1, gasket: 1, valve: 1, flex: 1, sight: 1, cap: 1 };
+const MATE_TYPES = { flange: 1, gasket: 1, valve: 1, flex: 1, sight: 1, spool: 1, cap: 1 };
 function mateInfoAt(pt) {
   // 同じ点に複数の機点が重なる時（例：面基準ではパイプ端とフランジのフェイスが同位置）は
   // 「フェイス面」を最優先＝フランジがある所へ持って行けば必ず面と面が向き合う（2026-07-29 社長報告）
@@ -5775,6 +5821,7 @@ function partColumns(p) {
     case 'sw':     { const o = u.sw || {}; const nm = {'90E':'90°エルボ','45E':'45°エルボ','T':'ティー','TR':'ティー','CROSS':'クロス','FC':'カップリング','HC':'カップリング','FCR':'カップリング','BOSS':'ボス','CAP':'キャップ','UNION':'ユニオン'}; const tp = {'FC':'FC','HC':'HC','FCR':'FCR','T':'SW(T)','TR':'SW(RT)'}[o.kind] || 'SW'; const rb = (o.sizeB && o.sizeB !== o.sizeA); return { kind: nm[o.kind] || 'SW継手', type: tp, size: rb ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: 'Sch80' }; }
     case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'コンパクトバルブ',swglobe:'コンパクトバルブ'}; let tp = '', cls = '', sz = o.sizeA || ''; if (o.kind === 'butterfly') { tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); cls = o.rating || ''; } else if (o.kind === 'swgate' || o.kind === 'swglobe') { tp = (o.kind === 'swgate' ? 'ゲート' : 'グローブ'); cls = 'Class800'; } else { cls = o.rating || ''; } if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls }; }
     case 'flex':   { const o = u.flex || {};   return { kind: 'フレキシブル', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
+    case 'spool':  { const o = u.spool || {};  return { kind: '仮管', type: `${o.type === 'スペーサー' ? 'SP' : 'FLG'} L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'sight':  { const o = u.sight || {};  return { kind: 'サイドグラス', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'pg':     { const o = u.pg || {};     return { kind: 'PG(圧力計)', type: `${o.thread || ''}${o.siphon === false ? '' : '＋サイフォン'}`, size: `${o.dia || 100}Φ`, cls: '' }; }
     default: return { kind: u.partType || 'アイテム', type: '', size: '', cls: '' };
@@ -7321,7 +7368,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   const V3 = THREE.Vector3;
 
   // ---- 部品仕様(userData)からメッシュを再生成（複製・読込・鏡で共用） ----
-  const SPEC_FIELD = { flange: 'flange', gasket: 'gasket', pipe: 'pipe', bentpipe: 'bent', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve', flex: 'flex', sight: 'sight', pg: 'pg' };
+  const SPEC_FIELD = { flange: 'flange', gasket: 'gasket', pipe: 'pipe', bentpipe: 'bent', elbow: 'elbow', cap: 'cap', tee: 'tee', reducer: 'reducer', sw: 'sw', valve: 'valve', flex: 'flex', sight: 'sight', spool: 'spool', pg: 'pg' };
   function buildFromSpec(u) {
     switch (u.partType) {
       case 'flange':  return makeFlange(u.flange);
@@ -7335,6 +7382,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       case 'sw':      return makeSW(u.sw);
       case 'valve':   return makeValve(u.valve);
       case 'flex':    return makeFlex(u.flex);
+      case 'spool':   return makeSpool(u.spool);
       case 'sight':   return makeSightGlass(u.sight);
       case 'pg':      return makePG(u.pg);
       default:        return null;
@@ -11101,11 +11149,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return useX ? { off: vx, dir: { x: 1, y: 0, z: 0 } } : { off: vz, dir: { x: 0, y: 0, z: 1 } };
   }
   // 長さ寸法の起票フィールド：寸法線の向き(dimFixDir)と基準点(dimFixPt＝2点の中点)を固定（リニア寸法と同じ表現）
+  // 向きは必ず「軸そのもの」（X/Y/Zの主成分）へ丸める＝長さ寸法は水平/垂直だけで、斜めの平行寸法の
+  // 見た目には決してならない（平行が要るなら種別「平行」を使う。2026-07-31 社長指摘）
   function linearFixFields(a, b, dd) {
     const dn = new V3(dd.x, dd.y, dd.z);
     if (dn.lengthSq() > 1e-9) dn.normalize(); else dn.set(0, 1, 0);
     const u = b.clone().sub(a); u.addScaledVector(dn, -u.dot(dn));
     if (u.lengthSq() > 1e-12) u.normalize(); else u.set(1, 0, 0);
+    const ax = Math.abs(u.x), ay = Math.abs(u.y), az = Math.abs(u.z);
+    if (ax >= ay && ax >= az) u.set(Math.sign(u.x) || 1, 0, 0);
+    else if (ay >= az) u.set(0, Math.sign(u.y) || 1, 0);
+    else u.set(0, 0, Math.sign(u.z) || 1);
     const m = a.clone().add(b).multiplyScalar(0.5);
     return { dimFixDir: { x: u.x, y: u.y, z: u.z }, dimFixPt: { x: m.x, y: m.y, z: m.z } };
   }
@@ -13617,9 +13671,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         edRow('厚み', { get: () => u.gasket.t, set: v => { if (v > 0) rebuildGasket(p, v); updateForm(); }, unit: 'mm', step: 0.5 });
       }
       // 機器類の長さ（＝フランジ面間）。パレットからも変えられるが、選んでその場で直せる方が速い。
-      if ((u.partType === 'flex' || u.partType === 'sight') && u[u.partType]) {
-        sec(u.partType === 'flex' ? 'フレキシブル' : 'サイドグラス');
-        edRow('長さ', { get: () => Math.round(u[u.partType].length), set: v => { if (v >= 60) rebuildEquipLength(p, v); updateForm(); }, unit: 'mm', step: 10 });
+      if ((u.partType === 'flex' || u.partType === 'sight' || u.partType === 'spool') && u[u.partType]) {
+        sec(u.partType === 'flex' ? 'フレキシブル' : u.partType === 'sight' ? 'サイドグラス' : `仮管（${(u.spool && u.spool.type) || 'フランジ'}）`);
+        edRow('長さ', { get: () => Math.round(u[u.partType].length), set: v => { if (v >= 1) rebuildEquipLength(p, v); updateForm(); }, unit: 'mm', step: 10 });
       }
       if (u.faceLocal) {
         sec('向き（フェイス面）');

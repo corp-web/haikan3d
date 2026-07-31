@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0731D — SKT-HD ♦</title>
+<title>配管3D v0731E — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260730">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260727">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260727">
-<meta name="apple-mobile-web-app-title" content="配管3D v0731D">
+<meta name="apple-mobile-web-app-title" content="配管3D v0731E">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -609,6 +609,7 @@
         <li>フランジ等を<b>相手の機点へ吸着させると、向きも相手に自動で合います</b>（面と面が向かい合う。R曲げ管の端でも接線に合います）。図は<b>面基準</b>＝パイプはフランジのフェイス面まで描き、控えは切寸表で引きます</li>
         <li><b>挿入（割り込み）</b>＝フランジ・バルブ等を<b>配置済みパイプの芯線の上</b>へ置くと、パイプを2本に割って挿入し長さを自動調整。画面上部に<b>両端までの距離</b>が出て、<b>数値入力＋Enter</b>でぴったりの位置へ。中点・交点への吸着も有効</li>
         <li><b>R曲げ管の途中</b>にも<b>フランジ</b>を同じ操作で挿入できます（曲げ管が弧長で2つに割れる。バルブ等は両面が平行にならないため不可）。<b>ボス</b>＝置いた後にパイプ外径面へ自動で取り付き、既定は真上（縦管は東）</li>
+        <li><b>仮管（スプール）</b>＝タイプ<b>フランジ</b>（両端フランジ＋胴）／<b>スペーサー</b>（ウエハー形のリング）。<b>長さ＝フランジ面間</b>で、置いた後もプロパティで調整できます（フランジ形は両端の板厚が収まる長さが最短）。挿入・ガスケット自動挿入・拾い出しはフランジ形バルブと同様</li>
       </ul>
       <h3>部品を動かす・向きを変える</h3>
       <ul>
@@ -695,8 +696,9 @@
       <label>クラス<select id="optGskClass"></select></label>
       <label>厚み(mm)<input id="optGskT" type="number" step="0.5" min="0.5" value="3"></label>
     </div>
-    <!-- 機器類（フレキシブル・サイドグラス）＝両端フランジ形。長さ＝フランジ面間(mm) -->
+    <!-- 機器類（フレキシブル・サイドグラス・仮管）＝両端フランジ形。長さ＝フランジ面間(mm) -->
     <div class="pal-opts" id="eqOptsUI" style="display:none">
+      <label id="optEqTypeWrap" style="display:none">タイプ<select id="optEqType"></select></label>
       <label>呼び径<select id="optEqSize"></select></label>
       <label>クラス<select id="optEqClass"></select></label>
       <label>長さ(mm)<input id="optEqLen" type="number" step="10" min="60"></label>
