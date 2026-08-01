@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0801-B';
+const APP_VER = 'v0801-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -36,13 +36,24 @@ const scene = new THREE.Scene();
 // 背景＝縦グラデーション。2026-08-01 社長「格子はあるが宙に浮いていて、目の前にある、クリアなイメージ」
 // ＝屋外の風景（青空・地平線）をやめ、無彩色のごく静かなグラデにした。上下の向きが分かる程度の差だけ残す。
 scene.background = (() => {
-  const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
+  const S = 512;
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
   const c = cv.getContext('2d');
-  const gr = c.createLinearGradient(0, 0, 0, 256);
-  gr.addColorStop(0, '#f1f4f8');     // 上
-  gr.addColorStop(0.55, '#e4e9ef');  // 中間
-  gr.addColorStop(1, '#d2d8e0');     // 足元＝わずかに沈める（上下の向きの手がかり）
-  c.fillStyle = gr; c.fillRect(0, 0, 2, 256);
+  const gr = c.createLinearGradient(0, 0, 0, S);
+  gr.addColorStop(0, '#eef2f7');
+  gr.addColorStop(0.55, '#e2e7ee');
+  gr.addColorStop(1, '#cdd4dd');
+  c.fillStyle = gr; c.fillRect(0, 0, S, S);
+  // スタジオの照明＝画面中央やや上に光の芯、四隅へ向けて静かに落とす（艶・奥行き）
+  const rg = c.createRadialGradient(S * 0.5, S * 0.42, 0, S * 0.5, S * 0.42, S * 0.72);
+  rg.addColorStop(0, 'rgba(255,255,255,0.75)');
+  rg.addColorStop(0.45, 'rgba(255,255,255,0.28)');
+  rg.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = rg; c.fillRect(0, 0, S, S);
+  const vg = c.createRadialGradient(S * 0.5, S * 0.45, S * 0.22, S * 0.5, S * 0.45, S * 0.74);
+  vg.addColorStop(0, 'rgba(104,116,134,0)');
+  vg.addColorStop(1, 'rgba(104,116,134,0.62)');
+  c.fillStyle = vg; c.fillRect(0, 0, S, S);
   return new THREE.CanvasTexture(cv);
 })();
 // 霞（フォグ）なし＝遠くの配管も端まで濁らない（2026-08-01 社長「クリアなイメージ」）。
@@ -107,10 +118,11 @@ function makeEnvMapFor(rnd) {
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
   const c = cv.getContext('2d');
   const gr = c.createLinearGradient(0, 0, 0, H);
-  gr.addColorStop(0, '#e6eefc');      // 天頂
-  gr.addColorStop(0.46, '#ffffff');   // 地平線＝いちばん明るい（管の腹に横一文字のハイライトが乗る）
-  gr.addColorStop(0.52, '#b9c0ca');   // 地平線の下＝地面
-  gr.addColorStop(1, '#7d838c');      // 足元
+  gr.addColorStop(0, '#dfe8f8');      // 天頂
+  gr.addColorStop(0.42, '#ffffff');   // 地平線＝いちばん明るい（管の腹に横一文字のハイライトが乗る）
+  gr.addColorStop(0.50, '#ffffff');
+  gr.addColorStop(0.54, '#9aa2ad');   // 地平線の下＝地面（暗く落として明暗差＝艶を強める）
+  gr.addColorStop(1, '#5f656e');      // 足元
   c.fillStyle = gr; c.fillRect(0, 0, W, H);
   // 太陽＝キーライト(8,12,6)の方角にひとつ。これが金属のハイライトの芯になる。
   const sun = c.createRadialGradient(W * 0.40, H * 0.22, 0, W * 0.40, H * 0.22, W * 0.14);
@@ -166,6 +178,31 @@ function buildGrid(c1, c2) {
   modelGroup.add(grid);
 }
 buildGrid(0x848c96, 0xaeb4bd);   // グリッド＝地面と同系の青みグレー（濃線/淡線）
+// 床の光だまり＝原点まわりに白い艶を敷く（磨いた床が照明を受けた感じ・格子の直下）。
+// 印刷では格子と一緒に隠す。深度は書かないので配管の前後関係に影響しない。
+let floorSheen = null;
+(function buildFloorSheen() {
+  const S = 512;
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const c = cv.getContext('2d');
+  const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g.addColorStop(0, 'rgba(92,102,118,0.26)');
+  g.addColorStop(0.30, 'rgba(92,102,118,0.15)');
+  g.addColorStop(1, 'rgba(92,102,118,0)');
+  c.fillStyle = g; c.fillRect(0, 0, S, S);
+  const hi = c.createRadialGradient(S * 0.62, S * 0.34, 0, S * 0.62, S * 0.34, S * 0.30);
+  hi.addColorStop(0, 'rgba(255,255,255,0.5)');
+  hi.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = hi; c.fillRect(0, 0, S, S);
+  const tex = new THREE.CanvasTexture(cv);
+  floorSheen = new THREE.Mesh(
+    new THREE.PlaneGeometry(14, 14),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+  floorSheen.rotation.x = -Math.PI / 2;
+  floorSheen.position.y = -0.004;   // 格子(y=0)・地面スラブ(-0.002)より下＝z-fight回避
+  floorSheen.renderOrder = -1;
+  modelGroup.add(floorSheen);
+})();
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
 let showGround = false;   // 既定OFF（2026-07-20 社長指示。設定でONにすると記憶）
@@ -731,7 +768,7 @@ function renderGizmo() {
 // ===================================================================
 // 鋳鋼フランジ風マテリアル（濃いチャコール・つや消し気味）
 const FLANGE_MAT = new THREE.MeshStandardMaterial({
-  color: 0x51575f, metalness: 0.55, roughness: 0.52,   // ひとまわり明るいチャコール（2026-07-19 全体の明るさ改善）
+  color: 0x51575f, metalness: 0.72, roughness: 0.33,   // ひとまわり明るいチャコール（2026-07-19 全体の明るさ改善）
 });
 
 // ---- フランジの選択肢 ----
@@ -1936,8 +1973,8 @@ const VALVE_SIZES = ['15A', '20A', '25A', '32A', '40A', '50A', '65A', '80A', '10
 const VALVE_RATINGS = ['JIS 10K', 'JIS 20K', 'JPI 150LB', 'JPI 300LB'];
 const _vdn = s => parseInt(s, 10) || 50;
 const VMM = v => v / 1000;
-function valveBodyMat() { return new THREE.MeshStandardMaterial({ color: 0x97a0ab, metalness: 0.5, roughness: 0.52, side: THREE.DoubleSide }); }
-function valveOpMat() { return new THREE.MeshStandardMaterial({ color: 0x5f6873, metalness: 0.55, roughness: 0.5, side: THREE.DoubleSide }); }   // ハンドル・ステム等
+function valveBodyMat() { return new THREE.MeshStandardMaterial({ color: 0x97a0ab, metalness: 0.66, roughness: 0.34, side: THREE.DoubleSide }); }
+function valveOpMat() { return new THREE.MeshStandardMaterial({ color: 0x5f6873, metalness: 0.7, roughness: 0.32, side: THREE.DoubleSide }); }   // ハンドル・ステム等
 // 面間(中心-端の半分=halfL を使う)。標準寸法の近似（mm）。
 function valveFtF(kind, sizeA) {
   const dn = _vdn(sizeA);
@@ -9086,6 +9123,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const prevClear = renderer.getClearColor(new THREE.Color());
     const prevAlpha = renderer.getClearAlpha();
     const prevGrid = grid ? grid.visible : null;
+    const prevSheen = floorSheen ? floorSheen.visible : null;
     const prevGround = groundGroup ? groundGroup.visible : null;
     // 選択中の起点・機点マーカーやカーソルの補助表示は図面に出さない（2026-07-21）
     const hideForPrint = [];
@@ -9096,6 +9134,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     scene.background = new THREE.Color(0xffffff);
     renderer.setClearColor(0xffffff, 1);
     if (grid) grid.visible = false;
+    if (floorSheen) floorSheen.visible = false;     // 床の艶も図面には出さない
     if (groundGroup) groundGroup.visible = false;   // 地面スラブは図面（印刷）には出さない
     // 寸法値の背景マスクを白（紙色）で作り直す（作り直すと文字の向き・サイズが初期化されるので合わせ直す）
     if (window.__dimMaskPrint) { window.__dimMaskPrint(true); if (window.__updateDimTextFacing) window.__updateDimTextFacing(); }
@@ -9151,6 +9190,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     scene.background = prevBg;
     renderer.setClearColor(prevClear, prevAlpha);
     if (grid) grid.visible = prevGrid;
+    if (floorSheen) floorSheen.visible = prevSheen;
     if (groundGroup) groundGroup.visible = prevGround;
     for (const g of hideForPrint) g.visible = true;
     for (const p of partsHidden) p.visible = true;
