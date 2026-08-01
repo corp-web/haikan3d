@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-B';
+const APP_VER = 'v0802-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -33,10 +33,9 @@ vp.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 // 統一カラーモード（2026-07-19 社長決定：ダーク/ホワイト切替を廃止し、昼夜・屋内外で共通に見やすい
 // CAD標準風の中間グレー1本に統一。UIパネルも明るい配色＝背景と調和（2026-07-20 社長要望））
-// 背景＝無色透明のイメージ（2026-08-02 社長指示）。グラデ・中央の光・四隅の沈みを全て廃止し、
-// 無彩色一色のフラットにした。キャンバスの実透過はしない（下地CSSの色が出る・画素テストが黒判定になるため）
-// ＝同色を起動下地（index.htmlのbody background）にも合わせて「素通し」に見せる。
-scene.background = new THREE.Color(0xf4f5f6);
+// 背景＝真っ白（2026-08-02 社長「透明がダメなら真っ白で」）。演出なしの#ffffff一色。
+// 起動下地（index.htmlのbody background）も同色＝立ち上がりから白。
+scene.background = new THREE.Color(0xffffff);
 // 霞（フォグ）なし＝遠くの配管も端まで濁らない（2026-08-01 社長「クリアなイメージ」）。
 // 遠近感は格子の放射フェード（buildGrid）と外形線が受け持つ。印刷も同じ条件で澄む。
 scene.fog = null;
