@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-C';
+const APP_VER = 'v0802-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -158,31 +158,10 @@ function buildGrid(c1, c2) {
   modelGroup.add(grid);
 }
 buildGrid(0x6f7883, 0x99a1ac);   // グリッド＝地面と同系の青みグレー（濃線/淡線）。v0802で一段濃く（艶の床で薄まった対策）
-// 床の光だまり＝原点まわりに白い艶を敷く（磨いた床が照明を受けた感じ・格子の直下）。
-// 印刷では格子と一緒に隠す。深度は書かないので配管の前後関係に影響しない。
+// 床の陰・艶（floorSheen）＝v0802-D で廃止（2026-08-02 社長「背景が真っ白になっていない」）。
+// ホーム視点は見下ろしで画面全体が床＝14m四方の薄灰色がそのまま「背景が灰色」に見えていた（画素実測220/255）。
+// 変数は印刷パスの参照互換のため null のまま残す。
 let floorSheen = null;
-(function buildFloorSheen() {
-  const S = 512;
-  const cv = document.createElement('canvas'); cv.width = cv.height = S;
-  const c = cv.getContext('2d');
-  const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  g.addColorStop(0, 'rgba(92,102,118,0.26)');
-  g.addColorStop(0.30, 'rgba(92,102,118,0.15)');
-  g.addColorStop(1, 'rgba(92,102,118,0)');
-  c.fillStyle = g; c.fillRect(0, 0, S, S);
-  const hi = c.createRadialGradient(S * 0.62, S * 0.34, 0, S * 0.62, S * 0.34, S * 0.30);
-  hi.addColorStop(0, 'rgba(255,255,255,0.28)');
-  hi.addColorStop(1, 'rgba(255,255,255,0)');
-  c.fillStyle = hi; c.fillRect(0, 0, S, S);
-  const tex = new THREE.CanvasTexture(cv);
-  floorSheen = new THREE.Mesh(
-    new THREE.PlaneGeometry(14, 14),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
-  floorSheen.rotation.x = -Math.PI / 2;
-  floorSheen.position.y = -0.004;   // 格子(y=0)・地面スラブ(-0.002)より下＝z-fight回避
-  floorSheen.renderOrder = -1;
-  modelGroup.add(floorSheen);
-})();
 // ---- 地面（GL＝EL0 の半透明スラブ）＝地上と地下をひと目で区別（2026-07-19 社長要望・BIMビューア風） ----
 // 半透明なので地下（EL<0）の配管もスラブ越しにうっすら見える。設定⚙「地面の表示」でON/OFF。印刷には出さない。
 let showGround = false;   // 既定OFF（2026-07-20 社長指示。設定でONにすると記憶）
