@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0801-C';
+const APP_VER = 'v0802-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -40,9 +40,9 @@ scene.background = (() => {
   const cv = document.createElement('canvas'); cv.width = cv.height = S;
   const c = cv.getContext('2d');
   const gr = c.createLinearGradient(0, 0, 0, S);
-  gr.addColorStop(0, '#eef2f7');
-  gr.addColorStop(0.55, '#e2e7ee');
-  gr.addColorStop(1, '#cdd4dd');
+  gr.addColorStop(0, '#fbfcfd');
+  gr.addColorStop(0.55, '#f3f5f8');
+  gr.addColorStop(1, '#e4e8ed');
   c.fillStyle = gr; c.fillRect(0, 0, S, S);
   // スタジオの照明＝画面中央やや上に光の芯、四隅へ向けて静かに落とす（艶・奥行き）
   const rg = c.createRadialGradient(S * 0.5, S * 0.42, 0, S * 0.5, S * 0.42, S * 0.72);
@@ -51,8 +51,8 @@ scene.background = (() => {
   rg.addColorStop(1, 'rgba(255,255,255,0)');
   c.fillStyle = rg; c.fillRect(0, 0, S, S);
   const vg = c.createRadialGradient(S * 0.5, S * 0.45, S * 0.22, S * 0.5, S * 0.45, S * 0.74);
-  vg.addColorStop(0, 'rgba(104,116,134,0)');
-  vg.addColorStop(1, 'rgba(104,116,134,0.62)');
+  vg.addColorStop(0, 'rgba(112,122,136,0)');
+  vg.addColorStop(1, 'rgba(112,122,136,0.4)');
   c.fillStyle = vg; c.fillRect(0, 0, S, S);
   return new THREE.CanvasTexture(cv);
 })();
@@ -165,7 +165,7 @@ const GRID_FADE_IN = 4.5, GRID_FADE_OUT = 10.0;
 function buildGrid(c1, c2) {
   if (grid) { modelGroup.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
   grid = new THREE.GridHelper(20, 40, c1, c2);
-  grid.material.opacity = 0.75; grid.material.transparent = true;
+  grid.material.opacity = 0.9; grid.material.transparent = true;
   grid.material.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vXZ;')
@@ -177,7 +177,7 @@ function buildGrid(c1, c2) {
   };
   modelGroup.add(grid);
 }
-buildGrid(0x848c96, 0xaeb4bd);   // グリッド＝地面と同系の青みグレー（濃線/淡線）
+buildGrid(0x6f7883, 0x99a1ac);   // グリッド＝地面と同系の青みグレー（濃線/淡線）。v0802で一段濃く（艶の床で薄まった対策）
 // 床の光だまり＝原点まわりに白い艶を敷く（磨いた床が照明を受けた感じ・格子の直下）。
 // 印刷では格子と一緒に隠す。深度は書かないので配管の前後関係に影響しない。
 let floorSheen = null;
@@ -191,7 +191,7 @@ let floorSheen = null;
   g.addColorStop(1, 'rgba(92,102,118,0)');
   c.fillStyle = g; c.fillRect(0, 0, S, S);
   const hi = c.createRadialGradient(S * 0.62, S * 0.34, 0, S * 0.62, S * 0.34, S * 0.30);
-  hi.addColorStop(0, 'rgba(255,255,255,0.5)');
+  hi.addColorStop(0, 'rgba(255,255,255,0.28)');
   hi.addColorStop(1, 'rgba(255,255,255,0)');
   c.fillStyle = hi; c.fillRect(0, 0, S, S);
   const tex = new THREE.CanvasTexture(cv);
@@ -768,7 +768,7 @@ function renderGizmo() {
 // ===================================================================
 // 鋳鋼フランジ風マテリアル（濃いチャコール・つや消し気味）
 const FLANGE_MAT = new THREE.MeshStandardMaterial({
-  color: 0x51575f, metalness: 0.72, roughness: 0.33,   // ひとまわり明るいチャコール（2026-07-19 全体の明るさ改善）
+  color: 0x51575f, metalness: 0.62, roughness: 0.42,   // ひとまわり明るいチャコール（2026-07-19 全体の明るさ改善）
 });
 
 // ---- フランジの選択肢 ----
@@ -1973,8 +1973,8 @@ const VALVE_SIZES = ['15A', '20A', '25A', '32A', '40A', '50A', '65A', '80A', '10
 const VALVE_RATINGS = ['JIS 10K', 'JIS 20K', 'JPI 150LB', 'JPI 300LB'];
 const _vdn = s => parseInt(s, 10) || 50;
 const VMM = v => v / 1000;
-function valveBodyMat() { return new THREE.MeshStandardMaterial({ color: 0x97a0ab, metalness: 0.66, roughness: 0.34, side: THREE.DoubleSide }); }
-function valveOpMat() { return new THREE.MeshStandardMaterial({ color: 0x5f6873, metalness: 0.7, roughness: 0.32, side: THREE.DoubleSide }); }   // ハンドル・ステム等
+function valveBodyMat() { return new THREE.MeshStandardMaterial({ color: 0x97a0ab, metalness: 0.58, roughness: 0.42, side: THREE.DoubleSide }); }
+function valveOpMat() { return new THREE.MeshStandardMaterial({ color: 0x5f6873, metalness: 0.62, roughness: 0.40, side: THREE.DoubleSide }); }   // ハンドル・ステム等
 // 面間(中心-端の半分=halfL を使う)。標準寸法の近似（mm）。
 function valveFtF(kind, sizeA) {
   const dn = _vdn(sizeA);
