@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0801-A';
+const APP_VER = 'v0801-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -33,18 +33,21 @@ vp.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 // 統一カラーモード（2026-07-19 社長決定：ダーク/ホワイト切替を廃止し、昼夜・屋内外で共通に見やすい
 // CAD標準風の中間グレー1本に統一。UIパネルも明るい配色＝背景と調和（2026-07-20 社長要望））
-// 背景＝縦グラデーション（上＝空側を明るく・下＝足元をやや締める。2026-07-20 社長「地上の背景が暗い」）
+// 背景＝縦グラデーション。2026-08-01 社長「格子はあるが宙に浮いていて、目の前にある、クリアなイメージ」
+// ＝屋外の風景（青空・地平線）をやめ、無彩色のごく静かなグラデにした。上下の向きが分かる程度の差だけ残す。
 scene.background = (() => {
   const cv = document.createElement('canvas'); cv.width = 2; cv.height = 256;
   const c = cv.getContext('2d');
   const gr = c.createLinearGradient(0, 0, 0, 256);
-  gr.addColorStop(0, '#96bce8');     // 上＝深めのスカイブルー（BIMx写真の空に合わせ・2026-07-20 社長）
-  gr.addColorStop(0.6, '#dde9f7');   // 地平線近く＝ほぼ白に霞む
-  gr.addColorStop(1, '#bcc4cf');     // 足元＝青みグレー（地面と馴染む）
+  gr.addColorStop(0, '#f1f4f8');     // 上
+  gr.addColorStop(0.55, '#e4e9ef');  // 中間
+  gr.addColorStop(1, '#d2d8e0');     // 足元＝わずかに沈める（上下の向きの手がかり）
   c.fillStyle = gr; c.fillRect(0, 0, 2, 256);
   return new THREE.CanvasTexture(cv);
 })();
-scene.fog = new THREE.Fog(0xdde9f7, 18, 60);   // フォグは地平線の霞色に合わせる
+// 霞（フォグ）なし＝遠くの配管も端まで濁らない（2026-08-01 社長「クリアなイメージ」）。
+// 遠近感は格子の放射フェード（buildGrid）と外形線が受け持つ。印刷も同じ条件で澄む。
+scene.fog = null;
 document.body.classList.add('light');   // UIは明るい配色で固定（旧ホワイトモードのUIスタイルを常時適用）
 
 // ---- カメラ ----
@@ -143,10 +146,23 @@ window.__edgeSet = (v) => { showEdges = !!v; };
 const modelGroup = new THREE.Group();
 scene.add(modelGroup);
 let grid = null;
+// 格子＝中心から半径4.5mまでははっきり、そこから10mへ向けて透けて消える「宙に浮いた舞台」。
+// 端を切り落とさず溶かすので、四角い板ではなく空間に浮いて見える（2026-08-01 社長指示）。
+// 実装＝線材質のシェーダに中心距離のフェードを1行差し込む（線のシャープさはGridHelperのまま）。
+const GRID_FADE_IN = 4.5, GRID_FADE_OUT = 10.0;
 function buildGrid(c1, c2) {
   if (grid) { modelGroup.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
   grid = new THREE.GridHelper(20, 40, c1, c2);
-  grid.material.opacity = 0.6; grid.material.transparent = true;
+  grid.material.opacity = 0.75; grid.material.transparent = true;
+  grid.material.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vXZ;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvXZ = position.xz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vXZ;')
+      .replace('#include <color_fragment>',
+        `#include <color_fragment>\n\tdiffuseColor.a *= (1.0 - smoothstep(${GRID_FADE_IN.toFixed(1)}, ${GRID_FADE_OUT.toFixed(1)}, length(vXZ)));`);
+  };
   modelGroup.add(grid);
 }
 buildGrid(0x848c96, 0xaeb4bd);   // グリッド＝地面と同系の青みグレー（濃線/淡線）
