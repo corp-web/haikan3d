@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-A';
+const APP_VER = 'v0802-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -33,29 +33,10 @@ vp.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 // 統一カラーモード（2026-07-19 社長決定：ダーク/ホワイト切替を廃止し、昼夜・屋内外で共通に見やすい
 // CAD標準風の中間グレー1本に統一。UIパネルも明るい配色＝背景と調和（2026-07-20 社長要望））
-// 背景＝縦グラデーション。2026-08-01 社長「格子はあるが宙に浮いていて、目の前にある、クリアなイメージ」
-// ＝屋外の風景（青空・地平線）をやめ、無彩色のごく静かなグラデにした。上下の向きが分かる程度の差だけ残す。
-scene.background = (() => {
-  const S = 512;
-  const cv = document.createElement('canvas'); cv.width = cv.height = S;
-  const c = cv.getContext('2d');
-  const gr = c.createLinearGradient(0, 0, 0, S);
-  gr.addColorStop(0, '#fbfcfd');
-  gr.addColorStop(0.55, '#f3f5f8');
-  gr.addColorStop(1, '#e4e8ed');
-  c.fillStyle = gr; c.fillRect(0, 0, S, S);
-  // スタジオの照明＝画面中央やや上に光の芯、四隅へ向けて静かに落とす（艶・奥行き）
-  const rg = c.createRadialGradient(S * 0.5, S * 0.42, 0, S * 0.5, S * 0.42, S * 0.72);
-  rg.addColorStop(0, 'rgba(255,255,255,0.75)');
-  rg.addColorStop(0.45, 'rgba(255,255,255,0.28)');
-  rg.addColorStop(1, 'rgba(255,255,255,0)');
-  c.fillStyle = rg; c.fillRect(0, 0, S, S);
-  const vg = c.createRadialGradient(S * 0.5, S * 0.45, S * 0.22, S * 0.5, S * 0.45, S * 0.74);
-  vg.addColorStop(0, 'rgba(112,122,136,0)');
-  vg.addColorStop(1, 'rgba(112,122,136,0.4)');
-  c.fillStyle = vg; c.fillRect(0, 0, S, S);
-  return new THREE.CanvasTexture(cv);
-})();
+// 背景＝無色透明のイメージ（2026-08-02 社長指示）。グラデ・中央の光・四隅の沈みを全て廃止し、
+// 無彩色一色のフラットにした。キャンバスの実透過はしない（下地CSSの色が出る・画素テストが黒判定になるため）
+// ＝同色を起動下地（index.htmlのbody background）にも合わせて「素通し」に見せる。
+scene.background = new THREE.Color(0xf4f5f6);
 // 霞（フォグ）なし＝遠くの配管も端まで濁らない（2026-08-01 社長「クリアなイメージ」）。
 // 遠近感は格子の放射フェード（buildGrid）と外形線が受け持つ。印刷も同じ条件で澄む。
 scene.fog = null;
