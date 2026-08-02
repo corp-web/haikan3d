@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-F';
+const APP_VER = 'v0802-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -37,7 +37,7 @@ const scene = new THREE.Scene();
 // 起動下地（index.htmlのbody background）も同色＝立ち上がりから白。
 scene.background = new THREE.Color(0xffffff);
 // 霞（フォグ）なし＝遠くの配管も端まで濁らない（2026-08-01 社長「クリアなイメージ」）。
-// 遠近感は格子の放射フェード（buildGrid）と外形線が受け持つ。印刷も同じ条件で澄む。
+// 遠近感は格子（buildGrid）と外形線が受け持つ。印刷も同じ条件で澄む。
 scene.fog = null;
 document.body.classList.add('light');   // UIは明るい配色で固定（旧ホワイトモードのUIスタイルを常時適用）
 
@@ -146,38 +146,15 @@ window.__edgeSet = (v) => { showEdges = !!v; };
 const modelGroup = new THREE.Group();
 scene.add(modelGroup);
 let grid = null;
-// 格子＝中心から半径4.5mまでははっきり、そこから10mへ向けて透けて消える「宙に浮いた舞台」。
-// 端を切り落とさず溶かすので、四角い板ではなく空間に浮いて見える（2026-08-01 社長指示）。
-// 実装＝線材質のシェーダに中心距離のフェードを1行差し込む（線のシャープさはGridHelperのまま）。
-// 消え際は手前寄り＝遠くの線が遠近で圧縮されて灰色のモヤになるのを防ぐ（2026-08-02 社長「画像のような白さ」）
-// フェードの等高線は円でなく正方形（チェビシェフ距離）＝「四角いステージ」に見える（2026-08-02 社長指示）
-const GRID_FADE_IN = 5.0, GRID_FADE_OUT = 5.5;
+// 格子＝20m四方・50cm目盛りのシンプルな格子（v0731-I の姿。2026-08-02 社長指示で復帰）。
+// フェード（放射／チェビシェフ）・外枠線は入れない＝素の GridHelper 1枚だけ。
 function buildGrid(c1, c2) {
-  if (grid) { modelGroup.remove(grid); grid.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
-  grid = new THREE.Group();
-  const gh = new THREE.GridHelper(20, 40, c1, c2);
-  gh.material.opacity = 0.9; gh.material.transparent = true;
-  gh.material.onBeforeCompile = (sh) => {
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vXZ;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvXZ = position.xz;');
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vXZ;')
-      .replace('#include <color_fragment>',
-        `#include <color_fragment>\n\tdiffuseColor.a *= (1.0 - smoothstep(${GRID_FADE_IN.toFixed(1)}, ${GRID_FADE_OUT.toFixed(1)}, max(abs(vXZ.x), abs(vXZ.y))));`);
-  };
-  grid.add(gh);
-  // 外枠＝右上の格子舞台と同じ「四角いステージ」の縁。フェードの終端に置く
-  const h = GRID_FADE_OUT;
-  const rim = new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-h, 0, -h), new THREE.Vector3(h, 0, -h),
-      new THREE.Vector3(h, 0, h), new THREE.Vector3(-h, 0, h)]),
-    new THREE.LineBasicMaterial({ color: c1, transparent: true, opacity: 0.6 }));
-  grid.add(rim);
+  if (grid) { modelGroup.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
+  grid = new THREE.GridHelper(20, 40, c1, c2);
+  grid.material.opacity = 0.6; grid.material.transparent = true;
   modelGroup.add(grid);
 }
-buildGrid(0x6f7883, 0x99a1ac);   // グリッド＝地面と同系の青みグレー（濃線/淡線）。v0802で一段濃く（艶の床で薄まった対策）
+buildGrid(0x848c96, 0xaeb4bd);   // グリッド＝地面と同系の青みグレー（濃線/淡線）
 // 床の陰・艶（floorSheen）＝v0802-D で廃止（2026-08-02 社長「背景が真っ白になっていない」）。
 // ホーム視点は見下ろしで画面全体が床＝14m四方の薄灰色がそのまま「背景が灰色」に見えていた（画素実測220/255）。
 // 変数は印刷パスの参照互換のため null のまま残す。
