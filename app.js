@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-K';
+const APP_VER = 'v0802-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3276,6 +3276,7 @@ function beginMoveAfterOrigin(cx, cy) {
     // 45°刻み・距離入力欄・Shiftの鉛直移動は従来どおり使える。タップで確定。
     const o = originModelPos(part);
     const sh = planeHitAt(cx, cy, o.y);
+    if (hDirInput) hDirInput.value = '';        // 新しい移動＝向きは「ドラッグの向き」から
     dirDrag = {
       part, sx: cx, sy: cy, startOrigin: o.clone(), startHit: sh ? sh.clone() : o.clone(),
       planeY: o.y, dir: null, dist: 0, started: false, locked: true, hover: true, touching: true,
@@ -3284,8 +3285,13 @@ function beginMoveAfterOrigin(cx, cy) {
     if (window.__annHasSel && window.__annHasSel()) { window.__annMoveStart(); dirDrag.annFollow = true; }
     controls.enabled = false;
 
-  } else if (window.__annHasSel && window.__annHasSel() && typeof startAnnPlace === 'function' && startAnnPlace()) {
-
+  } else if (window.__annHasSel && window.__annHasSel() && typeof startAnnPlace === 'function' && startAnnPlace(true)) {
+    // 線・寸法だけの選択も部品と同じ流れ＝まず直線移動、ダブルタップ／長押しで自由移動、タップで確定
+    controls.enabled = false;
+    if (annPlaceMode) annPlaceMode.startHit = planeHitAt(cx, cy, annPlaceMode.start.y) || annPlaceMode.start.clone();
+    _annTap = { t: (window.performance ? performance.now() : 0), x: cx, y: cy };   // 続けてのタップ＝ダブルタップ判定用
+    clearTimeout(freeHoldTimer);
+    freeHoldTimer = setTimeout(() => { annPlaceFree(cx, cy); }, 500);   // 長押し＝自由移動へ
   }
 }
 // 起点選びを始める（選択済みの状態で「移動」に入った時と、「移動」を押してから選んだ時の両方から呼ぶ）
@@ -3327,25 +3333,67 @@ let moveGroup = [];           // 集団移動：主選択と一緒に動かす�
 let annFollowMove = false;    // 部品の集団移動に、窓選択した線も追従させるか
 // 線・寸法・文字だけを掴んで置く状態（部品が無いので movingPart が使えない）。
 // コマンドで作った物を複製したあとも、部品と同じように動かして置けるようにする（2026-07-27 社長要望）。
-let annPlaceMode = null;      // { ref: V3 }  掴んだ時点の選択中心
-function startAnnPlace() {
+let annPlaceMode = null;      // { ref: V3, free, start, startHit, moved }  掴んだ時点の基準点
+let _annTap = { t: -1e9, x: 0, y: 0 };   // 線・寸法の移動中のダブルタップ判定
+// constrained=true（移動コマンドで起点を決めた後）＝部品と同じ「直線移動」から始め、
+// ダブルタップ／長押しで自由移動へ切り替える。複製の置き直しは従来どおり最初から自由移動。
+function startAnnPlace(constrained) {
   if (!(window.__annHasSel && window.__annHasSel())) return false;
-  const c = (window.__annSelGrip && window.__annSelGrip()) || (window.__annSelCenter && window.__annSelCenter());
+  // 決めた起点があればそこを基準にする（旧＝先頭の線の端点a固定で、起点を無視して飛んでいた。
+  // 2026-08-02 社長「線分などの移動の機能もおかしい」）
+  const c = (selPivot && selPivot.clone())
+         || (window.__annSelGrip && window.__annSelGrip())
+         || (window.__annSelCenter && window.__annSelCenter());
   if (!c) return false;
   window.__annMoveStart();
-  annPlaceMode = { ref: c.clone() };
+  annPlaceMode = { ref: c.clone(), free: !constrained, start: c.clone(), startHit: null, moved: false,
+                   cur: c.clone(), grabOff: { x: 0, y: 0 } };
   return true;
+}
+function annPlaceFree(cx, cy) {   // ダブルタップ／長押し＝自由移動へ切替（今いる位置から。飛ばさない）
+  if (!annPlaceMode || annPlaceMode.free) return;
+  const cur = (annPlaceMode.cur || annPlaceMode.ref).clone();
+  window.__annMoveEnd(); window.__annMoveStart();     // 今の位置を新しい基準にして取り直す
+  annPlaceMode.ref = cur; annPlaceMode.start = cur.clone(); annPlaceMode.cur = cur.clone();
+  annPlaceMode.free = true; annPlaceMode.moved = false;
+  // 掴んだ所と基準点の画面上のずれを覚える＝カーソルへ瞬間移動しない（部品の自由移動と同じ）
+  const rect = renderer.domElement.getBoundingClientRect();
+  const n = modelGroup.localToWorld(cur.clone()).project(activeCam());
+  const sx = rect.left + (n.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-n.y * 0.5 + 0.5) * rect.height;
+  annPlaceMode.grabOff = { x: (cx || sx) - sx, y: (cy || sy) - sy };
+  if (window.__toast) window.__toast('自由移動：動かしてタップで確定');
 }
 function moveAnnPlace(cx, cy) {
   if (!annPlaceMode) return;
-  // スナップONなら機点・交点などへ吸着させる（2026-07-27 社長要望：複製の移動でもスナップさせたい）。
-  // 基準は「選択した先頭の注釈の端点a」＝その点が吸着先に乗る。
-  const tgt = resolveTarget(cx, cy, null, annPlaceMode.ref.y);
-  if (!tgt) return;
-  const d = tgt.point.clone().sub(annPlaceMode.ref);
+  if (annPlaceMode.free) {
+    // スナップONなら機点・交点などへ吸着させる（2026-07-27 社長要望：複製の移動でもスナップさせたい）。
+    const go = annPlaceMode.grabOff || { x: 0, y: 0 };
+    const tgt = resolveTarget(cx - go.x, cy - go.y, null, annPlaceMode.ref.y);
+    if (!tgt) return;
+    const d = tgt.point.clone().sub(annPlaceMode.ref);
+    window.__annMoveApply(d.x, d.y, d.z);
+    annPlaceMode.cur = tgt.point.clone();
+    annPlaceMode.moved = true;
+    clearMarkers();
+    if (tgt.snapped) addSnapMarker(tgt.point, markerRadiusFor(null, true));   // 吸着した点を見せる
+    return;
+  }
+  // 直線移動＝部品と同じ。指を置いた所からの差分を45°（または指定角）へ丸め、その向きへ真っ直ぐ
+  const hit = planeHitAt(cx, cy, annPlaceMode.start.y);
+  if (!hit) return;
+  if (!annPlaceMode.startHit) annPlaceMode.startHit = hit.clone();
+  const b = annPlaceMode.startHit;
+  const vx = hit.x - b.x, vz = hit.z - b.z;
+  const step = Math.PI / 4;                                   // 45°刻み（線の角度スナップと同じ）
+  const ang = Math.round(Math.atan2(vz, vx) / step) * step;
+  const dist = Math.max(0, vx * Math.cos(ang) + vz * Math.sin(ang));
+  const to = new THREE.Vector3(annPlaceMode.start.x + Math.cos(ang) * dist, annPlaceMode.start.y, annPlaceMode.start.z + Math.sin(ang) * dist);
+  const d = to.clone().sub(annPlaceMode.ref);
   window.__annMoveApply(d.x, d.y, d.z);
+  annPlaceMode.cur = to.clone();
+  if (dist > 1e-6) annPlaceMode.moved = true;
   clearMarkers();
-  if (tgt.snapped) addSnapMarker(tgt.point, markerRadiusFor(null, true));   // 吸着した点を見せる
+  addGuideTriangle(annPlaceMode.start.clone(), to, 0xffcc33);   // 部品と同じ黄色ガイド
 }
 function dropAnnPlace() {
   if (!annPlaceMode) return;
@@ -5449,6 +5497,7 @@ const hYInput = document.getElementById('hY');
 const hLabel = document.getElementById('hLabel');
 const rotForm = document.getElementById('rotForm');     // 右クリック長押しの角度スピナー
 const rotAInput = document.getElementById('rotA');
+const hDirInput = document.getElementById('hDir');   // 移動の向き（空＝ドラッグの向き）
 const legXInput = document.getElementById('legX');
 const legZInput = document.getElementById('legZ');
 const legXBox = document.getElementById('legXBox');
@@ -5478,6 +5527,8 @@ function updateForm() {
   if (!hYInput) return;
   if (dirActive()) {
     if (hLabel) hLabel.textContent = dirDrag.vert ? '距離(上下)' : '距離';
+    // 入力中は書き換えない＝数字を全部消せる（2026-08-02 社長「0の数字まで削除できない」）
+    if (document.activeElement === hYInput) return;
     const cur = originModelPos(dirDrag.part);
     hYInput.value = Math.round((dirDrag.vert ? Math.abs(cur.y - dirDrag.startOrigin.y)
                                              : Math.hypot(cur.x - dirDrag.startOrigin.x, cur.z - dirDrag.startOrigin.z)) * 1000);
@@ -5508,6 +5559,7 @@ function updateForm() {
 // フォームを部品の画面範囲の「脇」に置く（毎フレーム）。どの視点でも部品と重ならない。
 function positionHeightForm() {
   if (!hForm) return;
+  if (hDirInput) hDirInput.style.display = dirActive() ? '' : 'none';   // 方向欄は距離入力の時だけ出す
   // 配置済みオブジェクトを選択しただけでは空間上の入力フォーム（EL/COP/長さ）は出さない
   // （2026-07-18 社長要望：値の表示・編集はプロパティパネルへ集約＝画面を広く使う）。
   // 例外＝方向ドラッグの距離入力（移動コマンドの操作中だけ従来どおり表示）
@@ -5603,15 +5655,31 @@ function applyLegInputs() {
   dirDrag.locked = true;
   drawDirGuide();
 }
-// 距離入力→現在の進行方向に沿ってその距離だけ起点から移動（45°・90°どちらでも）
+// 距離入力→その距離だけ起点から移動。向きは「方向」欄で選べる（未選択＝ドラッグで決めた向き）。
+// 旧＝ドラッグ前に数値だけ入れると必ず東(+X)へ動いていた（2026-08-02 社長指摘）。
 function applyDistInput() {
   if (!dirDrag) return;
+  if (String(hYInput.value).trim() === '') return;      // 空欄＝まだ動かさない（消している途中）
   const cur = originModelPos(dirDrag.part);
   const ox = cur.x - dirDrag.startOrigin.x, oz = cur.z - dirDrag.startOrigin.z;
   const len = Math.hypot(ox, oz);
   const D = Math.max(0, (parseFloat(hYInput.value) || 0) / 1000);
-  const dx = len > 1e-6 ? ox / len : 1, dz = len > 1e-6 ? oz / len : 0;
-  setPartByOrigin(dirDrag.part, new THREE.Vector3(dirDrag.startOrigin.x + dx * D, dirDrag.startOrigin.y, dirDrag.startOrigin.z + dz * D));
+  const sel = hDirInput ? hDirInput.value : '';
+  let dx, dy = 0, dz;
+  if (sel === 'x+') { dx = 1; dz = 0; }
+  else if (sel === 'x-') { dx = -1; dz = 0; }
+  else if (sel === 'z+') { dx = 0; dz = 1; }
+  else if (sel === 'z-') { dx = 0; dz = -1; }
+  else if (sel === 'y+') { dx = 0; dz = 0; dy = 1; }
+  else if (sel === 'y-') { dx = 0; dz = 0; dy = -1; }
+  else if (len > 1e-6) { dx = ox / len; dz = oz / len; }          // ドラッグで決めた向き
+  else {                                                          // まだ向きが決まっていない＝縦移動中ならY、そうでなければ動かさない
+    if (!dirDrag.vert) return;
+    dx = 0; dz = 0; dy = Math.sign(cur.y - dirDrag.startOrigin.y) || 1;
+  }
+  setPartByOrigin(dirDrag.part, new THREE.Vector3(dirDrag.startOrigin.x + dx * D,
+                                                  dirDrag.startOrigin.y + dy * D,
+                                                  dirDrag.startOrigin.z + dz * D));
   applyGroupDelta(dirDrag.group, dirDrag.part, dirDrag.primaryStartPos);
   dirDrag.locked = true;
   drawDirGuide();
@@ -5626,6 +5694,10 @@ if (hYInput) {
   };
   hYInput.addEventListener('input', applyHY);    // スピナー長押し・連続増減でも追従
   hYInput.addEventListener('change', applyHY);
+  if (hDirInput) {                                // 向きを選んだら、その場でその方角へ動かし直す
+    hDirInput.addEventListener('change', () => { if (dirActive()) { applyDistInput(); updateForm(); } });
+    ['pointerdown', 'click'].forEach(ev => hDirInput.addEventListener(ev, e => e.stopPropagation()));
+  }
   hYInput.addEventListener('keydown', e => {
     // 線選択中のEL欄（構築線は自動フォーカス）：Delete＝選択中の線を削除／Escape＝閉じる（選択解除）
     // Delete は構築線選択時のみ（線分のEL編集中の文字削除を誤爆させない）
@@ -6600,7 +6672,16 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (ctrlish && !moveMode) return;                     // Ctrl+クリックは複数選択トグル → pointerup で処理
   const rect = renderer.domElement.getBoundingClientRect();
   if (inGizmo(e.clientX - rect.left, e.clientY - rect.top)) return;
-  if (annPlaceMode) return;   // 複製した線・寸法を置いている最中＝タップは「確定」なので部品を掴まない
+  if (annPlaceMode) {          // 線・寸法を置いている最中＝タップは「確定」なので部品を掴まない。
+    // ただし直線移動中は、ダブルタップ／長押しで自由移動へ切り替える（部品と同じ。2026-08-02 社長指摘）
+    if (!annPlaceMode.free) {
+      const dbl = (e.timeStamp - _annTap.t < 350) && Math.hypot(e.clientX - _annTap.x, e.clientY - _annTap.y) < 12;
+      _annTap = { t: e.timeStamp, x: e.clientX, y: e.clientY };
+      if (dbl) { clearTimeout(freeHoldTimer); annPlaceFree(e.clientX, e.clientY); }
+      else { clearTimeout(freeHoldTimer); const fx = e.clientX, fy = e.clientY; freeHoldTimer = setTimeout(() => annPlaceFree(fx, fy), 500); }
+    }
+    return;
+  }
   if (moveReady) {              // 起点確定後の最初のタッチ＝ここから動かし始める
     moveReady = false;
     e.stopImmediatePropagation();
@@ -6745,6 +6826,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
   if (!moveMode) return;
   const o = originModelPos(part);
   const sh = planeHitAt(e.clientX, e.clientY, o.y);   // 指を置いた地点の平面ヒット（移動量の基準。タップでズレないように）
+  if (hDirInput) hDirInput.value = '';          // 新しい移動＝向きは「ドラッグの向き」から
   dirDrag = { part, sx: e.clientX, sy: e.clientY, startOrigin: o.clone(), startHit: sh ? sh.clone() : o.clone(), planeY: o.y, dir: null, dist: 0, started: false, locked: false,
               group, primaryStartPos: part.position.clone(), annFollow: false };
   if (window.__annHasSel && window.__annHasSel()) { window.__annMoveStart(); dirDrag.annFollow = true; }   // 窓選択の線も一緒に直行移動
@@ -6849,8 +6931,11 @@ renderer.domElement.addEventListener('pointerup', e => {
     if (!movingByDrag) moveExistingPart(e.clientX, e.clientY);
     dropMovingPart();                    // 移動モード：タップで確定（選択は継続）
   } else if (annPlaceMode) {
-    moveAnnPlace(e.clientX, e.clientY);   // タップした位置へ置いてから確定（タッチはホバーが無いため）
+    clearTimeout(freeHoldTimer);
+    if (!annPlaceMode.free && !annPlaceMode.moved) return;   // まだ動かしていない＝確定しない（ダブルタップ／長押しを待つ）
+    if (annPlaceMode.free) moveAnnPlace(e.clientX, e.clientY);   // 自由移動はタップした位置へ置いてから確定
     dropAnnPlace();
+    if (typeof finishMoveCommand === 'function') finishMoveCommand();
   } else if (dirDrag && dirDrag.locked) {
     // まだ一度も動かしていない＝確定するものが無い。ここで終わらせないので、
     // 続けてダブルタップ／長押しで「自由移動」へ移れる（2026-07-28 社長指摘）
