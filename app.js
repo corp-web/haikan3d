@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-R';
+const APP_VER = 'v0802-S';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1443,9 +1443,13 @@ function applyBranchIfOnPipe(br) {
   for (const host of placedParts) {
     const hu = host.userData;
     if (host === br || hu.partType !== 'pipe' || !hu.pipe || !hu.placed || hu.hidden) continue;
-    // 枝は母管の内面より細いこと＝太い管が細い管の枝になってしまうのを防ぐ（2026-08-03 社長報告の対策）
-    const hIn = Math.max((FLG_BORE[hu.pipe.sizeA] || 114) / 2 - pipeWall(hu.pipe.sizeA, hu.pipe.sch), 1);
-    if (brOut >= hIn) continue;
+    // 枝は母管より太くないこと（太い管が細い管の枝になるのを防ぐ）。同径・近い径もそのまま被り付く。
+    // 合わせ面＝母管の内面。枝が太くて内面に入らない時は外面合わせにする（2026-08-03 社長報告の対策）
+    const hOutR = (FLG_BORE[hu.pipe.sizeA] || 114) / 2;
+    const hInR = Math.max(hOutR - pipeWall(hu.pipe.sizeA, hu.pipe.sch), 1);
+    if (brOut > hOutR + 0.01) continue;
+    const fitR = (brOut < hInR - 0.01) ? hInR : hOutR;
+    const fitSide = (brOut < hInR - 0.01) ? 'inner' : 'outer';
     const ha = connModelPos(host, hu.backLocal), hb = connModelPos(host, hu.faceLocal);
     const hd = hb.clone().sub(ha); const hL = hd.length();
     if (hL < 1e-6) continue;
@@ -1469,8 +1473,7 @@ function applyBranchIfOnPipe(br) {
       const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       const axLocal = hd.clone().applyQuaternion(q.clone().invert());
       u.pipe.length = newL * 1000;
-      u.pipe.branch = { hostR: Math.max((FLG_BORE[hu.pipe.sizeA] || 114) / 2 - pipeWall(hu.pipe.sizeA, hu.pipe.sch), 1),
-                        side: 'inner', axis: { x: axLocal.x, y: axLocal.y, z: axLocal.z } };
+      u.pipe.branch = { hostR: fitR, side: fitSide, axis: { x: axLocal.x, y: axLocal.y, z: axLocal.z } };
       while (br.children.length) { const c = br.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
       const np = makePipe(u.pipe); while (np.children.length) br.add(np.children.pop());
       const half = newL / 2;
@@ -5036,7 +5039,7 @@ function pipeCutInfo(pipe) {
     const rOut = (FLG_BORE[o.sizeA] || 114) / 2;
     const bi = branchCutInfo(cut, o.branch.hostR, rOut);
     return { ends, cut: Math.round(bi.min * 10) / 10, cutMax: Math.round(bi.max * 10) / 10,
-             branch: true, gap: w.gap, sop: w.sop };
+             branch: true, branchSide: o.branch.side || 'inner', gap: w.gap, sop: w.sop };
   }
   return { ends, cut: Math.round(cut * 10) / 10, gap: w.gap, sop: w.sop };
 }
@@ -5044,7 +5047,7 @@ window.__pipeCutInfo = (i) => {
   const p = placedParts[i];
   if (!p || p.userData.partType !== 'pipe') return null;
   const c = pipeCutInfo(p);
-  return { cut: c.cut, cutMax: c.cutMax, branch: !!c.branch, slant: !!c.slant, gap: c.gap, sop: c.sop, ends: c.ends.map(e => ({ kind: e.kind, with: e.with || '', depth: e.depth != null ? Math.round(e.depth * 10) / 10 : null })) };
+  return { cut: c.cut, cutMax: c.cutMax, branch: !!c.branch, branchSide: c.branchSide, slant: !!c.slant, gap: c.gap, sop: c.sop, ends: c.ends.map(e => ({ kind: e.kind, with: e.with || '', depth: e.depth != null ? Math.round(e.depth * 10) / 10 : null })) };
 };
 
 // 仮配置：プレビューの姿勢（位置・向き）をそのままコピーして置く＝見た目が完全一致。
@@ -9682,7 +9685,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       pipes.forEach((p, i) => {
         const c = pipeCutInfo(p);
         lines.push([i + 1, p.userData.pipe.sizeA, p.userData.pipe.sch, Math.round(p.userData.pipe.length * 10) / 10,
-                    lbl(c.ends[0]), c.branch ? '被り付き(母管内面)' : (c.slant ? '斜め切り' : lbl(c.ends[1])),
+                    lbl(c.ends[0]), c.branch ? `被り付き(母管${c.branchSide === 'outer' ? '外面' : '内面'})` : (c.slant ? '斜め切り' : lbl(c.ends[1])),
                     (c.branch || c.slant) ? `${c.cut}〜${c.cutMax}` : c.cut, c.gap, c.sop].map(esc).join(','));
       });
     }
