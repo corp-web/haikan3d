@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-M';
+const APP_VER = 'v0802-N';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1340,21 +1340,71 @@ function weldHollowProfile(ro, ri, yLo, yHi, bevelHi, bevelLo) {
   if (bevelHi) { p.push(V(ri + f, yHi), V(ro, hiOut)); } else { p.push(V(ro, hiOut)); }   // 上端：ルートフェイス→面取り（閉）
   return p;
 }
+// 被り付き（枝管）の切り欠き寸法：母管の合わせ半径R・枝管の外半径r から
+// 「母管の芯から測った長さL」に対する切寸の最短・最長(mm)を返す（2026-08-02 社長要望）
+function branchCutInfo(Lmm, Rmm, rOutMm) {
+  const R = Math.max(Rmm || 0, 0), r = Math.max(rOutMm || 0, 0);
+  const deep = R;                                   // いちばん食い込む所（枝の腹＝母管の芯に近い側）
+  const shallow = R > r ? Math.sqrt(R * R - r * r) : 0;   // いちばん浅い所（枝の脇）
+  return { min: Lmm - deep, max: Lmm - shallow };
+}
 function makePipe(opts) {
   const o = Object.assign({ sizeA: '25A', sch: 'Sch40', length: 1000 }, opts || {});
   const outR = (FLG_BORE[o.sizeA] || 114) / 2 / 1000;       // 管外半径(m)
   const w = pipeWall(o.sizeA, o.sch) / 1000;                 // 肉厚(m)
   const inR = Math.max(outR - w, outR * 0.2);                // 管内半径(m)
   const L = Math.max((o.length || 1000) / 1000, 0.01);       // 全長(m)
-  // 断面(r,y)を一周＝中空筒。両端に溶接開先（ルートフェイス＋面取り）
-  const prof = weldHollowProfile(outR, inR, -L / 2, L / 2, true, true);
-  const geo = new THREE.LatheGeometry(prof, 64);
+  // 被り付き＝背面側の端を母管の丸みに合わせて切る（2026-08-02 社長要望）。
+  //   o.branch = { hostR: 合わせ半径(mm), side:'inner'|'outer', axis:{x,y,z} 母管の軸（この管のローカル系） }
+  //   length は「母管の芯から先端まで」。背面の機点＝母管の芯に置く。
+  const br = (o.branch && o.branch.hostR > 0) ? o.branch : null;
+  // 端面の斜め切り（開先角ではなく「管を斜めに切る」角度・度）。0=直角。±60°まで
+  const angF = Math.max(-60, Math.min(60, Number(o.cutAngFace) || 0));   // フェイス側(+Y)
+  const angB = Math.max(-60, Math.min(60, Number(o.cutAngBack) || 0));   // 背面側(-Y)
+  // 断面(r,y)を一周＝中空筒。両端に溶接開先（ルートフェイス＋面取り。斜めに切る側・被り付き側は開先なし）
+  const prof = weldHollowProfile(outR, inR, -L / 2, L / 2, !angF, !br && !angB);
+  let geo = new THREE.LatheGeometry(prof, 64);
+  // 斜め切り＝端の輪をそのまま傾ける（＝軸に対して斜めの平らな切り口。管を斜めに切ったのと同じ）。
+  // 芯の長さ length は変えず、外周が ±r·tanθ だけ伸び縮みする。
+  if (angF || angB) {
+    const pos = geo.attributes.position;
+    const tF = Math.tan(angF * Math.PI / 180), tB = Math.tan(angB * Math.PI / 180);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i);
+      if (angF && Math.abs(y - L / 2) < 1e-6) pos.setY(i, y + x * tF);
+      else if (angB && Math.abs(y + L / 2) < 1e-6) pos.setY(i, y + x * tB);
+    }
+    pos.needsUpdate = true;
+  }
+  if (br) {
+    // 背面端の輪を、母管（半径R・軸ax）の丸みに合わせて持ち上げる＝鞍形の切り口。
+    // CSGだと切り取った円筒の面が中に残り、選択枠や範囲ズームの箱が狂うのでこの方式にした。
+    const R = br.hostR / 1000;
+    const ax = new THREE.Vector3(br.axis ? br.axis.x : 1, br.axis ? br.axis.y : 0, br.axis ? br.axis.z : 0);
+    if (ax.lengthSq() < 1e-9) ax.set(1, 0, 0);
+    ax.y = 0;                                        // 枝の軸(Y)成分は使わない＝直交成分だけ見る
+    if (ax.lengthSq() < 1e-9) ax.set(1, 0, 0);
+    ax.normalize();
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.abs(pos.getY(i) + L / 2) > 1e-6) continue;
+      const x = pos.getX(i), z = pos.getZ(i);
+      const sAx = x * ax.x + z * ax.z;               // 母管の軸に沿った成分（切り口は伸びる方向）
+      const w2 = Math.max(x * x + z * z - sAx * sAx, 0);   // 母管の軸からの横ずれ
+      pos.setY(i, -L / 2 + Math.sqrt(Math.max(R * R - w2, 0)));
+    }
+    pos.needsUpdate = true;
+  }
   geo.computeVertexNormals();
   const mat = FLANGE_MAT.clone(); mat.side = THREE.DoubleSide; mat.needsUpdate = true;
   const g = new THREE.Group();
   g.add(new THREE.Mesh(geo, mat));
   g.userData.partType = 'pipe';
   g.userData.pipe = { ...o };
+  if (br || angF || angB) {   // 切った端は箱から機点を取れないので明示（芯線上の点＝設計長さの端）
+    g.userData.faceLocal = new THREE.Vector3(0, L / 2, 0);
+    g.userData.backLocal = new THREE.Vector3(0, -L / 2, 0);
+  }
   return g;
 }
 // 現在パレットで選択中のパイプ仕様（既定：Sch10S・長さ100mm）
@@ -4884,13 +4934,28 @@ function pipeCutInfo(pipe) {
     if (e.kind === 'BW') cut += (w.gap > 0 ? -w.gap / 2 : 0.5);   // ギャップの半分を引く／0mmは縮み代+0.5
     else if (e.kind === 'SOP' || e.kind === 'SW') cut += e.depth;
   }
+  // 斜め切り＝芯の長さに対して ±r·tanθ（2026-08-02 社長要望）
+  const aF = Math.abs(Number(o.cutAngFace) || 0), aB = Math.abs(Number(o.cutAngBack) || 0);
+  if (aF || aB) {
+    const rOut = (FLG_BORE[o.sizeA] || 114) / 2;
+    const d = rOut * (Math.tan(aF * Math.PI / 180) + Math.tan(aB * Math.PI / 180));
+    return { ends, cut: Math.round((cut - d) * 10) / 10, cutMax: Math.round((cut + d) * 10) / 10,
+             slant: true, gap: w.gap, sop: w.sop };
+  }
+  // 被り付き（枝管）＝母管の丸みで切るので切寸は「最短〜最長」（2026-08-02 社長要望）
+  if (o.branch && o.branch.hostR > 0) {
+    const rOut = (FLG_BORE[o.sizeA] || 114) / 2;
+    const bi = branchCutInfo(cut, o.branch.hostR, rOut);
+    return { ends, cut: Math.round(bi.min * 10) / 10, cutMax: Math.round(bi.max * 10) / 10,
+             branch: true, gap: w.gap, sop: w.sop };
+  }
   return { ends, cut: Math.round(cut * 10) / 10, gap: w.gap, sop: w.sop };
 }
 window.__pipeCutInfo = (i) => {
   const p = placedParts[i];
   if (!p || p.userData.partType !== 'pipe') return null;
   const c = pipeCutInfo(p);
-  return { cut: c.cut, gap: c.gap, sop: c.sop, ends: c.ends.map(e => ({ kind: e.kind, with: e.with || '', depth: e.depth != null ? Math.round(e.depth * 10) / 10 : null })) };
+  return { cut: c.cut, cutMax: c.cutMax, branch: !!c.branch, slant: !!c.slant, gap: c.gap, sop: c.sop, ends: c.ends.map(e => ({ kind: e.kind, with: e.with || '', depth: e.depth != null ? Math.round(e.depth * 10) / 10 : null })) };
 };
 
 // 仮配置：プレビューの姿勢（位置・向き）をそのままコピーして置く＝見た目が完全一致。
@@ -5944,9 +6009,15 @@ function partColumns(p) {
     case 'gasket': { const o = u.gasket || {}; return { kind: 'ガスケット', type: `t${o.t != null ? o.t : 3}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'pipe':   { const o = u.pipe || {};
       // 表示はCSVの切寸表と同じ「切寸」に揃える（2026-07-31 社長指示）。未配置（プレビュー等）は図面長のまま
-      let L = Math.round((o.length || 0) * 10) / 10;
-      try { if (u.placed && typeof pipeCutInfo === 'function') L = pipeCutInfo(p).cut; } catch (e) {}
-      return { kind: 'パイプ', type: `L${L}`, size: o.sizeA || '', cls: o.sch || '' }; }
+      let L = Math.round((o.length || 0) * 10) / 10, tp = null;
+      try {
+        if (u.placed && typeof pipeCutInfo === 'function') {
+          const c = pipeCutInfo(p); L = c.cut;
+          if (c.branch) tp = `被付 L${c.cut}〜${c.cutMax}`;   // 被り付き＝母管の丸みで切るので最短〜最長
+          else if (c.slant) tp = `斜切 L${c.cut}〜${c.cutMax}`;   // 斜め切り＝最短〜最長
+        }
+      } catch (e) {}
+      return { kind: 'パイプ', type: tp || `L${L}`, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'bentpipe': { const o = u.bent || {}; const len = Math.round((o.R || 0) * (o.angleDeg || 0) * Math.PI / 180 * 1000); return { kind: 'パイプ', type: `R曲げR${Math.round((o.R || 0) * 1000)} 展開L${len}`, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'elbow':  { const o = u.elbow || {};  const nm = {'90L':'90°エルボ','90S':'90°エルボ','45L':'45°エルボ','45S':'45°エルボ','180L':'180°エルボ','180S':'180°エルボ'}; let tp = (o.kind && o.kind.endsWith('S')) ? 'BW(S)' : 'BW(L)'; if (o.cutAngle > 0) tp += `切${Math.round(o.cutAngle * 10) / 10}°`; return { kind: nm[o.kind] || 'エルボ', type: tp, size: o.sizeA || '', cls: o.sch || '' }; }
     case 'cap':    { const o = u.cap || {};    return { kind: 'キャップ', type: 'BW', size: o.sizeA || '', cls: o.sch || '' }; }
@@ -8018,7 +8089,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // ・エルボが入らない短い区間は自動でショートエルボへ切替。それでも入らなければ中止して理由を出す。
   // ・パイプ長＝芯々からエルボの中心-端(cE=R·tan(角/2))を差し引いた値＝線分の寸法がそのまま芯々寸法。
   // ・線分（芯線）は消さずに残す（採寸の記録。不要なら選んで削除）。
-  let sweepMode = null;   // { pts:V3[], lineCount }
+  let sweepMode = null;   // { pts:V3[], lineCount, branches }
+  let sweepBrSize = null;   // 枝管の呼び径（被り付き）
   let sweepBox = null, sweepSize = null, sweepSch = null, sweepJoint = null;
   const SWEEP_TOL = 0.001;        // 端点一致 1mm（構築線交点の endTol と同じ）
   const SWEEP_ANG_TOL = 0.25;     // 90°/45°ちょうどとみなす角度差
@@ -8032,21 +8104,45 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 選んだ線分からルート（点列）を組み立てる。1本選択なら全線分から連結をたどる。
   function sweepTrace(seed) {
     const pool = seed.length >= 2 ? seed : annStore.filter(r => r.type === 'line' && !r.hidden);
+    // 端点どうしが合っている＝つながり。端点がもう1本の「途中」に乗っている＝枝（被り付き）。
+    const onMid = (p2, u) => {                       // p2 が線uの途中に乗っていれば その最寄り点、無ければ null
+      const v = u.b.clone().sub(u.a), L2 = v.lengthSq();
+      if (L2 < 1e-12) return null;
+      const t = p2.clone().sub(u.a).dot(v) / L2;
+      if (t < 0.001 || t > 0.999) return null;       // 端の近くは「つながり」側で見る
+      const q = u.a.clone().addScaledVector(v, t);
+      return q.distanceTo(p2) < SWEEP_TOL ? q : null;
+    };
+    const touches = (r, u) =>
+      u.a.distanceTo(r.a) < SWEEP_TOL || u.a.distanceTo(r.b) < SWEEP_TOL ||
+      u.b.distanceTo(r.a) < SWEEP_TOL || u.b.distanceTo(r.b) < SWEEP_TOL ||
+      !!onMid(r.a, u) || !!onMid(r.b, u) || !!onMid(u.a, r) || !!onMid(u.b, r);
     const used = new Set([seed[0]]);
     let grew = true;
     while (grew) {
       grew = false;
       for (const r of pool) {
         if (used.has(r)) continue;
-        for (const u of used) {
-          if (u.a.distanceTo(r.a) < SWEEP_TOL || u.a.distanceTo(r.b) < SWEEP_TOL ||
-              u.b.distanceTo(r.a) < SWEEP_TOL || u.b.distanceTo(r.b) < SWEEP_TOL) { used.add(r); grew = true; break; }
-        }
+        for (const u of used) if (touches(r, u)) { used.add(r); grew = true; break; }
+        if (grew) break;
       }
     }
     if (seed.length >= 2) {
       const miss = seed.filter(r => !used.has(r));
       if (miss.length) return { err: `スイープ：選んだ線分がつながっていません（${miss.length}本が離れています。端点は1mm以内で合わせてください）` };
+    }
+    // 途中に取り付いている線＝枝（被り付き）として取り分ける。本管のたどりからは外す
+    const branches = [];
+    const midRecs = new Set();
+    for (const r of used) {
+      for (const u of used) {
+        if (u === r || midRecs.has(u)) continue;
+        const qa = onMid(r.a, u), qb = onMid(r.b, u);
+        if (!qa && !qb) continue;
+        branches.push({ at: (qa || qb).clone(), to: (qa ? r.b : r.a).clone(), rec: r });
+        midRecs.add(r);
+        break;
+      }
     }
     // 端点をノードにまとめ、枝分かれ・輪を検査してから端から順にたどる
     const nodes = [];
@@ -8056,12 +8152,32 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       nodes.push(n); return n;
     };
     for (const r of used) {
+      if (midRecs.has(r)) continue;                                  // 枝は本管のたどりに入れない
       if (r.a.distanceTo(r.b) < SWEEP_TOL) continue;                 // ゼロ長は無視
       const na = nodeOf(r.a), nb = nodeOf(r.b);
       if (na === nb) continue;
       na.edges.push({ rec: r, to: nb }); nb.edges.push({ rec: r, to: na });
     }
-    if (nodes.some(n => n.edges.length > 2)) return { err: 'スイープ：ルートが枝分かれしています。1本の連続したルートにしてください' };
+    // 枝分かれ（被り付き）＝いちばん真っ直ぐ続く2辺を本管、残りを枝として取り分ける（2026-08-02 社長要望）。
+    // 旧＝枝分かれはエラーだったので、T字に描いても1本の連なりにしかできなかった。
+    for (const n of nodes) {
+      if (n.edges.length <= 2) continue;
+      const dirOf = (e) => e.to.p.clone().sub(n.p).normalize();
+      let best = null, bs = -2;
+      for (let i = 0; i < n.edges.length; i++) for (let j = i + 1; j < n.edges.length; j++) {
+        const d = dirOf(n.edges[i]).dot(dirOf(n.edges[j]));   // −1に近いほど真っ直ぐ（＝本管）
+        if (-d > bs) { bs = -d; best = [n.edges[i], n.edges[j]]; }
+      }
+      for (const e of n.edges) {
+        if (best && (e === best[0] || e === best[1])) continue;
+        branches.push({ at: n.p.clone(), to: e.to.p.clone(), rec: e.rec });   // 枝＝母管の芯から先端へ
+      }
+      n.edges = best ? best.slice() : n.edges.slice(0, 2);    // 本管だけ残してたどる
+      for (const b2 of branches) {                            // 枝側のノードからも本管の辺を外す
+        const nb = nodes.find(x => x.p.distanceTo(b2.to) < SWEEP_TOL);
+        if (nb) nb.edges = nb.edges.filter(x => x.rec !== b2.rec);
+      }
+    }
     const ends = nodes.filter(n => n.edges.length === 1);
     if (ends.length !== 2) return { err: 'スイープ：ルートが輪になっています。始点と終点のあるルートにしてください' };
     const pts = [ends[0].p.clone()];
@@ -8079,7 +8195,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const d2 = pts[i + 1].clone().sub(pts[i]).normalize();
       if (d1.angleTo(d2) * 180 / Math.PI < 0.5) pts.splice(i, 1);
     }
-    return { pts, count: used.size, lines: [...used] };
+    return { pts, count: used.size, lines: [...used], branches };
   }
   // 点列→部品割り付け（エルボの種類・切断角・パイプ長）。err か {elbows, pipes} を返す。
   function sweepPlan(pts, sizeA, joint) {
@@ -8230,13 +8346,44 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       o.userData.orient = 0; o.userData.roll = 0;
       registerPart(o);
     }
+    // 枝管＝被り付き。母管の芯から先端まで1本のパイプにし、根元を母管の内面に合わせて切る
+    // （2026-08-02 社長要望：エルボでつながず、2本に分かれて枝の端がカットされる形）。
+    const brs = sweepMode.branches || [];
+    for (const b of brs) {
+      const d = b.to.clone().sub(b.at);
+      const Lm = d.length();
+      if (Lm < 1e-4) continue;
+      d.normalize();
+      // 母管の向き＝分岐点で本管が走っている向き（点列のうち分岐点に最も近い区間）
+      let host = null, hd = 1e9;
+      for (let i = 0; i + 1 < sweepMode.pts.length; i++) {
+        const a2 = sweepMode.pts[i], b2 = sweepMode.pts[i + 1];
+        const v = b2.clone().sub(a2), L2 = v.lengthSq();
+        if (L2 < 1e-12) continue;
+        const t = Math.max(0, Math.min(1, b.at.clone().sub(a2).dot(v) / L2));
+        const dist = a2.clone().addScaledVector(v, t).distanceTo(b.at);
+        if (dist < hd) { hd = dist; host = v.clone().normalize(); }
+      }
+      if (!host) continue;
+      const q = new THREE.Quaternion().setFromUnitVectors(yAxis, d);
+      const axLocal = host.clone().applyQuaternion(q.clone().invert());   // 母管の軸を枝管ローカルへ
+      const hostInR = Math.max((FLG_BORE[sizeA] || 114) / 2 - pipeWall(sizeA, sch), 1);   // 母管の内半径(mm)
+      const bSize = (sweepBrSize && sweepBrSize.value) || sizeA;                          // 枝の呼び径
+      const o = makePipe({ sizeA: bSize, sch, length: Lm * 1000,
+                           branch: { hostR: hostInR, side: 'inner', axis: { x: axLocal.x, y: axLocal.y, z: axLocal.z } } });
+      computeConns(o);
+      o.quaternion.copy(q);
+      o.position.copy(b.at).add(b.to).multiplyScalar(0.5);
+      o.userData.orient = 0; o.userData.roll = 0;
+      registerPart(o);
+    }
     if (window.__annClearSel) window.__annClearSel();
     selectPart(null);
     refreshItemList();
     if (typeof updateForm === 'function') updateForm();
     if (typeof _idleSig !== 'undefined') _idleSig = null;
     if (window.__recordHistory) window.__recordHistory();
-    if (window.__toast) window.__toast(`スイープ：パイプ${plan.pipes.length}本・エルボ${plan.elbows.length}個を配置しました（${sizeA} ${sch}）`);
+    if (window.__toast) window.__toast(`スイープ：パイプ${plan.pipes.length + brs.length}本${brs.length ? `（うち枝管${brs.length}本＝被り付き）` : ''}・エルボ${plan.elbows.length}個を配置しました（${sizeA} ${sch}）`);
     endSweepMode();
   }
   function ensureSweepBox() {
@@ -8251,14 +8398,18 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       '<span style="font-weight:bold">スイープ</span><span id="swpInfo" style="opacity:.72"></span>' +
       `<select id="swpJoint" title="継手の形式（BW=突合せ溶接／SW=差込み溶接・50Aまで・90°/45°のみ）" style="${sel}"><option value="BW">BW</option><option value="SW">SW</option></select>` +
       `<select id="swpSize" title="呼び径" style="${sel}"></select>` +
+      `<select id="swpBrSize" title="枝管の呼び径（被り付き。母管より細いものを選ぶ）" style="${sel};display:none"></select>` +
       `<select id="swpSch" title="スケジュール" style="${sel}"></select>` +
       `<button id="swpGo" style="${btn};background:#2f6fd8;color:#fff">実行</button>` +
       `<button id="swpNo" style="${btn};background:#e2e7f0;color:#33405c">取消</button>`;
     document.body.appendChild(sweepBox);
     sweepSize = sweepBox.querySelector('#swpSize');
+    sweepBrSize = sweepBox.querySelector('#swpBrSize');
+    if (sweepBrSize) sweepBrSize.onchange = () => { sweepBrSize._touched = true; };   // 一度選んだら母管に追従させない
     sweepSch = sweepBox.querySelector('#swpSch');
     sweepJoint = sweepBox.querySelector('#swpJoint');
     for (const s of FLANGE_SIZES) if (ELBOW_90L[s] != null) sweepSize.add(new Option(s, s));
+    if (sweepBrSize) for (const s of FLANGE_SIZES) if (ELBOW_90L[s] != null) sweepBrSize.add(new Option(`枝 ${s}`, s));
     for (const s of PIPE_SCHEDULES) sweepSch.add(new Option(s, s));
     // リストの連動（2026-07-31 社長指摘）：SW選択中＝呼び径は50Aまで／65A以上選択中＝SWの選択肢を出さない
     sweepJoint.onchange = () => {
@@ -8303,6 +8454,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const rect = renderer.domElement.getBoundingClientRect();
     const ndc = modelGroup.localToWorld(c.clone()).project(activeCam());
     const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
+    if (sweepBrSize) {
+      const hasBr = !!(sweepMode && sweepMode.branches && sweepMode.branches.length);
+      sweepBrSize.style.display = hasBr ? '' : 'none';
+      if (hasBr && !sweepBrSize._touched) sweepBrSize.value = sweepSize.value;
+    }
     sweepBox.style.display = 'flex';
     sweepBox.style.left = Math.round(Math.min(Math.max(sx - 210, rect.left + 8), Math.max(rect.left + 8, rect.right - 430))) + 'px';
     sweepBox.style.top = Math.round(Math.min(Math.max(sy - 52, rect.top + 8), rect.bottom - 46)) + 'px';
@@ -8328,7 +8484,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const tr = sweepTrace(seed);
     if (tr.err) { if (window.__toast) window.__toast(tr.err); return; }
     if (tr.pts.length < 2) { if (window.__toast) window.__toast('スイープ：ルートの長さがありません'); return; }
-    sweepMode = { pts: tr.pts, lineCount: tr.count };
+    sweepMode = { pts: tr.pts, lineCount: tr.count, branches: tr.branches || [] };
     // たどったルート全体を選択表示＝どこまで配管化されるかが青く見える（2026-07-29 社長要望）。
     // selectLineは冒頭でselectPart(null)＝選択クリアが走るため、1本目だけ通して残りは直接足す
     const rl = tr.lines || [];
@@ -9382,7 +9538,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       pipes.forEach((p, i) => {
         const c = pipeCutInfo(p);
         lines.push([i + 1, p.userData.pipe.sizeA, p.userData.pipe.sch, Math.round(p.userData.pipe.length * 10) / 10,
-                    lbl(c.ends[0]), lbl(c.ends[1]), c.cut, c.gap, c.sop].map(esc).join(','));
+                    lbl(c.ends[0]), c.branch ? '被り付き(母管内面)' : (c.slant ? '斜め切り' : lbl(c.ends[1])),
+                    (c.branch || c.slant) ? `${c.cut}〜${c.cutMax}` : c.cut, c.gap, c.sop].map(esc).join(','));
       });
     }
     // ---- 溶接一覧（図面に溶接番号 W1,W2… が入っている時だけ）----
@@ -14342,6 +14499,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (u.partType === 'pipe' && u.pipe) {
         sec('パイプ');
         edRow('長さ', { get: () => Math.round(u.pipe.length), set: v => { if (v >= 1) rebuildPipe(p, v, 'face'); updateForm(); }, unit: 'mm', step: 1 });
+        // 端末の斜め角度切り（0＝直角。±60°まで。切寸は一覧・CSVに最短〜最長で出る）
+        edRow('端面角度A(背)', { get: () => Math.round((u.pipe.cutAngBack || 0) * 10) / 10,
+          set: v => { u.pipe.cutAngBack = Math.max(-60, Math.min(60, v)); rebuildPipe(p, u.pipe.length, 'face'); updateForm(); }, unit: '°', step: 5 });
+        edRow('端面角度B(面)', { get: () => Math.round((u.pipe.cutAngFace || 0) * 10) / 10,
+          set: v => { u.pipe.cutAngFace = Math.max(-60, Math.min(60, v)); rebuildPipe(p, u.pipe.length, 'face'); updateForm(); }, unit: '°', step: 5 });
       }
       if (u.partType === 'gasket' && u.gasket) {
         sec('ガスケット');
