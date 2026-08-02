@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-G';
+const APP_VER = 'v0802-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8438,6 +8438,18 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (!targets.length) { resetView(); return; }
     const box = new THREE.Box3();
     for (const p of targets) box.expandByObject(p);
+    // 寸法・引出し・文字も画面に入れる（選択ズームのときは選択物だけ）。
+    // ＝自動採寸の値がホーム＋範囲ズームで画面の外に出ない（2026-08-02 社長指示）。
+    if (!selectedParts.size) {
+      for (const r of annStore) {
+        if (r.hidden || !r.obj || !r.obj.visible) continue;
+        r.obj.traverse(n => {
+          if (n.isSprite || !n.geometry) return;               // 値の札は画面サイズ固定＝箱に入れると尺度が暴れる
+          if (!n.geometry.boundingBox) n.geometry.computeBoundingBox();
+          if (n.geometry.boundingBox) box.union(n.geometry.boundingBox.clone().applyMatrix4(n.matrixWorld));
+        });
+      }
+    }
     if (box.isEmpty()) { resetView(); return; }
     const c = box.getCenter(new V3());
     const r = Math.max(box.getBoundingSphere(new THREE.Sphere()).radius, 0.05);
@@ -11480,22 +11492,85 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 同じ値のEL表記は図面全体で1つ（2026-07-31 社長指示）＝既存・今回の下書きの両方と重複させない
     const elTaken = (txt) => oldLeads.some(r => String(r.style.dimText || '') === txt);
     const items = [];
-    const pushDim = (a, b) => {
+    // ---- 逃げ（寸法線・引出しを外へ出す向き）＝ホーム＋範囲ズームの視点で見やすい向きを選ぶ（2026-08-02 社長指示） ----
+    // ホームの視線の向きは範囲ズームでも変わらない＝いつも同じ見え方で下書きできる。
+    // 選び方＝①画面でつぶれない向き（視線と平行な逃げは点になって読めない）②配管の外側へ出る向き。
+    const camC = HOME.pos.clone().sub(HOME.target).normalize();     // 注視点→カメラ（ホーム視点の向き）
+    const camX = new V3(0, 1, 0).cross(camC); if (camX.lengthSq() < 1e-9) camX.set(1, 0, 0); camX.normalize();
+    const camY = camC.clone().cross(camX).normalize();
+    const bMin = new V3(1e9, 1e9, 1e9), bMax = new V3(-1e9, -1e9, -1e9);
+    for (const p of placedParts) {
+      if (p.userData.hidden || !p.userData.placed) continue;
+      const pts = [p.position].concat(connsOf(p).map(l => connModelPos(p, l)));
+      for (const q of pts) { bMin.min(q); bMax.max(q); }
+    }
+    const bC = bMin.x > bMax.x ? new V3() : bMin.clone().add(bMax).multiplyScalar(0.5);
+    const bH = bMin.x > bMax.x ? new V3(1, 1, 1) : bMax.clone().sub(bMin).multiplyScalar(0.5);
+    const AXES6 = [new V3(1, 0, 0), new V3(-1, 0, 0), new V3(0, 1, 0), new V3(0, -1, 0), new V3(0, 0, 1), new V3(0, 0, -1)];
+    const bestDirAmong = (cands, pt) => {
+      let best = null, bs = -1e9;
+      for (const n of cands) {
+        const scr = Math.hypot(n.dot(camX), n.dot(camY));           // 画面での伸び（1=正面・0=視線と平行でつぶれる）
+        const half = Math.abs(n.x) * bH.x + Math.abs(n.y) * bH.y + Math.abs(n.z) * bH.z;
+        const out = half > 1e-6 ? Math.max(-1, Math.min(1, n.dot(pt.clone().sub(bC)) / half)) : 0;
+        const s = scr + 0.6 * out;
+        if (s > bs) { bs = s; best = n; }
+      }
+      return best || new V3(0, 1, 0);
+    };
+    const pushDim = (a, b, lvl) => {
       if (a.distanceTo(b) < 0.02 || dimExists(a, b)) return;
       if (items.some(it => it.st.dimKind !== 'leader' && ((near(it.a, a) && near(it.b, b)) || (near(it.a, b) && near(it.b, a))))) return;
       const d = b.clone().sub(a).normalize();
       const axis = Math.max(Math.abs(d.x), Math.abs(d.y), Math.abs(d.z)) > 0.9999;
       let dir;
-      if (axis) dir = Math.abs(d.x) > 0.5 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };   // X向き＝Zへ逃がす・Y/Z向き＝Xへ
-      else { const u2 = new V3(-d.z, 0, d.x); if (u2.lengthSq() < 1e-9) u2.set(1, 0, 0); u2.normalize(); dir = { x: u2.x, y: u2.y, z: u2.z }; }
-      const st = Object.assign({}, styleFor('dim'), { dimKind: axis ? 'linear' : 'parallel', dimOff: 0.5, dimDir: dir });   // 逃げは基本500以上（2026-07-31 社長指示）
+      if (axis) {
+        const n = bestDirAmong(AXES6.filter(n2 => Math.abs(n2.dot(d)) < 0.5), a.clone().add(b).multiplyScalar(0.5));
+        dir = { x: n.x, y: n.y, z: n.z };
+      } else { const u2 = new V3(-d.z, 0, d.x); if (u2.lengthSq() < 1e-9) u2.set(1, 0, 0); u2.normalize(); dir = { x: u2.x, y: u2.y, z: u2.z }; }
+      // 逃げは基本500以上（2026-07-31 社長指示）。区間の寸法は手前・総長は一段外（重ならない・読み違えない）
+      const st = Object.assign({}, styleFor('dim'), { dimKind: axis ? 'linear' : 'parallel', dimOff: (lvl || 1) >= 2 ? 0.9 : 0.5, dimDir: dir });
       if (axis) Object.assign(st, linearFixFields(a, b, dir));
       items.push({ a: a.clone(), b: b.clone(), st });
+    };
+    // ---- ランの基準点（ステーション）＝寸法の起点・終点になる面 ----
+    // ラン両端のキーポイント（エルボの工作点・ティーの芯・母管中心・管端）に加えて、
+    // **フランジはフェイス面**・バルブ／仮管／ガスケット／フレキ／サイドグラス／レデューサは両端の面を基準にする。
+    // 隣り合う基準どうしで寸法を入れる＝端から積み上げず、フランジ面を基準に測れる（2026-08-02 社長指示）。
+    const STATION_ENDS = ['valve', 'gasket', 'spool', 'flex', 'sight', 'reducer'];
+    const stationsOf = (rk) => {
+      const A = rk.KA.pt, B = rk.KB.pt;
+      const d = B.clone().sub(A);
+      if (d.lengthSq() < 1e-6) return [];
+      d.normalize();
+      const tOf = (p) => p.clone().sub(A).dot(d);
+      const tB = tOf(B);
+      const list = [{ t: 0, pt: A.clone() }, { t: tB, pt: B.clone() }];
+      for (const q of rk.r.parts) {
+        const u = q.userData;
+        const ls = u.partType === 'flange' ? [u.faceLocal]
+                 : (STATION_ENDS.includes(u.partType) ? [u.backLocal, u.faceLocal] : null);
+        if (!ls) continue;
+        for (const l of ls) {
+          if (!l) continue;
+          const p = connModelPos(q, l), t = tOf(p);
+          if (t > 0.006 && t < tB - 0.006) list.push({ t, pt: p.clone() });
+        }
+      }
+      list.sort((x, y) => x.t - y.t);
+      const out = [];
+      for (const s of list) if (!out.length || s.t - out[out.length - 1].t > 0.006) out.push(s);   // 6mm以内は同じ基準（ガスケット厚など）
+      return out;
     };
     const runs = autoDimRuns();
     const runsK = runs.map(r => ({ r, KA: runEndKeyPoint(r.A), KB: runEndKeyPoint(r.B) }));
     for (const rk of runsK) {
-      pushDim(rk.KA.pt, rk.KB.pt);                                        // 芯々（両端が工作点）／端面（端がフランジ面・管端）
+      // 区間ごとの寸法＝基準（工作点・フランジのフェイス面・バルブ/仮管/ガスケットの面）の隣どうし。
+      // これでバルブ・仮管・ガスケットにも必ず寸法が付き、フランジのある所はフェイス面が基準になる。
+      const sts = stationsOf(rk);
+      for (let i = 0; i + 1 < sts.length; i++) pushDim(sts[i].pt, sts[i + 1].pt, 1);
+      pushDim(rk.KA.pt, rk.KB.pt, sts.length > 2 ? 2 : 1);                // 芯々の総長（区間があるときは一段外へ）
+      const HORZ4 = AXES6.filter(n => Math.abs(n.y) < 0.5);
       const pushEl = (pt, txt, perp) => {
         if (elTaken(txt) || items.some(it => it.st.dimKind === 'leader' && it.st.dimText === txt)) return;
         items.push({ a: pt.clone(), b: pt.clone().addScaledVector(perp, 0.5), st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: txt }) });
@@ -11503,23 +11578,13 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝COP EL（水平に500逃がす・同じ値は1つだけ）
         const mid = rk.KA.pt.clone().add(rk.KB.pt).multiplyScalar(0.5);
         const elMm = Math.round(mid.y * 1000);
-        pushEl(mid, `COP EL${elMm >= 0 ? '+' : ''}${elMm}`, new V3(-rk.r.dir.z, 0, rk.r.dir.x).normalize());
+        pushEl(mid, `COP EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4.filter(n => Math.abs(n.dot(rk.r.dir)) < 0.5), mid));
       } else if (Math.abs(rk.r.dir.y) > 0.98) {                           // 立面ラン＝端面（フランジ面・管端）にEL（2026-07-31 社長指示）
         for (const K of [rk.KA, rk.KB]) {
           if (K.kind !== 'end') continue;
           const elMm = Math.round(K.pt.y * 1000);
-          pushEl(K.pt, `EL${elMm >= 0 ? '+' : ''}${elMm}`, new V3(1, 0, 0));
+          pushEl(K.pt, `EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4, K.pt));
         }
-      }
-      // バルブ・ガスケットの位置＝近い側の基準（工作点/端面）→そちらへ向いた面まで（2026-07-31 社長要望）
-      for (const q of rk.r.parts) {
-        const u = q.userData;
-        if (u.partType !== 'valve' && u.partType !== 'gasket') continue;
-        const f = connModelPos(q, u.faceLocal), bk = connModelPos(q, u.backLocal);
-        const c = f.clone().add(bk).multiplyScalar(0.5);
-        const K = c.distanceTo(rk.KA.pt) <= c.distanceTo(rk.KB.pt) ? rk.KA.pt : rk.KB.pt;
-        const nearEnd = f.distanceTo(K) <= bk.distanceTo(K) ? f : bk;
-        pushDim(K, nearEnd);
       }
     }
     for (const p of placedParts) {                                        // ボス＝近い側の基準（工作点/端面）→取り付け位置
