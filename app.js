@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-D';
+const APP_VER = 'v0802-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -141,7 +141,8 @@ let grid = null;
 // 格子＝中心から半径4.5mまでははっきり、そこから10mへ向けて透けて消える「宙に浮いた舞台」。
 // 端を切り落とさず溶かすので、四角い板ではなく空間に浮いて見える（2026-08-01 社長指示）。
 // 実装＝線材質のシェーダに中心距離のフェードを1行差し込む（線のシャープさはGridHelperのまま）。
-const GRID_FADE_IN = 4.5, GRID_FADE_OUT = 10.0;
+// 消え際は手前寄り＝遠くの線が遠近で圧縮されて灰色のモヤになるのを防ぐ（2026-08-02 社長「画像のような白さ」）
+const GRID_FADE_IN = 3.5, GRID_FADE_OUT = 6.5;
 function buildGrid(c1, c2) {
   if (grid) { modelGroup.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
   grid = new THREE.GridHelper(20, 40, c1, c2);
