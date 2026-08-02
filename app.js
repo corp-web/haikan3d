@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-S';
+const APP_VER = 'v0802-T';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1362,7 +1362,31 @@ function makePipe(opts) {
   const angF = Math.max(-60, Math.min(60, Number(o.cutAngFace) || 0));   // フェイス側(+Y)
   const angB = Math.max(-60, Math.min(60, Number(o.cutAngBack) || 0));   // 背面側(-Y)
   // 断面(r,y)を一周＝中空筒。両端に溶接開先（ルートフェイス＋面取り。斜めに切る側・被り付き側は開先なし）
-  const prof = weldHollowProfile(outR, inR, -L / 2, L / 2, !angF, !br && !angB);
+  let prof = weldHollowProfile(outR, inR, -L / 2, L / 2, !angF, !br && !angB);
+  // 貫通穴を開ける管は、穴の周りだけ壁を細かく割っておく。
+  // 壁は既定だと「長さ方向に1枚」なので、そのままだと面を抜いても穴にならない（2026-08-03）。
+  if (o.bores && o.bores.length) {
+    const ys = [];
+    for (const bo of o.bores) {
+      const R = (bo.r || 0) / 1000, at = (bo.at || 0) / 1000;
+      if (R <= 0) continue;
+      const span = R * 1.7, n = 28;
+      for (let i = 0; i <= n; i++) ys.push(at - span + (2 * span) * i / n);
+    }
+    if (ys.length) {
+      const out = [];
+      for (let i = 0; i < prof.length; i++) {
+        out.push(prof[i]);
+        const a2 = prof[i], b2 = prof[i + 1];
+        if (!b2 || Math.abs(a2.x - b2.x) > 1e-9) continue;      // 半径が変わる所＝壁ではない
+        const lo = Math.min(a2.y, b2.y), hi = Math.max(a2.y, b2.y);
+        const mids = ys.filter(y => y > lo + 1e-9 && y < hi - 1e-9)
+                       .sort((p2, q2) => (a2.y < b2.y ? p2 - q2 : q2 - p2));
+        for (const y of mids) out.push(new THREE.Vector2(a2.x, y));
+      }
+      prof = out;
+    }
+  }
   let geo = new THREE.LatheGeometry(prof, 64);
   // 斜め切り＝端の輪をそのまま傾ける（＝軸に対して斜めの平らな切り口。管を斜めに切ったのと同じ）。
   // 芯の長さ length は変えず、外周が ±r·tanθ だけ伸び縮みする。
@@ -1400,22 +1424,40 @@ function makePipe(opts) {
       pos.needsUpdate = true;
     }
   }
-  // 母管側の貫通穴＝重なった所を演算で抜く（2026-08-03 社長指示）。
+  // 母管側の貫通穴＝枝が通る所の面を取り除く（2026-08-03 社長指示）。
   // o.bores = [{ r:枝の外半径(mm), ax:{x,y,z} 枝の向き（この管のローカル系）, at: 芯上の位置y(mm) }]
+  // CSG（ブーリアン演算）だと母管が壊れた形になり、切った枝と一つの塊になってしまった（社長report）。
+  // 「枝の円筒の中に入る三角形を捨てる」方式に変更＝壊れない・余分な面も残らない。
   if (o.bores && o.bores.length) {
-    for (const bo of o.bores) {
-      const rr = (bo.r || 0) / 1000;
-      if (rr <= 0) continue;
-      const bax = new THREE.Vector3(bo.ax ? bo.ax.x : 1, bo.ax ? bo.ax.y : 0, bo.ax ? bo.ax.z : 0);
-      if (bax.lengthSq() < 1e-9) continue;
-      bax.normalize();
-      const len = outR * 1.02;                       // 芯から外面の少し先まで＝近い側の壁だけ抜く
-      const cyl = new THREE.CylinderGeometry(rr, rr, len, 32, 1, false);
-      cyl.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(
-        new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), bax)));
-      const c = bax.clone().multiplyScalar(len / 2);
-      cyl.translate(c.x, c.y + (bo.at || 0) / 1000, c.z);
-      try { geo = csgSubtractGeo(geo, cyl); } catch (e) {}
+    const bs = o.bores.map(bo => {
+      const ax = new THREE.Vector3(bo.ax ? bo.ax.x : 1, bo.ax ? bo.ax.y : 0, bo.ax ? bo.ax.z : 0);
+      if (ax.lengthSq() < 1e-9) ax.set(1, 0, 0);
+      return { r: (bo.r || 0) / 1000, ax: ax.normalize(), at: (bo.at || 0) / 1000 };
+    }).filter(bo => bo.r > 0);
+    if (bs.length) {
+      const g2 = geo.index ? geo.toNonIndexed() : geo;
+      const pos = g2.attributes.position;
+      const out = [];
+      const v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i += 3) {
+        const cx = (pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3;
+        const cy = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
+        const cz = (pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3;
+        let hole = false;
+        for (const bo of bs) {
+          v.set(cx, cy - bo.at, cz);
+          const along = v.dot(bo.ax);
+          if (along < -0.001) continue;                     // 枝が伸びる側だけ抜く（反対の壁は残す）
+          if (v.addScaledVector(bo.ax, -along).length() < bo.r) { hole = true; break; }
+        }
+        if (hole) continue;
+        for (let k = 0; k < 3; k++) out.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+      }
+      const ng = new THREE.BufferGeometry();
+      ng.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+      if (g2 !== geo) g2.dispose();
+      geo.dispose();
+      geo = ng;
     }
   }
   geo.computeVertexNormals();
