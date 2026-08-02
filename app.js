@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-P';
+const APP_VER = 'v0802-Q';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1437,8 +1437,7 @@ function makePipe(opts) {
 function applyBranchIfOnPipe(br) {
   const u = br.userData;
   if (!br || u.partType !== 'pipe' || !u.pipe || u.pipe.branch) return false;
-  const aP = connModelPos(br, u.backLocal), bP = connModelPos(br, u.faceLocal);
-  const d = bP.clone().sub(aP); if (d.lengthSq() < 1e-9) return false; d.normalize();
+  const ends = [connModelPos(br, u.backLocal), connModelPos(br, u.faceLocal)];
   for (const host of placedParts) {
     const hu = host.userData;
     if (host === br || hu.partType !== 'pipe' || !hu.pipe || !hu.placed || hu.hidden) continue;
@@ -1446,28 +1445,43 @@ function applyBranchIfOnPipe(br) {
     const hd = hb.clone().sub(ha); const hL = hd.length();
     if (hL < 1e-6) continue;
     hd.multiplyScalar(1 / hL);
-    if (Math.abs(hd.dot(d)) > 0.985) continue;                       // ほぼ同軸＝直列やジャケット管
-    const t = aP.clone().sub(ha).dot(hd);
-    if (t < 0.002 || t > hL - 0.002) continue;                       // 母管の端＝被り付きではない
-    const axisPt = ha.clone().addScaledVector(hd, t);
     const hOut = (FLG_BORE[hu.pipe.sizeA] || 114) / 2 / 1000;
-    if (aP.distanceTo(axisPt) > hOut * 1.05) continue;               // 母管の外面より外＝乗っていない
-    // 枝＝母管の芯から先端まで。先端は動かさない
-    const newL = axisPt.distanceTo(bP) * 1000;
-    if (newL < 1) continue;
-    const q = br.quaternion.clone().invert();
-    const axLocal = hd.clone().applyQuaternion(q);
-    u.pipe.branch = { hostR: Math.max((FLG_BORE[hu.pipe.sizeA] || 114) / 2 - pipeWall(hu.pipe.sizeA, hu.pipe.sch), 1),
-                      side: 'inner', axis: { x: axLocal.x, y: axLocal.y, z: axLocal.z } };
-    rebuildPipe(br, newL, 'face');
-    // 母管に貫通穴を開ける（枝の外径・枝の向き・母管ローカルの位置）
-    const hq = host.quaternion.clone().invert();
-    const bLocalDir = d.clone().applyQuaternion(hq);
-    const atY = axisPt.clone().sub(host.position).applyQuaternion(hq).y * 1000;
-    hu.pipe.bores = (hu.pipe.bores || []).concat([{ r: (FLG_BORE[u.pipe.sizeA] || 34) / 2,
-                                                    ax: { x: bLocalDir.x, y: bLocalDir.y, z: bLocalDir.z }, at: atY }]);
-    rebuildPipe(host, hu.pipe.length, 'face');
-    return true;
+    for (let k = 0; k < 2; k++) {
+      const root = ends[k], far = ends[1 - k];                        // 母管に乗っている側／反対の先端
+      const d = far.clone().sub(root);
+      if (d.lengthSq() < 1e-9) continue;
+      d.normalize();
+      if (Math.abs(hd.dot(d)) > 0.985) continue;                      // ほぼ同軸＝直列やジャケット管
+      const t = root.clone().sub(ha).dot(hd);
+      if (t < 0.002 || t > hL - 0.002) continue;                      // 母管の端＝被り付きではない
+      const axisPt = ha.clone().addScaledVector(hd, t);
+      if (root.distanceTo(axisPt) > hOut * 1.2) continue;             // 母管の外面より外＝乗っていない
+      const dir = far.clone().sub(axisPt);                            // 母管の芯→先端
+      const newL = dir.length();
+      if (newL < 0.001) continue;
+      dir.normalize();
+      // 枝＝母管の芯から先端までの1本にして、根元を母管の内面で鞍形カット（先端は動かさない）
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      const axLocal = hd.clone().applyQuaternion(q.clone().invert());
+      u.pipe.length = newL * 1000;
+      u.pipe.branch = { hostR: Math.max((FLG_BORE[hu.pipe.sizeA] || 114) / 2 - pipeWall(hu.pipe.sizeA, hu.pipe.sch), 1),
+                        side: 'inner', axis: { x: axLocal.x, y: axLocal.y, z: axLocal.z } };
+      while (br.children.length) { const c = br.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
+      const np = makePipe(u.pipe); while (np.children.length) br.add(np.children.pop());
+      const half = newL / 2;
+      u.faceLocal = new THREE.Vector3(0, half, 0);
+      u.backLocal = new THREE.Vector3(0, -half, 0);
+      br.quaternion.copy(q);
+      br.position.copy(axisPt).addScaledVector(dir, half);            // 背面端＝母管の芯
+      // 母管に貫通穴を開ける（枝の外径・枝の向き・母管ローカルの位置）
+      const hq = host.quaternion.clone().invert();
+      const bLocalDir = dir.clone().applyQuaternion(hq);
+      const atY = axisPt.clone().sub(host.position).applyQuaternion(hq).y * 1000;
+      hu.pipe.bores = (hu.pipe.bores || []).concat([{ r: (FLG_BORE[u.pipe.sizeA] || 34) / 2,
+                                                      ax: { x: bLocalDir.x, y: bLocalDir.y, z: bLocalDir.z }, at: atY }]);
+      rebuildPipe(host, hu.pipe.length, 'face');
+      return true;
+    }
   }
   return false;
 }
@@ -5132,6 +5146,9 @@ function dropMovingPart() {           // ドラッグを離して（またはク
   movingPart.userData.orient = movingOrient;
   movingPart.userData.roll = movingRoll;
   autoInsertGasket(movingPart);   // 移動でフランジ面どうしが合った時もガスケットを挟む
+  // 動かした先が母管の上なら被り付きにする（2026-08-03 社長指示：置いた時だけでなく動かした時も）
+  if (typeof applyBranchIfOnPipe === 'function' && applyBranchIfOnPipe(movingPart) && window.__toast)
+    window.__toast('被り付きにしました（母管の内面でカット・母管は貫通）');
   movingPart = null; moveOrig = null; moveGroup = []; movingByDrag = false; moveHoldTap = false;
   moveStartPt = null; moveStarted = false; moveGrabOff = { x: 0, y: 0 };
   const wasMoveCmd = moveMode;
@@ -7086,6 +7103,8 @@ renderer.domElement.addEventListener('pointerup', e => {
     const wasHover = dirDrag.hover;
     dirDrag = null; clearMarkers(); _idleSig = null; updateForm();
     autoInsertGasket(moved);   // 確定した位置でフランジ面どうしならガスケットを挟む
+    if (typeof applyBranchIfOnPipe === 'function' && applyBranchIfOnPipe(moved) && window.__toast)
+      window.__toast('被り付きにしました（母管の内面でカット・母管は貫通）');   // 直線移動で母管の上へ動かした時
     if (wasHover) {            // 起点を決めて行う直線移動＝自由移動と同じ後始末（2026-07-28 社長指摘）
       finishMoveCommand();     // 移動コマンドを終了（リボンの光を消す）
       selectPart(null);        // 選択も解除
