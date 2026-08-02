@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-E';
+const APP_VER = 'v0802-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -41,9 +41,17 @@ scene.background = new THREE.Color(0xffffff);
 scene.fog = null;
 document.body.classList.add('light');   // UIは明るい配色で固定（旧ホワイトモードのUIスタイルを常時適用）
 
+// ---- 既定EL＝アイテムの配置・線の描き始めの基準の高さ（mm） ----
+// スナップが無いときの水平面がこの高さになる。設定⚙「既定EL」で変更・記憶
+// （2026-08-02 社長指示。配管はGLより上を走るのが普通なので既定+1000）。
+// ホーム視点もこの高さを見る＝描き始めがいつも画面の中心に来る。
+let defaultEl = 1000;
+try { const _dv = parseFloat(localStorage.getItem('p3d_default_el')); if (isFinite(_dv)) defaultEl = _dv; } catch (e) {}
+const defaultElY = () => defaultEl / 1000;   // mm→m（3D空間の単位）
+
 // ---- カメラ ----
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
-const HOME = { pos: new THREE.Vector3(0.9, 0.75, 1.2), target: new THREE.Vector3(0, 0, 0) };
+const HOME = { pos: new THREE.Vector3(0.9, 0.75 + defaultElY(), 1.2), target: new THREE.Vector3(0, defaultElY(), 0) };
 camera.position.copy(HOME.pos);
 
 // ---- 視点操作 (OrbitControls) ----
@@ -142,20 +150,31 @@ let grid = null;
 // 端を切り落とさず溶かすので、四角い板ではなく空間に浮いて見える（2026-08-01 社長指示）。
 // 実装＝線材質のシェーダに中心距離のフェードを1行差し込む（線のシャープさはGridHelperのまま）。
 // 消え際は手前寄り＝遠くの線が遠近で圧縮されて灰色のモヤになるのを防ぐ（2026-08-02 社長「画像のような白さ」）
-const GRID_FADE_IN = 3.5, GRID_FADE_OUT = 6.5;
+// フェードの等高線は円でなく正方形（チェビシェフ距離）＝「四角いステージ」に見える（2026-08-02 社長指示）
+const GRID_FADE_IN = 5.0, GRID_FADE_OUT = 5.5;
 function buildGrid(c1, c2) {
-  if (grid) { modelGroup.remove(grid); grid.geometry.dispose(); grid.material.dispose(); }
-  grid = new THREE.GridHelper(20, 40, c1, c2);
-  grid.material.opacity = 0.9; grid.material.transparent = true;
-  grid.material.onBeforeCompile = (sh) => {
+  if (grid) { modelGroup.remove(grid); grid.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); }
+  grid = new THREE.Group();
+  const gh = new THREE.GridHelper(20, 40, c1, c2);
+  gh.material.opacity = 0.9; gh.material.transparent = true;
+  gh.material.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vXZ;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvXZ = position.xz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vXZ;')
       .replace('#include <color_fragment>',
-        `#include <color_fragment>\n\tdiffuseColor.a *= (1.0 - smoothstep(${GRID_FADE_IN.toFixed(1)}, ${GRID_FADE_OUT.toFixed(1)}, length(vXZ)));`);
+        `#include <color_fragment>\n\tdiffuseColor.a *= (1.0 - smoothstep(${GRID_FADE_IN.toFixed(1)}, ${GRID_FADE_OUT.toFixed(1)}, max(abs(vXZ.x), abs(vXZ.y))));`);
   };
+  grid.add(gh);
+  // 外枠＝右上の格子舞台と同じ「四角いステージ」の縁。フェードの終端に置く
+  const h = GRID_FADE_OUT;
+  const rim = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-h, 0, -h), new THREE.Vector3(h, 0, -h),
+      new THREE.Vector3(h, 0, h), new THREE.Vector3(-h, 0, h)]),
+    new THREE.LineBasicMaterial({ color: c1, transparent: true, opacity: 0.6 }));
+  grid.add(rim);
   modelGroup.add(grid);
 }
 buildGrid(0x6f7883, 0x99a1ac);   // グリッド＝地面と同系の青みグレー（濃線/淡線）。v0802で一段濃く（艶の床で薄まった対策）
@@ -4008,7 +4027,8 @@ function resolveSnap(clientX, clientY, exclude, noNear) {
 }
 // 配置/移動の着地点を決める：まず機点スナップ、無ければ高さ planeY の水平面。
 // planeY を渡すと「その高さの平面」上で平行移動できる（再移動で高さが床に戻らない）。
-function resolveTarget(clientX, clientY, exclude, planeY = 0, noNear = false) {
+// planeY 省略時＝既定EL（設定⚙・2026-08-02 社長指示）。
+function resolveTarget(clientX, clientY, exclude, planeY = defaultElY(), noNear = false) {
   const snap = resolveSnap(clientX, clientY, exclude, noNear);
   if (snap) return { point: snap, snapped: true };
   const rect = renderer.domElement.getBoundingClientRect();
@@ -4017,7 +4037,12 @@ function resolveTarget(clientX, clientY, exclude, planeY = 0, noNear = false) {
   placeRay.setFromCamera(placeNdc, activeCam());
   const hit = new THREE.Vector3();
   const plane = planeY === 0 ? floorPlane : new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
-  if (!placeRay.ray.intersectPlane(plane, hit)) return null;
+  if (!placeRay.ray.intersectPlane(plane, hit)) {
+    // 既定ELの面がカメラより上にあると見下ろしの光線は当たらない。
+    // その時は床でXZを拾い、高さだけ planeY へ持ち上げる＝クリックした場所の真上（2026-08-02 既定EL導入時の対策）
+    if (!placeRay.ray.intersectPlane(floorPlane, hit)) return null;
+    hit.y = planeY;
+  }
   modelGroup.worldToLocal(hit);
   return { point: hit, snapped: false };
 }
@@ -10811,7 +10836,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   function pickFirstPoint(clientX, clientY) {
     const snap = drawSnapPoint(clientX, clientY);
     if (snap) return { p: snap, snapped: true };
-    const t = resolveTarget(clientX, clientY, null, 0, true);   // noNear＝近接の再判定はしない（drawSnapPoint で済み）
+    const t = resolveTarget(clientX, clientY, null, defaultElY(), true);   // noNear＝近接の再判定はしない（drawSnapPoint で済み）。高さ＝既定EL
     return { p: t ? t.point.clone() : null, snapped: false };
   }
   // 2点目：スナップ最優先 → Shiftでvert(Y方向) → 水平面+角度スナップ
@@ -14153,6 +14178,19 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (cbB) cbB.addEventListener('change', () => { showBoltPts = cbB.checked; _idleSig = null; try { localStorage.setItem('p3d_show_boltpt', showBoltPts ? '1' : '0'); } catch (e) {} });
     if (cbQ) cbQ.addEventListener('change', () => { showQuadPts = cbQ.checked; _idleSig = null; try { localStorage.setItem('p3d_show_quad', showQuadPts ? '1' : '0'); } catch (e) {} });
     if (cbAG) cbAG.addEventListener('change', () => { autoGasket = cbAG.checked; try { localStorage.setItem('p3d_auto_gasket', autoGasket ? '1' : '0'); } catch (e) {} });
+    // ---- 既定EL（配置・描き始めの高さ。2026-08-02 社長指示・既定+1000mm） ----
+    { const elIn = document.getElementById('setDefEl');
+      if (elIn) {
+        elIn.value = defaultEl;
+        elIn.addEventListener('change', () => {
+          const v = parseFloat(elIn.value);
+          if (isFinite(v)) { defaultEl = v; try { localStorage.setItem('p3d_default_el', String(v)); } catch (e) {} }
+          elIn.value = defaultEl;
+          HOME.pos.y = 0.75 + defaultElY(); HOME.target.y = defaultElY();   // ホーム視点も新しい高さを見る
+        });
+        ['pointerdown', 'click'].forEach(ev => elIn.addEventListener(ev, e => e.stopPropagation()));
+      }
+    }
     // ---- 印刷に載せる欄（既定＝すべて載せる。2026-07-31 社長指示で画面の折りたたみと分離） ----
     for (const [id, key] of [['setPrintIl', 'p3d_print_il'], ['setPrintSpec', 'p3d_print_spec'], ['setPrintInfo', 'p3d_print_info']]) {
       const cb = document.getElementById(id);
