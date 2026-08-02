@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-L';
+const APP_VER = 'v0802-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -11620,7 +11620,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     autoGenClear();
     const made = [];
     for (const it of keep) { addAnnotation('dim', it.a.clone(), it.b.clone(), Object.assign({}, it.st)); made.push(annStore[annStore.length - 1]); }
-    for (const r of made) if (r.style && ['linear', 'parallel'].includes(r.style.dimKind)) autoShiftDimText(r);   // 値の重なりは自動で1段ずつ逃がす
+    // 値は寸法線（矢印の付いた補助線）から離さない＝自動のずらしはしない（2026-08-02 社長指示）
     if (window.__toast) window.__toast(`${made.length}件を記入しました`);
   }
   window.addEventListener('pointerdown', e => {           // 下書きのタップ＝除外/復帰
@@ -11692,8 +11692,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const n = bestDirAmong(AXES6.filter(n2 => Math.abs(n2.dot(d)) < 0.5), a.clone().add(b).multiplyScalar(0.5));
         dir = { x: n.x, y: n.y, z: n.z };
       } else { const u2 = new V3(-d.z, 0, d.x); if (u2.lengthSq() < 1e-9) u2.set(1, 0, 0); u2.normalize(); dir = { x: u2.x, y: u2.y, z: u2.z }; }
-      // 逃げは基本500以上（2026-07-31 社長指示）。区間の寸法は手前・総長は一段外（重ならない・読み違えない）
-      const st = Object.assign({}, styleFor('dim'), { dimKind: axis ? 'linear' : 'parallel', dimOff: (lvl || 1) >= 2 ? 0.9 : 0.5, dimDir: dir });
+      // 逃げは基本500以上（2026-07-31 社長指示）。区間の寸法は手前・総長は一段外（重ならない・読み違えない）。
+      // ただしガスケットのような短い区間は手前に寄せる＝主寸法の列を乱さない（2026-08-02 社長指示）
+      const short = a.distanceTo(b) < 0.01;
+      const st = Object.assign({}, styleFor('dim'), { dimKind: axis ? 'linear' : 'parallel',
+        dimOff: short ? 0.22 : ((lvl || 1) >= 2 ? 0.9 : 0.5), dimDir: dir });
       if (axis) Object.assign(st, linearFixFields(a, b, dir));
       items.push({ a: a.clone(), b: b.clone(), st });
     };
@@ -11790,7 +11793,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const HORZ4 = AXES6.filter(n => Math.abs(n.y) < 0.5);
     const pushEl = (pt, txt, perp) => {
       if (elTaken(txt) || items.some(it => it.st.dimKind === 'leader' && it.st.dimText === txt)) return;
-      items.push({ a: pt.clone(), b: pt.clone().addScaledVector(perp, 0.5), st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: txt }) });
+      // ELは逃げを長くとる＝配管や寸法の列から離して読みやすく（2026-08-02 社長指示）
+      items.push({ a: pt.clone(), b: pt.clone().addScaledVector(perp, 1.2), st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: txt }) });
     };
     for (const g of chains) {
       // 区間ごとの寸法＝基準（工作点・フランジのフェイス面・バルブ/仮管/ガスケットの面）の隣どうし。
@@ -11810,8 +11814,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const at = chosen === dBack ? P0 : P1;                             // 選んだ向き側の端から、管の延長線上へ出す
         pushEl(at, `COP EL${elMm >= 0 ? '+' : ''}${elMm}`, chosen);
       } else if (Math.abs(g.d.y) > 0.98) {
-        // 立面＝フランジのフェイス面（＝継手の合わせ面）と端面にEL（2026-08-02 社長図に合わせる）。
-        // 高さの基準はここでしか読めないので、面ごとに入れて同じ値は1つにまとめる。
+        // 立面＝**フランジのフェイス面だけ**にEL（2026-08-02 社長指示）。
+        // 管端・ボスの取り付け位置・フランジの逆面（溶接側）には付けない＝余分なELを出さない。
         const faceYs = [];
         for (const q of placedParts) {
           const u = q.userData;
@@ -11822,7 +11826,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           if (t < -SPAN_GAP || t > span + SPAN_GAP) continue;
           faceYs.push(f);
         }
-        for (const rk of g.runs) for (const K of [rk.KA, rk.KB]) if (K.kind === 'end') faceYs.push(K.pt);
+        // フランジが1枚も無い立面ラン（ボスから立ち上げた裸の管など）だけは、端面にELを入れる
+        if (!faceYs.length) for (const rk of g.runs) for (const K of [rk.KA, rk.KB]) if (K.kind === 'end') faceYs.push(K.pt);
         for (const pt of faceYs) {
           const elMm = Math.round(pt.y * 1000);
           pushEl(pt, `EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4, pt));
