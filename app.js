@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-N';
+const APP_VER = 'v0802-O';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -8338,42 +8338,82 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       setPartByOrigin(o, sweepMode.pts[e.i]);      // 起点＝工作点(角)を線分の折れ点へ
       registerPart(o);
     }
-    for (const p of plan.pipes) {
-      const o = makePipe({ sizeA, sch, length: p.L });
+    // 枝分かれ＝**ティー**を使う（2026-08-03 社長指示。旧v0802-Nは被り付きの枝管にしていた）。
+    // 本管はティーの分だけ2本に割り、枝管はティーの枝端から先端までにする。
+    const brs = sweepMode.branches || [];
+    const bSize = (sweepBrSize && sweepBrSize.value) || sizeA;
+    const teeC = (TEE_C[sizeA] || 38) / 1000;
+    const teeM = ((bSize !== sizeA && TEE_RT_M[sizeA] && TEE_RT_M[sizeA][bSize] != null)
+                  ? TEE_RT_M[sizeA][bSize] : (TEE_C[sizeA] || 38)) / 1000;
+    let pipesOut = plan.pipes.slice();
+    const tees = [], brPipes = [];
+    for (const b of brs) {
+      const bd = b.to.clone().sub(b.at);
+      if (bd.length() < 1e-4) continue;
+      bd.normalize();
+      let hit = null;
+      for (const q of pipesOut) {                       // 分岐点を含む本管の区間を探す
+        const v = q.b.clone().sub(q.a), L2 = v.lengthSq();
+        if (L2 < 1e-12) continue;
+        const t = b.at.clone().sub(q.a).dot(v) / L2;
+        if (t <= 0.001 || t >= 0.999) continue;
+        if (q.a.clone().addScaledVector(v, t).distanceTo(b.at) > 0.004) continue;
+        hit = q; break;
+      }
+      if (!hit) { if (window.__toast) window.__toast('スイープ：枝の付け根が本管の上にありません'); continue; }
+      const runDir = hit.d.clone();
+      if (Math.abs(runDir.dot(bd)) > 0.09) {            // 直角から±5°以上ずれている＝ティーにできない
+        if (window.__toast) window.__toast('スイープ：ティーは直角の枝だけです（斜めの枝は単品の被り付きでどうぞ）');
+        continue;
+      }
+      pipesOut = pipesOut.filter(q => q !== hit);
+      const mk = (a3, b3) => { const L = a3.distanceTo(b3) * 1000; if (L >= 0.5) pipesOut.push({ a: a3, b: b3, d: runDir.clone(), L }); };
+      mk(hit.a.clone(), b.at.clone().addScaledVector(runDir, -teeC));
+      mk(b.at.clone().addScaledVector(runDir, teeC), hit.b.clone());
+      const bs = b.at.clone().addScaledVector(bd, teeM);
+      const bL = bs.distanceTo(b.to) * 1000;
+      if (bL >= 0.5) brPipes.push({ a: bs, b: b.to.clone(), d: bd.clone(), L: bL });
+      tees.push({ at: b.at.clone(), run: runDir, br: bd });
+    }
+    for (const t of tees) {                             // ティー（run=ローカルY・枝=ローカル+Z）
+      const o = makeTee({ sizeA, sizeB: bSize, sch });
+      computeConns(o);
+      const y2 = t.run.clone(), z2 = t.br.clone(), x2 = y2.clone().cross(z2).normalize();
+      o.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x2, y2, z2));
+      o.userData.orient = 0; o.userData.roll = 0;
+      setPartByOrigin(o, t.at);                         // 起点＝工作点（中心）
+      registerPart(o);
+    }
+    // 同じ径のパイプがもうその場所にあるなら作らない（2026-08-03 社長指示）。
+    // 径が違えばそのまま作る＝ジャケット管のように二重に走らせる使い方があるため。
+    let skipped = 0;
+    const alreadyThere = (a4, b4, size) => {
+      for (const q of placedParts) {
+        const u = q.userData;
+        if (u.hidden || !u.placed || u.partType !== 'pipe' || !u.pipe) continue;
+        if (u.pipe.sizeA !== size) continue;                       // 径が違う＝別物（ジャケット管など）
+        const qa = connModelPos(q, u.backLocal), qb = connModelPos(q, u.faceLocal);
+        const qd = qb.clone().sub(qa); const qL = qd.length();
+        if (qL < 1e-6) continue;
+        qd.multiplyScalar(1 / qL);
+        const d4 = b4.clone().sub(a4).normalize();
+        if (Math.abs(qd.dot(d4)) < 0.999) continue;                // 向きが違う
+        const off = a4.clone().sub(qa); off.addScaledVector(qd, -off.dot(qd));
+        if (off.length() > 0.004) continue;                        // 芯線が別
+        const t0 = a4.clone().sub(qa).dot(qd), t1 = b4.clone().sub(qa).dot(qd);
+        const lo = Math.min(t0, t1), hi = Math.max(t0, t1);
+        if (hi < 0.002 || lo > qL - 0.002) continue;               // 区間が重なっていない
+        return true;
+      }
+      return false;
+    };
+    for (const p of pipesOut.concat(brPipes)) {
+      const psize = brPipes.indexOf(p) >= 0 ? bSize : sizeA;
+      if (alreadyThere(p.a, p.b, psize)) { skipped++; continue; }
+      const o = makePipe({ sizeA: psize, sch, length: p.L });
       computeConns(o);
       o.quaternion.setFromUnitVectors(yAxis, p.d);
       o.position.copy(p.a).add(p.b).multiplyScalar(0.5);   // 中心＝区間の中点
-      o.userData.orient = 0; o.userData.roll = 0;
-      registerPart(o);
-    }
-    // 枝管＝被り付き。母管の芯から先端まで1本のパイプにし、根元を母管の内面に合わせて切る
-    // （2026-08-02 社長要望：エルボでつながず、2本に分かれて枝の端がカットされる形）。
-    const brs = sweepMode.branches || [];
-    for (const b of brs) {
-      const d = b.to.clone().sub(b.at);
-      const Lm = d.length();
-      if (Lm < 1e-4) continue;
-      d.normalize();
-      // 母管の向き＝分岐点で本管が走っている向き（点列のうち分岐点に最も近い区間）
-      let host = null, hd = 1e9;
-      for (let i = 0; i + 1 < sweepMode.pts.length; i++) {
-        const a2 = sweepMode.pts[i], b2 = sweepMode.pts[i + 1];
-        const v = b2.clone().sub(a2), L2 = v.lengthSq();
-        if (L2 < 1e-12) continue;
-        const t = Math.max(0, Math.min(1, b.at.clone().sub(a2).dot(v) / L2));
-        const dist = a2.clone().addScaledVector(v, t).distanceTo(b.at);
-        if (dist < hd) { hd = dist; host = v.clone().normalize(); }
-      }
-      if (!host) continue;
-      const q = new THREE.Quaternion().setFromUnitVectors(yAxis, d);
-      const axLocal = host.clone().applyQuaternion(q.clone().invert());   // 母管の軸を枝管ローカルへ
-      const hostInR = Math.max((FLG_BORE[sizeA] || 114) / 2 - pipeWall(sizeA, sch), 1);   // 母管の内半径(mm)
-      const bSize = (sweepBrSize && sweepBrSize.value) || sizeA;                          // 枝の呼び径
-      const o = makePipe({ sizeA: bSize, sch, length: Lm * 1000,
-                           branch: { hostR: hostInR, side: 'inner', axis: { x: axLocal.x, y: axLocal.y, z: axLocal.z } } });
-      computeConns(o);
-      o.quaternion.copy(q);
-      o.position.copy(b.at).add(b.to).multiplyScalar(0.5);
       o.userData.orient = 0; o.userData.roll = 0;
       registerPart(o);
     }
@@ -8383,7 +8423,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (typeof updateForm === 'function') updateForm();
     if (typeof _idleSig !== 'undefined') _idleSig = null;
     if (window.__recordHistory) window.__recordHistory();
-    if (window.__toast) window.__toast(`スイープ：パイプ${plan.pipes.length + brs.length}本${brs.length ? `（うち枝管${brs.length}本＝被り付き）` : ''}・エルボ${plan.elbows.length}個を配置しました（${sizeA} ${sch}）`);
+    if (window.__toast) window.__toast(`スイープ：パイプ${pipesOut.length + brPipes.length - skipped}本・エルボ${plan.elbows.length}個${tees.length ? `・ティー${tees.length}個` : ''}を配置しました（${sizeA} ${sch}）${skipped ? `／同じ径の配管が既にある${skipped}区間は作りませんでした` : ''}`);
     endSweepMode();
   }
   function ensureSweepBox() {
