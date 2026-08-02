@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-J';
+const APP_VER = 'v0802-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -7213,6 +7213,24 @@ function orientStep(mode) {
   else if (movingPart) cycleMoveOrientation(m);
   else if (selectedPart && selectedPart.userData.faceLocal) pipeRotate(m);   // 全部品共通の3軸送り
   else if (window.__annHasSel && window.__annHasSel()) {
+    // 複数選択（または起点を決めた時）＝部品と同じ3軸で、決めた起点（無ければ選択の中心）を
+    // 中心にまとめて回す。方位角＝鉛直軸／立面角＝並びに直交する水平軸／回転＝並びの軸
+    // （2026-08-02 社長「寸法を複数選択した時、回転・方位角・立面角が正しく行われていない」）
+    const nAnn = window.__annSelCount ? window.__annSelCount() : 0;
+    const pivot = selPivot ? selPivot.clone() : (nAnn > 1 && window.__annSelCenter ? window.__annSelCenter() : null);
+    if (pivot && window.__annRotateSelBy) {
+      const d = (window.__annSelDir && window.__annSelDir()) || new THREE.Vector3(1, 0, 0);
+      let axis, ang = Math.PI / 4;
+      if (m === 'az') { axis = new THREE.Vector3(0, 1, 0); ang = -Math.PI / 4; }
+      else if (m === 'el') {
+        axis = new THREE.Vector3(-d.z, 0, d.x);
+        if (axis.lengthSq() < 1e-9) axis.set(1, 0, 0);
+        axis.normalize();
+      } else axis = d.clone().normalize();
+      consumeMoveArm();
+      window.__annRotateSelBy(pivot, new THREE.Quaternion().setFromAxisAngle(axis, ang));
+      return;
+    }
     // 寸法線（単独選択）：回転＝逃げ方向をAB軸まわりに45°／方位角・立面角＝スライド寸法の切替
     if (window.__annSelIsSingleDim && window.__annSelIsSingleDim()) {
       if (m === 'roll') { window.__dimRollStep && window.__dimRollStep(); }
@@ -11572,7 +11590,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
         const scr = Math.hypot(n.dot(camX), n.dot(camY));           // 画面での伸び（1=正面・0=視線と平行でつぶれる）
         const half = Math.abs(n.x) * bH.x + Math.abs(n.y) * bH.y + Math.abs(n.z) * bH.z;
         const out = half > 1e-6 ? Math.max(-1, Math.min(1, n.dot(pt.clone().sub(bC)) / half)) : 0;
-        const s = scr + 0.6 * out;
+        const up = n.y > 0.5 ? 0.35 : (n.y < -0.5 ? -0.35 : 0);      // 迷ったら上へ出す（2026-08-02 社長「上出しの方がよい」）
+        const s = scr + 0.6 * out + up;
         if (s > bs) { bs = s; best = n; }
       }
       return best || new V3(0, 1, 0);
@@ -11658,38 +11677,67 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     };
     const runs = autoDimRuns();
     const runsK = runs.map(r => ({ r, KA: runEndKeyPoint(r.A), KB: runEndKeyPoint(r.B) }));
+    // 同じ芯線に乗っていて区間が触れているランは、ひとつの連なりにまとめる（2026-08-02 社長指摘）。
+    // ＝継手の所でランが2本に割れていると、総長が「半分ずつ2本」になってしまう（写真の251.5×2）。
+    const chains = [];
     for (const rk of runsK) {
+      const sts = stationsOf(rk);
+      if (sts.length < 2) continue;
+      const A = sts[0].pt, B = sts[sts.length - 1].pt;
+      const d = B.clone().sub(A).normalize();
+      let g = null;
+      for (const c of chains) {
+        if (Math.abs(c.d.dot(d)) < 0.999) continue;                        // 向きが違う
+        const v = A.clone().sub(c.ref);
+        if (v.addScaledVector(c.d, -v.dot(c.d)).length() > LINE_TOL) continue;   // 芯線が別
+        const ts = sts.map(s => c.d.dot(s.pt.clone().sub(c.ref)));
+        if (Math.max(...ts) < c.lo - 0.01 || Math.min(...ts) > c.hi + 0.01) continue;   // 離れている
+        g = c; break;
+      }
+      if (!g) { g = { d: d.clone(), ref: A.clone(), lo: 1e9, hi: -1e9, pts: [], runs: [] }; chains.push(g); }
+      for (const s of sts) {
+        const t = g.d.dot(s.pt.clone().sub(g.ref));
+        g.pts.push({ t, pt: s.pt.clone() });
+        g.lo = Math.min(g.lo, t); g.hi = Math.max(g.hi, t);
+      }
+      g.runs.push(rk);
+    }
+    const HORZ4 = AXES6.filter(n => Math.abs(n.y) < 0.5);
+    const pushEl = (pt, txt, perp) => {
+      if (elTaken(txt) || items.some(it => it.st.dimKind === 'leader' && it.st.dimText === txt)) return;
+      items.push({ a: pt.clone(), b: pt.clone().addScaledVector(perp, 0.5), st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: txt }) });
+    };
+    for (const g of chains) {
       // 区間ごとの寸法＝基準（工作点・フランジのフェイス面・バルブ/仮管/ガスケットの面）の隣どうし。
       // これでバルブ・仮管・ガスケットにも必ず寸法が付き、フランジのある所はフェイス面が基準になる。
-      const sts = stationsOf(rk);
+      g.pts.sort((a, b) => a.t - b.t);
+      const sts = [];
+      for (const s of g.pts) if (!sts.length || s.t - sts[sts.length - 1].t > 0.0005) sts.push(s);
       if (sts.length < 2) continue;
       for (let i = 0; i + 1 < sts.length; i++) pushDim(sts[i].pt, sts[i + 1].pt, 1);
       const P0 = sts[0].pt, P1 = sts[sts.length - 1].pt;
       pushDim(P0, P1, sts.length > 2 ? 2 : 1);                            // 総長（区間があるときは一段外へ）
-      const HORZ4 = AXES6.filter(n => Math.abs(n.y) < 0.5);
-      const pushEl = (pt, txt, perp) => {
-        if (elTaken(txt) || items.some(it => it.st.dimKind === 'leader' && it.st.dimText === txt)) return;
-        items.push({ a: pt.clone(), b: pt.clone().addScaledVector(perp, 0.5), st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: txt }) });
-      };
-      if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝COP EL（水平に500逃がす・同じ値は1つだけ）
-        const mid = P0.clone().add(P1).multiplyScalar(0.5);
-        const elMm = Math.round(mid.y * 1000);
-        pushEl(mid, `COP EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4.filter(n => Math.abs(n.dot(rk.r.dir)) < 0.5), mid));
-      } else if (Math.abs(rk.r.dir.y) > 0.98) {
-        // 立面ラン＝フランジのフェイス面（＝継手の合わせ面）と端面にEL（2026-08-02 社長図に合わせる）。
+      if (Math.abs(g.d.y) < 0.02) {
+        // 水平＝COP EL。引出しは**管に平行**（芯線の延長上へ出す。2026-08-02 社長指示・写真2枚目が正解）
+        const elMm = Math.round(P0.y * 1000);
+        const dBack = g.d.clone().negate(), dFwd = g.d.clone();
+        const chosen = bestDirAmong([dBack, dFwd], P0.clone().add(P1).multiplyScalar(0.5));
+        const at = chosen === dBack ? P0 : P1;                             // 選んだ向き側の端から、管の延長線上へ出す
+        pushEl(at, `COP EL${elMm >= 0 ? '+' : ''}${elMm}`, chosen);
+      } else if (Math.abs(g.d.y) > 0.98) {
+        // 立面＝フランジのフェイス面（＝継手の合わせ面）と端面にEL（2026-08-02 社長図に合わせる）。
         // 高さの基準はここでしか読めないので、面ごとに入れて同じ値は1つにまとめる。
         const faceYs = [];
         for (const q of placedParts) {
           const u = q.userData;
           if (u.hidden || !u.placed || u.partType !== 'flange' || !u.faceLocal) continue;
           const f = connModelPos(q, u.faceLocal);
-          if (Math.hypot(f.x - P0.x, f.z - P0.z) > LINE_TOL) continue;    // このランの芯線上のフランジだけ
-          const t = f.clone().sub(P0).dot(rk.r.dir);
-          const span = P1.clone().sub(P0).dot(rk.r.dir);
-          if (t < Math.min(0, span) - SPAN_GAP || t > Math.max(0, span) + SPAN_GAP) continue;
+          if (Math.hypot(f.x - P0.x, f.z - P0.z) > LINE_TOL) continue;    // この連なりの芯線上のフランジだけ
+          const t = g.d.dot(f.clone().sub(P0)), span = g.d.dot(P1.clone().sub(P0));
+          if (t < -SPAN_GAP || t > span + SPAN_GAP) continue;
           faceYs.push(f);
         }
-        for (const K of [rk.KA, rk.KB]) if (K.kind === 'end') faceYs.push(K.pt);
+        for (const rk of g.runs) for (const K of [rk.KA, rk.KB]) if (K.kind === 'end') faceYs.push(K.pt);
         for (const pt of faceYs) {
           const elMm = Math.round(pt.y * 1000);
           pushEl(pt, `EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4, pt));
@@ -12255,6 +12303,20 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     for (const r of selAnns) { c.add(r.a); c.add(r.b); n += 2; }
     return n ? c.multiplyScalar(1 / n) : null;
   };
+  // 選択中の注釈の「並びの向き」＝各レコードのa→bを（向きを揃えて）平均した単位ベクトル。
+  // 複数選択したまま3軸で回すときの「立面角＝これに直交する水平軸／回転＝この軸」に使う（2026-08-02）
+  window.__annSelDir = () => {
+    if (!selAnns.size) return null;
+    const acc = new THREE.Vector3(); let ref = null;
+    for (const r of selAnns) {
+      const v = r.b.clone().sub(r.a);
+      if (v.lengthSq() < 1e-12) continue;
+      v.normalize();
+      if (!ref) ref = v.clone(); else if (v.dot(ref) < 0) v.negate();
+      acc.add(v);
+    }
+    return acc.lengthSq() > 1e-9 ? acc.normalize() : null;
+  };
   // ---- グループ化用（注釈側） ----
   window.__annSelCount = () => selAnns.size;
   window.__annSetGroup = (gid) => { for (const r of selAnns) r.groupId = gid; };   // 選択中の注釈にグループID付与
@@ -12271,6 +12333,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   window.__annDeselect = () => deselectLine();   // 構築線のEL→角度連鎖の「閉じ」用
   window.__annSelectRec = (rec) => { if (annStore.includes(rec)) selectLine(rec); };   // 寸法確定後に選択して「値」フォームを出す用
+  window.__annToggleRec = (rec) => {   // 複数選択へ出し入れ（Ctrl+クリックと同じ。e2e検証用）
+    if (!annStore.includes(rec)) return false;
+    if (selAnns.has(rec)) { selAnns.delete(rec); if (lineSel === rec) { lineSel = null; clearLineHandles(); } }
+    else { selAnns.add(rec); lineSel = rec; showLineHandles(rec); }
+    refreshAnnHi();
+    if (typeof updateForm === 'function') updateForm();
+    return true;
+  };
   window.__annDeleteRec = (rec) => {              // 特定の注釈を1件削除（スピナー中のDelete用）
     const i = annStore.indexOf(rec); if (i < 0) return;
     annStore.splice(i, 1); annGroup.remove(rec.obj); disposeObj(rec.obj);
@@ -12754,7 +12824,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       _rotSpin = { textRec: lineSel, startRot: lineSel.style.textRot || 0, pivot: lineSel.a.clone() };   // 文字：画面内回転
       return true;
     }
-    let pivot = dimRotPivot() || gripPt() || (lineSel ? lineSel.a : null);
+    let pivot = (typeof selPivot !== 'undefined' && selPivot) ? selPivot.clone()
+              : (selAnns.size > 1 && window.__annSelCenter ? window.__annSelCenter() : null)
+              || dimRotPivot() || gripPt() || (lineSel ? lineSel.a : null);
     if (!pivot) { for (const r of selAnns) { pivot = r.a; break; } }
     if (!pivot) return false;
     let dirRef = lineSel ? (lineSel.a === pivot ? lineSel.b : lineSel.a).clone().sub(pivot) : null;
@@ -12766,7 +12838,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (shift) axis = base;                                      // 鉛直面まわり
     else if (isVertical) axis = new V3(-base.z, 0, base.x).normalize();   // 垂直線はクロス方向
     else axis = new V3(0, 1, 0);                                 // 通常は水平面（Y軸）
-    _rotSpin = { pivot: pivot.clone(), axis, snap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), quat: r.type === 'circle' ? quatFromStyle(r.style) : null, ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })) };
+    _rotSpin = { pivot: pivot.clone(), axis, snap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), quat: r.type === 'circle' ? quatFromStyle(r.style) : null, ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null, fd: (r.style && r.style.dimFixDir) ? { ...r.style.dimFixDir } : null, fp: (r.style && r.style.dimFixPt) ? { ...r.style.dimFixPt } : null })) };
     return true;
   };
   window.__annRotateSpinApply = (deg) => {
@@ -12784,6 +12856,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       } else {
         const vb = s.b.clone().sub(_rotSpin.pivot).applyQuaternion(q); s.r.b.copy(_rotSpin.pivot).add(vb);
         if (s.ap) { const p2 = new V3(s.ap[0], s.ap[1], s.ap[2]).sub(_rotSpin.pivot).applyQuaternion(q).add(_rotSpin.pivot); s.r.style.angP2 = [p2.x, p2.y, p2.z]; }
+        // 長さ寸法は寸法線を固定向き・固定基準に保つので、それも一緒に回す（2026-08-02 社長「複数選択の回転が正しくない」）
+        if (s.fd) { const d2 = new V3(s.fd.x, s.fd.y, s.fd.z).applyQuaternion(q); s.r.style.dimFixDir = { x: d2.x, y: d2.y, z: d2.z }; }
+        if (s.fp) { const f2 = new V3(s.fp.x, s.fp.y, s.fp.z).sub(_rotSpin.pivot).applyQuaternion(q).add(_rotSpin.pivot); s.r.style.dimFixPt = { x: f2.x, y: f2.y, z: f2.z }; }
       }
       rebuildAnn(s.r);
     }
@@ -12794,7 +12869,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.__annRotateSpinCancel = () => {
     if (!_rotSpin) return;
     if (_rotSpin.textRec) { _rotSpin.textRec.style.textRot = _rotSpin.startRot; _rotSpin = null; return; }
-    for (const s of _rotSpin.snap) { s.r.a.copy(s.a); s.r.b.copy(s.b); if (s.r.type === 'circle' && s.quat) s.r.style.quat = { x: s.quat.x, y: s.quat.y, z: s.quat.z, w: s.quat.w }; if (s.ap) s.r.style.angP2 = s.ap.slice(); rebuildAnn(s.r); }
+    for (const s of _rotSpin.snap) { s.r.a.copy(s.a); s.r.b.copy(s.b); if (s.r.type === 'circle' && s.quat) s.r.style.quat = { x: s.quat.x, y: s.quat.y, z: s.quat.z, w: s.quat.w }; if (s.ap) s.r.style.angP2 = s.ap.slice(); if (s.fd) s.r.style.dimFixDir = { ...s.fd }; if (s.fp) s.r.style.dimFixPt = { ...s.fp }; rebuildAnn(s.r); }
     _rotSpin = null; refreshAnnHi(); refreshHandles();
   };
   window.__annRotateSpinActive = () => !!_rotSpin;
@@ -13189,10 +13264,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   // 部品の集団移動に追従して、選択中の線も同じ分だけ平行移動
   let annMoveSnap = null;
-  window.__annMoveStart = () => { annMoveSnap = [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })); };
+  window.__annMoveStart = () => { annMoveSnap = [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null, fp: (r.style && r.style.dimFixPt) ? { ...r.style.dimFixPt } : null })); };
   window.__annMoveApply = (dx, dy, dz) => {
     if (!annMoveSnap) return;
-    for (const s of annMoveSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); if (s.ap) s.r.style.angP2 = [s.ap[0] + dx, s.ap[1] + dy, s.ap[2] + dz]; rebuildAnn(s.r); }
+    for (const s of annMoveSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); if (s.ap) s.r.style.angP2 = [s.ap[0] + dx, s.ap[1] + dy, s.ap[2] + dz]; if (s.fp) s.r.style.dimFixPt = { x: s.fp.x + dx, y: s.fp.y + dy, z: s.fp.z + dz };   // 長さ寸法の固定基準も一緒に動かす（2026-08-02 社長「寸法の移動が上手く機能しない」）
+      rebuildAnn(s.r); }
     refreshAnnHi();
     refreshHandles();   // 全選択線の端点ハンドルを現在位置へ（窓選択で lineSel 無しでも置き去りにしない）
   };
@@ -13236,7 +13312,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 選択中の線をまとめて (dx,dy,dz) だけ平行移動（高さ/EL一括変更で部品と一緒に動かす用）
   window.__annShiftSelected = (dx, dy, dz) => {
     if (!selAnns.size) return;
-    for (const r of selAnns) { r.a.set(r.a.x + dx, r.a.y + dy, r.a.z + dz); r.b.set(r.b.x + dx, r.b.y + dy, r.b.z + dz); if (r.style && r.style.angP2) r.style.angP2 = [r.style.angP2[0] + dx, r.style.angP2[1] + dy, r.style.angP2[2] + dz]; rebuildAnn(r); }
+    for (const r of selAnns) { r.a.set(r.a.x + dx, r.a.y + dy, r.a.z + dz); r.b.set(r.b.x + dx, r.b.y + dy, r.b.z + dz); if (r.style && r.style.angP2) r.style.angP2 = [r.style.angP2[0] + dx, r.style.angP2[1] + dy, r.style.angP2[2] + dz]; if (r.style && r.style.dimFixPt) r.style.dimFixPt = { x: r.style.dimFixPt.x + dx, y: r.style.dimFixPt.y + dy, z: r.style.dimFixPt.z + dz }; rebuildAnn(r); }
     refreshAnnHi(); refreshHandles();
   };
   window.__annMoveCancel = () => {
@@ -13502,7 +13578,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                    grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
                    startHit: planeHitAt(e.clientX, e.clientY, origin.y) || origin.clone(),
                    downX: e.clientX, downY: e.clientY, moved: false,
-                   annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })),
+                   annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null, fp: (r.style && r.style.dimFixPt) ? { ...r.style.dimFixPt } : null })),
                    partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
       e.stopImmediatePropagation(); return;
     }
@@ -13537,7 +13613,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                        grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
                        startHit: planeHitAt(e.clientX, e.clientY, origin.y) || origin.clone(),
                        downX: e.clientX, downY: e.clientY, moved: false,
-                       annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })),
+                       annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null, fp: (r.style && r.style.dimFixPt) ? { ...r.style.dimFixPt } : null })),
                        partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
         }
         e.stopImmediatePropagation(); return;
@@ -13595,7 +13671,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                    grabOff: grabOffsetFor(origin, e.clientX, e.clientY),
                    startHit: planeHitAt(e.clientX, e.clientY, origin.y) || origin.clone(),
                    downX: e.clientX, downY: e.clientY, moved: false,
-                   annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null })),
+                   annSnap: [...selAnns].map(r => ({ r, a: r.a.clone(), b: r.b.clone(), ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null, fp: (r.style && r.style.dimFixPt) ? { ...r.style.dimFixPt } : null })),
                    partSnap: window.__partSelSnapshot ? window.__partSelSnapshot() : [] };
       if (info.near) { gRec = rec; gEnd = info.end; _vAxis = null; _tipAxis = null; _tipMode = false; refreshHandles(); if (typeof updateForm === 'function') updateForm(); }   // 端の近くを掴んだ＝起点を選択（大きく・ELを更新・鉛直軸再計算）
       e.stopImmediatePropagation(); return;
@@ -13766,7 +13842,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           dx = px * t; dz = pz * t; dy = 0; snappedPt = null;
         }
       }
-      for (const s of lineDrag.annSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); if (s.ap) s.r.style.angP2 = [s.ap[0] + dx, s.ap[1] + dy, s.ap[2] + dz]; rebuildAnn(s.r); }
+      for (const s of lineDrag.annSnap) { s.r.a.set(s.a.x + dx, s.a.y + dy, s.a.z + dz); s.r.b.set(s.b.x + dx, s.b.y + dy, s.b.z + dz); if (s.ap) s.r.style.angP2 = [s.ap[0] + dx, s.ap[1] + dy, s.ap[2] + dz]; if (s.fp) s.r.style.dimFixPt = { x: s.fp.x + dx, y: s.fp.y + dy, z: s.fp.z + dz };   // 長さ寸法の固定基準も一緒に動かす（2026-08-02 社長「寸法の移動が上手く機能しない」）
+      rebuildAnn(s.r); }
       if (window.__partSelApply) window.__partSelApply(lineDrag.partSnap, dx, dy, dz);
       lineDrag._delta = { x: dx, z: dz };                // 直行移動のX/Z/L欄表示用
       lineDrag._translated = true;                       // 実際に動かした＝離した時に「移動」コマンドを終了する
