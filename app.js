@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-O';
+const APP_VER = 'v0802-P';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1377,23 +1377,46 @@ function makePipe(opts) {
     pos.needsUpdate = true;
   }
   if (br) {
-    // 背面端の輪を、母管（半径R・軸ax）の丸みに合わせて持ち上げる＝鞍形の切り口。
+    // 背面端の輪を、母管（半径R・軸ax）の面まで持ち上げる＝鞍形の切り口。90°以外の斜めでも効く。
     // CSGだと切り取った円筒の面が中に残り、選択枠や範囲ズームの箱が狂うのでこの方式にした。
+    // 枝の表面 p=(r·cosθ, y, r·sinθ)、母管の芯は(0,−L/2,0)を通り向きax。u=y+L/2 として
+    //   |q|²−(q·ax)² = R²  →  (1−ay²)u² − 2A·ay·u + (r²−A²−R²) = 0   （A = r·cosθ·ax + r·sinθ·az）
     const R = br.hostR / 1000;
     const ax = new THREE.Vector3(br.axis ? br.axis.x : 1, br.axis ? br.axis.y : 0, br.axis ? br.axis.z : 0);
     if (ax.lengthSq() < 1e-9) ax.set(1, 0, 0);
-    ax.y = 0;                                        // 枝の軸(Y)成分は使わない＝直交成分だけ見る
-    if (ax.lengthSq() < 1e-9) ax.set(1, 0, 0);
     ax.normalize();
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      if (Math.abs(pos.getY(i) + L / 2) > 1e-6) continue;
-      const x = pos.getX(i), z = pos.getZ(i);
-      const sAx = x * ax.x + z * ax.z;               // 母管の軸に沿った成分（切り口は伸びる方向）
-      const w2 = Math.max(x * x + z * z - sAx * sAx, 0);   // 母管の軸からの横ずれ
-      pos.setY(i, -L / 2 + Math.sqrt(Math.max(R * R - w2, 0)));
+    const aq = 1 - ax.y * ax.y;
+    if (aq > 1e-6) {
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        if (Math.abs(pos.getY(i) + L / 2) > 1e-6) continue;
+        const x = pos.getX(i), z = pos.getZ(i);
+        const A = x * ax.x + z * ax.z;
+        const bq = -2 * A * ax.y, cq = x * x + z * z - A * A - R * R;
+        const disc = bq * bq - 4 * aq * cq;
+        const u = disc > 0 ? (-bq + Math.sqrt(disc)) / (2 * aq) : 0;
+        pos.setY(i, -L / 2 + Math.max(u, 0));
+      }
+      pos.needsUpdate = true;
     }
-    pos.needsUpdate = true;
+  }
+  // 母管側の貫通穴＝重なった所を演算で抜く（2026-08-03 社長指示）。
+  // o.bores = [{ r:枝の外半径(mm), ax:{x,y,z} 枝の向き（この管のローカル系）, at: 芯上の位置y(mm) }]
+  if (o.bores && o.bores.length) {
+    for (const bo of o.bores) {
+      const rr = (bo.r || 0) / 1000;
+      if (rr <= 0) continue;
+      const bax = new THREE.Vector3(bo.ax ? bo.ax.x : 1, bo.ax ? bo.ax.y : 0, bo.ax ? bo.ax.z : 0);
+      if (bax.lengthSq() < 1e-9) continue;
+      bax.normalize();
+      const len = outR * 1.02;                       // 芯から外面の少し先まで＝近い側の壁だけ抜く
+      const cyl = new THREE.CylinderGeometry(rr, rr, len, 32, 1, false);
+      cyl.applyMatrix4(new THREE.Matrix4().makeRotationFromQuaternion(
+        new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), bax)));
+      const c = bax.clone().multiplyScalar(len / 2);
+      cyl.translate(c.x, c.y + (bo.at || 0) / 1000, c.z);
+      try { geo = csgSubtractGeo(geo, cyl); } catch (e) {}
+    }
   }
   geo.computeVertexNormals();
   const mat = FLANGE_MAT.clone(); mat.side = THREE.DoubleSide; mat.needsUpdate = true;
@@ -1407,6 +1430,48 @@ function makePipe(opts) {
   }
   return g;
 }
+// 単品で置いたパイプの端が、既にある母管の「途中」に乗っていたら被り付きにする（2026-08-03 社長指示）。
+//  ・枝＝母管の芯から先端までの1本にして、根元を母管の内面に合わせて鞍形カット
+//  ・母管＝重なった所を演算で抜く（貫通）
+//  ・90°でなくてもよい（斜めの枝も同じ式で切れる）
+function applyBranchIfOnPipe(br) {
+  const u = br.userData;
+  if (!br || u.partType !== 'pipe' || !u.pipe || u.pipe.branch) return false;
+  const aP = connModelPos(br, u.backLocal), bP = connModelPos(br, u.faceLocal);
+  const d = bP.clone().sub(aP); if (d.lengthSq() < 1e-9) return false; d.normalize();
+  for (const host of placedParts) {
+    const hu = host.userData;
+    if (host === br || hu.partType !== 'pipe' || !hu.pipe || !hu.placed || hu.hidden) continue;
+    const ha = connModelPos(host, hu.backLocal), hb = connModelPos(host, hu.faceLocal);
+    const hd = hb.clone().sub(ha); const hL = hd.length();
+    if (hL < 1e-6) continue;
+    hd.multiplyScalar(1 / hL);
+    if (Math.abs(hd.dot(d)) > 0.985) continue;                       // ほぼ同軸＝直列やジャケット管
+    const t = aP.clone().sub(ha).dot(hd);
+    if (t < 0.002 || t > hL - 0.002) continue;                       // 母管の端＝被り付きではない
+    const axisPt = ha.clone().addScaledVector(hd, t);
+    const hOut = (FLG_BORE[hu.pipe.sizeA] || 114) / 2 / 1000;
+    if (aP.distanceTo(axisPt) > hOut * 1.05) continue;               // 母管の外面より外＝乗っていない
+    // 枝＝母管の芯から先端まで。先端は動かさない
+    const newL = axisPt.distanceTo(bP) * 1000;
+    if (newL < 1) continue;
+    const q = br.quaternion.clone().invert();
+    const axLocal = hd.clone().applyQuaternion(q);
+    u.pipe.branch = { hostR: Math.max((FLG_BORE[hu.pipe.sizeA] || 114) / 2 - pipeWall(hu.pipe.sizeA, hu.pipe.sch), 1),
+                      side: 'inner', axis: { x: axLocal.x, y: axLocal.y, z: axLocal.z } };
+    rebuildPipe(br, newL, 'face');
+    // 母管に貫通穴を開ける（枝の外径・枝の向き・母管ローカルの位置）
+    const hq = host.quaternion.clone().invert();
+    const bLocalDir = d.clone().applyQuaternion(hq);
+    const atY = axisPt.clone().sub(host.position).applyQuaternion(hq).y * 1000;
+    hu.pipe.bores = (hu.pipe.bores || []).concat([{ r: (FLG_BORE[u.pipe.sizeA] || 34) / 2,
+                                                    ax: { x: bLocalDir.x, y: bLocalDir.y, z: bLocalDir.z }, at: atY }]);
+    rebuildPipe(host, hu.pipe.length, 'face');
+    return true;
+  }
+  return false;
+}
+window.__applyBranchIfOnPipe = applyBranchIfOnPipe;   // e2e検証用
 // 現在パレットで選択中のパイプ仕様（既定：Sch10S・長さ100mm）
 const pipeOpts = { sizeA: '25A', sch: 'Sch10S', length: 100 };
 
@@ -6995,7 +7060,12 @@ renderer.domElement.addEventListener('pointerup', e => {
     const py = (e.pointerType !== 'mouse' && followParked) ? followParked.y : e.clientY;
     followParked = null;
     const obj = placeToolAt(followTool.tool, px, py);  // 仮配置
-    if (obj) { stopFollow(); selectPart(obj); }   // 追従終了→選択して高さ入力フォームを出す
+    if (obj) {
+      // 単品で置いたパイプの端が母管の途中に乗っていたら被り付きにする（2026-08-03 社長指示）
+      if (typeof applyBranchIfOnPipe === 'function' && applyBranchIfOnPipe(obj) && window.__toast)
+        window.__toast('被り付きにしました（母管の内面でカット・母管は貫通）');
+      stopFollow(); selectPart(obj);   // 追従終了→選択して高さ入力フォームを出す
+    }
   } else if (movingPart) {
     if (moveHoldTap && !moveStarted) return;   // 長押し直後の離し＝ここでは確定しない（次のタップで確定）
     // タップで確定：タッチにはホバーが無いので、タップした位置へ置いてから確定する（2026-07-20 社長要望）
@@ -8364,6 +8434,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const runDir = hit.d.clone();
       if (Math.abs(runDir.dot(bd)) > 0.09) {            // 直角から±5°以上ずれている＝ティーにできない
         if (window.__toast) window.__toast('スイープ：ティーは直角の枝だけです（斜めの枝は単品の被り付きでどうぞ）');
+        continue;
+      }
+      // 規格にない組合せはティーにしない（2026-08-03 社長指示）
+      if (TEE_C[sizeA] == null || (bSize !== sizeA && !(TEE_RT_M[sizeA] && TEE_RT_M[sizeA][bSize] != null))) {
+        if (window.__toast) window.__toast(`スイープ：${sizeA}×${bSize} のティーは規格にありません（枝の呼び径を選び直してください）`);
         continue;
       }
       pipesOut = pipesOut.filter(q => q !== hit);
