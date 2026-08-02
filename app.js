@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-Q';
+const APP_VER = 'v0802-R';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1437,10 +1437,15 @@ function makePipe(opts) {
 function applyBranchIfOnPipe(br) {
   const u = br.userData;
   if (!br || u.partType !== 'pipe' || !u.pipe || u.pipe.branch) return false;
+  if (u.pipe.bores && u.pipe.bores.length) return false;      // 既に枝を受けている＝母管なので枝にはしない
+  const brOut = (FLG_BORE[u.pipe.sizeA] || 34) / 2;
   const ends = [connModelPos(br, u.backLocal), connModelPos(br, u.faceLocal)];
   for (const host of placedParts) {
     const hu = host.userData;
     if (host === br || hu.partType !== 'pipe' || !hu.pipe || !hu.placed || hu.hidden) continue;
+    // 枝は母管の内面より細いこと＝太い管が細い管の枝になってしまうのを防ぐ（2026-08-03 社長報告の対策）
+    const hIn = Math.max((FLG_BORE[hu.pipe.sizeA] || 114) / 2 - pipeWall(hu.pipe.sizeA, hu.pipe.sch), 1);
+    if (brOut >= hIn) continue;
     const ha = connModelPos(host, hu.backLocal), hb = connModelPos(host, hu.faceLocal);
     const hd = hb.clone().sub(ha); const hL = hd.length();
     if (hL < 1e-6) continue;
@@ -1480,6 +1485,11 @@ function applyBranchIfOnPipe(br) {
       hu.pipe.bores = (hu.pipe.bores || []).concat([{ r: (FLG_BORE[u.pipe.sizeA] || 34) / 2,
                                                       ax: { x: bLocalDir.x, y: bLocalDir.y, z: bLocalDir.z }, at: atY }]);
       rebuildPipe(host, hu.pipe.length, 'face');
+      // 母管と枝は別々の部品のまま扱う＝一緒に選ばれる・一緒に動くことがないようにする
+      // （2026-08-03 社長報告「一つになってしまう」）
+      u.groupId = null; hu.groupId = null;
+      if (typeof selectedParts !== 'undefined') { selectedParts.delete(host); setEmissive(host, 0x000000); }
+      if (typeof selPivot !== 'undefined') selPivot = null;
       return true;
     }
   }
