@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-H';
+const APP_VER = 'v0802-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -62,6 +62,9 @@ controls.target.copy(HOME.target);
 controls.minDistance = 0.08;
 controls.maxDistance = 80;
 controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+// 視点回転の遊び＝押した所から9px動くまでは回さない（2026-08-02 社長指摘：
+// ダブルタップの指ブレで画面が動き過ぎる。Ctrl＋ダブルタップで窓を作る時など）。
+controls.rotateDeadZone = 9;
 // 左=回転 / 中ボタン(ホイール押し込み)ドラッグ=画面移動(パン) / 右=移動。ホイール回転はズーム。
 controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
 
@@ -3260,6 +3263,11 @@ let movePickAwait = false;         // 位置は決まり、確定のタップ待
 let movePickParked = null;         // 離した所（＝これから起点にする点）
 let moveReady = false;             // 起点は決まった。次にタッチした所から動かし始める
 let movePickCursorShown = false;   // 起点の十字を出したまま指を離すのを待っている
+// 決めた起点は、移動だけでなく方位角・立面角・回転の「中心」にもなる（2026-08-02 社長指示）。
+// 複数選択なら、選択した部品ぜんぶ＋選択中の線が この点を中心にまとめて回る。
+// null＝主選択の起点（grip）を使う＝従来どおり。選択をやり直すと消える。
+let selPivot = null;               // modelGroupローカルの点
+function clearSelPivot() { selPivot = null; }
 // 起点が決まったら、そのまま「掴んだ状態」にする＝スライドで動かし、タップで確定（鏡・回転と同じ流れ）
 function beginMoveAfterOrigin(cx, cy) {
   const part = selectedPart;
@@ -5046,7 +5054,7 @@ function defaultPose(tool) {
 // 回転・向き挙動上の実効partType（SW・バルブは対応BW形状へ読み替え／BW・パイプ等はそのまま）
 function behType(part) { return part ? (swShapeOf(part) || valveShapeOf(part) || part.userData.partType) : null; }
 function isFreeRotPart(part) { return !!(part && ['pipe', 'elbow', 'cap', 'tee', 'reducer'].includes(behType(part))); }   // 短押し右クリック45°の対象（レデューサーはキャップと同じ）
-function isSpinRotPart(part) { return !!(part && ['pipe', 'elbow', 'cap', 'tee', 'reducer', 'flange', 'gasket'].includes(behType(part))); }      // 長押し角度スピナーの対象（レデューサー・ガスケット追加）
+function isSpinRotPart(part) { return !!(part && part.userData && part.userData.faceLocal); }   // 長押し角度スピナーの対象＝機点を持つ部品すべて（2026-08-02 回転コマンド廃止に伴い全部品へ拡大）
 function is180Elbow(part) { return !!(part && part.userData.partType === 'elbow' && part.userData.elbow && String(part.userData.elbow.kind || '').startsWith('180') && !(part.userData.elbow.cutAngle > 0)); }   // 180°母材の切断エルボは180°扱いしない
 // 180°エルボは右クリックとShiftの回転を入れ替える
 function rotShift(part, shift) { return is180Elbow(part) ? !shift : shift; }
@@ -5075,6 +5083,32 @@ function rotatePipeAround(part, pivot, q) {
   const rel = part.position.clone().sub(pivot).applyQuaternion(q);   // 先に相対位置を回す（順序重要）
   part.quaternion.premultiply(q);                                   // newQuat = q * oldQuat（ワールド系で回す）
   part.position.copy(pivot).add(rel);
+}
+// ===== 複数選択の回転（2026-08-02 社長指示） =====
+// 方位角・立面角・回転は、選択している部品ぜんぶ＋選択中の線を、決めた起点（selPivot。
+// 未指定なら主選択の起点）を中心にまとめて回す。軸は主選択の面から決める＝単体の時と同じ操作感。
+// これでリボンの「回転」コマンド（鉛直軸まわりだけ）に頼らず3軸で回せる。
+function rotSelPartsOf(primary) {
+  if (primary && selectedParts.has(primary) && selectedParts.size > 1) return [...selectedParts];
+  return primary ? [primary] : [];
+}
+function rotPivotOf(part) {
+  if (selPivot) return selPivot.clone();
+  return partRotPivotDir(part).pivot;
+}
+// 起点まわりに、選択中の部品と線をまとめて回す
+function rotateSelAround(primary, pivot, q) {
+  consumeMoveArm();
+  for (const p of rotSelPartsOf(primary)) rotatePipeAround(p, pivot, q);
+  if (window.__annRotateSelBy && window.__annHasSel && window.__annHasSel()) window.__annRotateSelBy(pivot, q);
+}
+// 「起点を決めた直後（次のタッチで動き出す状態）」で回した時は、移動の待ち受けを解除する。
+// ＝起点だけ決めて回す使い方ができる（決めた中心の印は残す）。
+function consumeMoveArm() {
+  if (!moveReady) return;
+  moveReady = false;
+  if (moveMode) setMoveMode(false);
+  if (selPivot && window.__originPickMark) window.__originPickMark(selPivot);
 }
 function gripFaceNormal(part) {   // 選択中の機点(grip=端面)の法線→ワールド。エルボは端面の管軸(接線)、ティーは端点方向で代用
   const u = part.userData, gl = gripLocalOf(part);
@@ -5151,21 +5185,20 @@ function stepPartRotate(part, mode) {
   // ボスの「回転」＝親パイプの中心（軸）まわりに45°＝外周の上を回って向きを変える（2026-07-29 社長要望）
   if (mode === 'roll' && typeof isBossTool === 'function' && isBossTool(part)) {
     const h = bossHostPipe(part);
-    if (h) { rotatePipeAround(part, h.axisPt, new THREE.Quaternion().setFromAxisAngle(h.dir, Math.PI / 4)); return; }
+    if (h) { rotateSelAround(part, h.axisPt, new THREE.Quaternion().setFromAxisAngle(h.dir, Math.PI / 4)); return; }
   }
   // ボスの「立面角」「方位角」＝起点を中心に世界方位で振る（2026-07-29 社長指示）：
   //   立面角＝南北へ振る（＝東西軸まわり）／方位角＝東西へ振る（＝南北軸まわり）
   if (typeof isBossTool === 'function' && isBossTool(part) && (mode === 'az' || mode === 'el')) {
     const axis = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
-    const { pivot } = partRotPivotDir(part);
-    rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 4));
+    rotateSelAround(part, rotPivotOf(part), new THREE.Quaternion().setFromAxisAngle(axis, Math.PI / 4));
     return;
   }
   // 方位角・立面角・回転は常に「今向いているフェイス面」を基準にする（2026-07-30 社長仕様）。
   // 真上/真下向きでも特別扱いしない（旧v0729-Uの世界方位振りは廃止）：
   //  方位角＝鉛直軸まわり（面の向き直し。寝ている面では面内の向き＝プロパティの方位角と同じ）
   //  立面角＝面の水平直交軸まわり（寝ている面はローカルXまわり）／回転＝フェイス法線まわり（中芯は法線軸上）
-  const { pivot } = partRotPivotDir(part);
+  const pivot = rotPivotOf(part);
   let axis, ang = Math.PI / 4;
   if (mode === 'az') {
     // 方位角＝常に右回転（上から見て時計回り。2026-07-30 社長仕様）。連打中は軸をラッチ＝一周同じ向き
@@ -5181,7 +5214,7 @@ function stepPartRotate(part, mode) {
   } else {
     axis = partAxisFor(part, mode);   // 回転＝フェイス法線（ロールでは法線が変わらないので固定不要）
   }
-  rotatePipeAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, ang));
+  rotateSelAround(part, pivot, new THREE.Quaternion().setFromAxisAngle(axis, ang));
 }
 function lineRotate45(part, shift) {   // 起点(grip)まわりに45°回す核（パイプ・エルボ・キャップ・ティー共通。追従中も再利用）
   const { pivot, dirRef } = partRotPivotDir(part);
@@ -5202,19 +5235,18 @@ function pipeRotateSpinStart(mode) {
   if (mode === 'roll' && typeof isBossTool === 'function' && isBossTool(part)) {
     const h = bossHostPipe(part);
     if (h) {
-      _pipeSpin = { part, pivot: h.axisPt.clone(), axis: h.dir.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
+      _pipeSpin = spinRec(part, h.axisPt, h.dir, 0);
       return true;
     }
   }
   // ボスの立面角・方位角スピナー＝起点中心・世界方位の振り（立面角=南北／方位角=東西）を連続で
   if (typeof isBossTool === 'function' && isBossTool(part) && (mode === 'az' || mode === 'el')) {
     const axis = mode === 'el' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
-    const { pivot } = partRotPivotDir(part);
-    _pipeSpin = { part, pivot: pivot.clone(), axis, pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg: 0 };
+    _pipeSpin = spinRec(part, rotPivotOf(part), axis, 0);
     return true;
   }
   // スピナーも常に面基準（2026-07-30 社長仕様。旧v0729-Uの世界方位振りは廃止）
-  const { pivot } = partRotPivotDir(part);
+  const pivot = rotPivotOf(part);
   const n360 = v => ((v % 360) + 360) % 360;
   let axis, baseDeg = 0;   // スピナーの初期表示角＝プロパティの方位角/立面角/回転と同じ絶対角
   if (mode === 'az') {
@@ -5225,21 +5257,32 @@ function pipeRotateSpinStart(mode) {
     if (mode === 'el' && window.__partFaceElev) baseDeg = n360(window.__partFaceElev(part));
     else if (mode === 'roll' && window.__partFaceRoll) baseDeg = n360(window.__partFaceRoll(part));
   }
-  _pipeSpin = { part, pivot: pivot.clone(), axis: axis.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg };
+  _pipeSpin = spinRec(part, pivot, axis, baseDeg);
   return true;
+}
+// スピナーの記録＝主選択だけでなく「一緒に回る仲間」の初期姿勢も控える（複数選択の回転。2026-08-02）
+function spinRec(part, pivot, axis, baseDeg) {
+  consumeMoveArm();
+  const grp = rotSelPartsOf(part).map(p => ({ part: p, pos0: p.position.clone(), quat0: p.quaternion.clone() }));
+  const ann = !!(window.__annRotSpinStart && window.__annHasSel && window.__annHasSel() && window.__annRotSpinStart());
+  return { part, pivot: pivot.clone(), axis: axis.clone(), pos0: part.position.clone(), quat0: part.quaternion.clone(), baseDeg, grp, ann };
 }
 function pipeRotateSpinApply(deg) {
   if (!_pipeSpin) return;
   const s = _pipeSpin, q = new THREE.Quaternion().setFromAxisAngle(s.axis, deg * Math.PI / 180);
-  s.part.quaternion.copy(s.quat0).premultiply(q);
-  s.part.position.copy(s.pivot).add(s.pos0.clone().sub(s.pivot).applyQuaternion(q));
+  for (const g of s.grp) {
+    g.part.quaternion.copy(g.quat0).premultiply(q);
+    g.part.position.copy(s.pivot).add(g.pos0.clone().sub(s.pivot).applyQuaternion(q));
+  }
+  if (s.ann && window.__annRotSpinApply) window.__annRotSpinApply(s.pivot, q);
   if (selectedParts.has(s.part)) setEmissive(s.part, SEL_COLOR);
   _idleSig = null; updateForm();
 }
-function pipeRotateSpinEnd() { _pipeSpin = null; }
+function pipeRotateSpinEnd() { if (_pipeSpin && _pipeSpin.ann && window.__annRotSpinEnd) window.__annRotSpinEnd(); _pipeSpin = null; }
 function pipeRotateSpinCancel() {
   if (!_pipeSpin) return;
-  _pipeSpin.part.position.copy(_pipeSpin.pos0); _pipeSpin.part.quaternion.copy(_pipeSpin.quat0);
+  for (const g of _pipeSpin.grp) { g.part.position.copy(g.pos0); g.part.quaternion.copy(g.quat0); }
+  if (_pipeSpin.ann && window.__annRotSpinCancel) window.__annRotSpinCancel();
   _idleSig = null; _pipeSpin = null;
 }
 function pipeRotateSpinActive() { return !!_pipeSpin; }
@@ -5675,6 +5718,7 @@ function selectPart(obj, additive = false) {
   if (additive) { toggleSelect(obj); return; }
   clearClash();   // 干渉表示中なら赤表示を解除（次の操作で消える仕様）
   if (typeof resetPipeRotState === 'function') resetPipeRotState();   // 選択が変わったらパイプ回転軸をリセット
+  clearSelPivot();   // 選択をやり直したら、決めていた起点（回転の中心）も消す
   if (window.__annClearSel) window.__annClearSel();   // 部品を単独選択/解除したら線選択も解除（部品と排他）
   if (pipeEndDrag && pipeEndDrag.part !== obj) { pipeEndDrag = null; controls.enabled = true; }
   if (dirDrag && dirDrag.part !== obj) { dirDrag = null; controls.enabled = true; clearMarkers(); }
@@ -5720,6 +5764,7 @@ function ungroupSelection() {
 // Ctrl+クリック：対象を選択集合に出し入れする（主選択 selectedPart も更新）
 function toggleSelect(obj) {
   if (!obj) return;                          // 空クリックは現在の選択を保持
+  clearSelPivot();                           // 選択を足し引きしたら起点（回転の中心）は決め直す
   if (selectedParts.has(obj)) {              // 既に選択済み → 外す
     selectedParts.delete(obj);
     setEmissive(obj, 0x000000);
@@ -6584,9 +6629,13 @@ renderer.domElement.addEventListener('pointerdown', e => {
       const pt = movePickParked ? movePickParked.clone() : null;
       endMovePickOrigin();
       if (pt && selectedPart) setGripFromPoint(selectedPart, pt);
+      // 決めた起点は回転（方位角・立面角・回転）の中心にもなる（2026-08-02 社長指示）。
+      // 選択中の部品ぜんぶ＋線が この点を中心に回る＝移動せずに回すだけでもよい。
+      selPivot = pt ? pt.clone() : null;
+      if (pt && window.__originPickMark) window.__originPickMark(pt);   // 中心が見えるよう印は残す
       _idleSig = null; updateForm();
       moveReady = true;                        // ここではまだ動かさない。次のタッチで動き始める
-      if (window.__toast) window.__toast('移動：起点を決めました。次にタッチしてスライドで距離と方向を決めてください');
+      if (window.__toast) window.__toast('起点を決めました：タッチしてスライド＝移動／方位角・立面角・回転＝この点を中心に回す');
       return;
     }
     movePicking = true;                        // ①位置決め開始
@@ -6648,7 +6697,7 @@ renderer.domElement.addEventListener('pointerdown', e => {
   const multiMember = selectedParts.has(part) && selectedParts.size > 1;
   if (part.userData.partType !== 'pipe' && !multiMember) {
     const gl = nearestConnLocal(part, e.clientX, e.clientY);
-    if (gl) { part.userData.gripLocal = gl; resetPipeRotState(); }   // 起点が変わったら回転軸を再計算
+    if (gl) { part.userData.gripLocal = gl; resetPipeRotState(); clearSelPivot(); }   // 起点が変わったら回転軸を再計算（決めていた回転中心も外す）
   } else if (multiMember) {
     // 複数選択中：機点をタップしたらそこを EL基準（起点）にする（2026-07-20 社長要望）。
     // 選択は保ったまま、基準アイテムと起点だけを付け替える。機点から離れた場所を掴んだ時は従来どおり集団移動
@@ -6737,7 +6786,7 @@ window.addEventListener('pointerup', e => {
     dropMovingPart(); return;                                     // ドラッグして離した＝確定
   }
   if (pipeEndDrag) {                                  // 伸縮確定 or 端クリックで起点選択
-    if (!pipeEndDrag.moved) { pipeEndSel = (pipeEndSel === pipeEndDrag.grabbedEnd) ? null : pipeEndDrag.grabbedEnd; resetPipeRotState(); pipeLenSticky = false; }   // クリック＝この端を起点に（COP/傾け）。長さモードは解除
+    if (!pipeEndDrag.moved) { pipeEndSel = (pipeEndSel === pipeEndDrag.grabbedEnd) ? null : pipeEndDrag.grabbedEnd; resetPipeRotState(); clearSelPivot(); pipeLenSticky = false; }   // クリック＝この端を起点に（COP/傾け）。長さモードは解除
     else { pipeLenSticky = true; }                    // スライド(ドラッグ)した＝離してもCOPに戻さず「長さ」入力モードを維持
     pipeEndDrag = null; controls.enabled = true; _idleSig = null; updateForm();
     return;
@@ -6856,6 +6905,7 @@ function selectPartsInRect(x0, y0, x1, y1) {
     }
   }
   if (last) { selectedPart = last; pipeEndSel = null; updateForm(); }   // 主選択を矩形内の1つに
+  clearSelPivot();                                                     // 窓で選び直したら起点（回転の中心）も決め直す
   if (window.__annSelectInRect) window.__annSelectInRect(x0, y0, x1, y1);   // 線分も同じ矩形で選択
   refreshItemList();
 }
@@ -6935,7 +6985,7 @@ window.addEventListener('keydown', e => {
     else if (dirDrag) cancelDirDrag();
     else if (movingPart) cancelMovePart();
     else if (annPlaceMode) cancelAnnPlace();
-    else if (moveReady) { moveReady = false; if (window.__originPickClear) window.__originPickClear(); }
+    else if (moveReady) { moveReady = false; clearSelPivot(); if (window.__originPickClear) window.__originPickClear(); }
     else if (movePickOrigin || movePicking) { movePicking = false; movePickAwait = false; endMovePickOrigin(); }
     else { stopFollow(); selectPart(null); if (window.__annClearSel) window.__annClearSel(); }
     if (moveMode) setMoveMode(false);   // Esc＝「移動」コマンドも取消（進行中の移動は上で取消済み）
@@ -7383,7 +7433,10 @@ let prevT = performance.now();
                || (window.__rotateActive && window.__rotateActive())
                || (window.__mirrorActive && window.__mirrorActive())
                || (window.__trimActive && window.__trimActive());   // 枠囲み・回転・鏡・部分削除の最中は視点固定
-    const lock = modal || followTool || movingPart || dirDrag || pipeEndDrag
+    // 起点を決めている間は Ctrl中でも視点を固定する（2026-08-02 社長指摘：複数選択は
+    // Ctrlを点けたまま行うので、起点をタップしようとすると画面が回ってしまっていた）
+    const pickingOrigin = movePickOrigin || movePicking || movePickAwait || moveReady;
+    const lock = modal || followTool || movingPart || dirDrag || pipeEndDrag || pickingOrigin
               || ((selectedPart || (selectedParts && selectedParts.size)
                    || (window.__annHasSel && window.__annHasSel())) && !ctrlFree);
     controls.enabled = !lock && !boxSel;
@@ -10782,6 +10835,10 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return r;
   };
   window.__originPickClear = () => { clearLineGuide(); clearMarkers(); };
+  // 決めた起点（回転の中心）に印だけ残す＝どこを中心に回るのかが見える（2026-08-02 社長指示）。
+  // 十字カーソルは出さない＝「まだ起点を選んでいる最中」と紛らわしいので、玉ひとつにする。
+  window.__originPickMark = (pt) => { clearLineGuide(); if (pt) guideDot(pt, 0xff8a3c, 0.005); };
+  window.__originPickMarkCount = () => lineGuideGroup.children.length;   // 検証用
   window.__lineGuideCount = () => lineGuideGroup.children.length;   // 検証用：十字カーソル等が出ているか
   // 起点 P1 から水平面上の点に角度刻み angleStep を適用（0=自由）
   function applyAngleSnap(P1, pt) {
@@ -13098,6 +13155,42 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     refreshHandles();   // 全選択線の端点ハンドルを現在位置へ（窓選択で lineSel 無しでも置き去りにしない）
   };
   window.__annMoveEnd = () => { annMoveSnap = null; };
+  // ---- 選択中の線・寸法を、起点(pivot)まわりに q だけ回す（複数選択の方位角/立面角/回転。2026-08-02 社長指示） ----
+  // 部品と一緒に回さないと、寸法だけ置き去りになる。線・寸法の「向きを持つ値」も同じ回転を掛ける。
+  const annRotRec = (r, s, pivot, q) => {
+    const pt = (v) => pivot.clone().add(v.clone().sub(pivot).applyQuaternion(q));
+    const dir = (v) => v.clone().applyQuaternion(q);
+    r.a.copy(pt(s.a)); r.b.copy(pt(s.b));
+    if (s.ap) { const p = pt(new V3(s.ap[0], s.ap[1], s.ap[2])); r.style.angP2 = [p.x, p.y, p.z]; }
+    if (s.dd) { const d = dir(new V3(s.dd.x, s.dd.y, s.dd.z)); r.style.dimDir = { x: d.x, y: d.y, z: d.z }; }
+    if (s.fd) { const d = dir(new V3(s.fd.x, s.fd.y, s.fd.z)); r.style.dimFixDir = { x: d.x, y: d.y, z: d.z }; }
+    if (s.fp) { const p = pt(new V3(s.fp.x, s.fp.y, s.fp.z)); r.style.dimFixPt = { x: p.x, y: p.y, z: p.z }; }
+    rebuildAnn(r);
+  };
+  const annSnapOf = (r) => ({ r, a: r.a.clone(), b: r.b.clone(),
+    ap: (r.style && r.style.angP2) ? r.style.angP2.slice() : null,
+    dd: (r.style && r.style.dimDir) ? { ...r.style.dimDir } : null,
+    fd: (r.style && r.style.dimFixDir) ? { ...r.style.dimFixDir } : null,
+    fp: (r.style && r.style.dimFixPt) ? { ...r.style.dimFixPt } : null });
+  window.__annRotateSelBy = (pivot, q) => {          // 45°送り＝今の姿勢から1回だけ回す
+    if (!selAnns.size) return;
+    for (const r of selAnns) annRotRec(r, annSnapOf(r), pivot, q);
+    refreshAnnHi(); refreshHandles();
+  };
+  let annRotSnap = null;                              // スピナー＝押した時の姿勢から絶対角で回す
+  window.__annRotSpinStart = () => { if (!selAnns.size) return false; annRotSnap = [...selAnns].map(annSnapOf); return true; };
+  window.__annRotSpinApply = (pivot, q) => {
+    if (!annRotSnap) return;
+    for (const s of annRotSnap) annRotRec(s.r, s, pivot, q);
+    refreshAnnHi(); refreshHandles();
+  };
+  window.__annRotSpinEnd = () => { annRotSnap = null; };
+  window.__annRotSpinCancel = () => {
+    if (!annRotSnap) return;
+    const idq = new THREE.Quaternion();
+    for (const s of annRotSnap) annRotRec(s.r, s, new V3(), idq);
+    refreshAnnHi(); refreshHandles(); annRotSnap = null;
+  };
   // 選択中の線をまとめて (dx,dy,dz) だけ平行移動（高さ/EL一括変更で部品と一緒に動かす用）
   window.__annShiftSelected = (dx, dy, dz) => {
     if (!selAnns.size) return;
@@ -14312,7 +14405,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 明暗ボタンは廃止（2026-07-19 社長決定＝統一グレーに一本化）
   $('cmdDup').onclick = duplicate;
   $('cmdMirror').onclick = mirror;
-  { const b = $('cmdRotate'); if (b) b.onclick = rotateCmd; }   // 回転コマンド（2026-07-21 社長要望）
+  // リボンの「回転」コマンドは廃止（2026-08-02 社長判断）。起点を決めて 方位角／立面角／回転 で3軸とも回せる
+  // ようになったため、鉛直軸まわりだけの回転コマンドは役目を終えた。角度の数値入力はボタン長押しの角度スピナーで行う。
+  // （rotateCmd 等の実装は内部に残置＝他コマンドの解除処理から参照されるため）
   // 詳細図：タップ＝枠モード/登録、長押し＝一覧（プレビュー・名前編集・削除）。2026-07-21 社長要望
   { const b = $('cmdDetail');
     if (b) {

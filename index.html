@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0802H — SKT-HD ♦</title>
+<title>配管3D v0802I — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260802b">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260802b">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260802b">
-<meta name="apple-mobile-web-app-title" content="配管3D v0802H">
+<meta name="apple-mobile-web-app-title" content="配管3D v0802I">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -540,7 +540,6 @@
     <div class="rb-group">
       <div class="rb-btns">
         <button id="cmdMove"   title="移動コマンド：押してから対象を選んでドラッグ／対象を選んでから押してドラッグ。Shift（タッチはシフト）＋ドラッグ＝上下(Y)移動。1回動かすと自動で終了（Esc・再押下で取消）"><span class="ic">✥</span>移動</button>
-        <button id="cmdRotate" title="回転コマンド：選択中のアイテムを回す。①回転の中心をタップ ②角度（45°刻み・数値入力可）を決めてタップで確定。方角を間違えた配管の向き直しに使う"><span class="ic">⟳</span>回転</button>
         <button id="cmdDup"    title="選択中のアイテムを複製"><span class="ic">⧉</span>複製</button>
         <button id="cmdMirror" title="選択中のアイテムを左右反転（鏡）"><span class="ic">◧</span>鏡</button>
         <button id="cmdGroup"  title="選択中の複数アイテムをグループ化（以後ひとつとして選択・移動）"><span class="ic">▣</span>グループ</button>
@@ -597,6 +596,7 @@
         <li>左下の<b>コントローラー</b>（取消を中心に扇形に開く）でマウス専用の操作を代替：<b>方位角＝水平に45°</b>（北→東まわり）、<b>立面角＝45°ずつ起こす・寝かす</b>、<b>回転＝部品の軸まわりに45°</b>、<b>Shift／Ctrl</b>、<b>削除</b>、<b>取消</b>（Esc相当）。<b>取消の長押し＝ボタンをたたむ／タップで開く</b></li>
         <li>フランジ等が<b>真上・真下を向いている時</b>は、方位角＝<b>起点中心に東西へ振る</b>・立面角＝<b>南北へ振る</b>（回転と重複しない・ボスと同じ）</li>
         <li>配置済みの部品や線を選択中は<b>方位角／立面角／回転ボタンを長押し（0.6秒）＝角度スピナー</b>（その軸の任意角）。<b>▲▼で0.5°刻み</b>（長押しで連続）、<b>3D画面タップで確定</b>、<b>取消ボタンで取消</b></li>
+        <li><b>複数選択したまま回す</b>＝<b>移動</b>を押して<b>起点（回す中心）をタップ→もう一度タップで確定</b>。あとは<b>方位角／立面角／回転</b>でその点を中心に<b>選択したアイテムぜんぶ（寸法・線も）まとめて</b>回ります。長押しの角度スピナーで<b>角度の数値入力</b>も同じ中心で効きます。起点を決めずに回せば従来どおり部品の起点が中心です（起点選びの間は画面が動かないので、狙った点を確実に取れます）</li>
         <li>細かい採寸作業は<b>Bluetoothマウスを接続</b>するとPCと同じく右クリック・カーソル吸着が使えます</li>
       </ul>
       <h3>部品を置く（パレット）</h3>
@@ -840,7 +840,7 @@
   </div>
 
   <script src="lib/three.min.js"></script>
-  <script src="lib/OrbitControls.js"></script>
+  <script src="lib/OrbitControls.js?v=20260802i"></script>   <!-- ?v= は lib を変えた時だけ上げる（回転のデッドゾーン追加 v0802-I） -->
   <!-- app.js は読み込み時刻でキャッシュ回避して取得（GitHub PagesがHTMLを10分キャッシュしても、常に最新JSを読む）。
        v=20260629d 相当。安定後は固定バージョンに戻してよい。 -->
   <script>document.write('<scr' + 'ipt src="app.js?v=' + Date.now() + '"></scr' + 'ipt>');</script>
