@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-I';
+const APP_VER = 'v0802-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5688,8 +5688,10 @@ function placeLegInput(box, inp, worldMid, outDir, valueMm) {
   const p2 = worldMid.clone().add(outDir.clone().multiplyScalar(0.05)).project(cam);   // 外向きの画面方向
   let ox = p2.x - p.x, oy = -(p2.y - p.y);
   const l = Math.hypot(ox, oy) || 1; ox /= l; oy /= l;
-  const off = 22;
   box.style.display = 'inline-flex';
+  // 線に被せない（2026-08-02 社長指摘）。外向きへ「欄の半分＋余白」だけ離す＝
+  // 欄のふちが線に触れない。横に出る時は幅の半分、上下に出る時は高さの半分で効かせる。
+  const off = 10 + Math.abs(ox) * box.offsetWidth / 2 + Math.abs(oy) * box.offsetHeight / 2;
   box.style.left = Math.round(sx + ox * off - box.offsetWidth / 2) + 'px';
   box.style.top = Math.round(sy + oy * off - box.offsetHeight / 2) + 'px';
   if (document.activeElement !== inp) inp.value = valueMm;     // 編集中は上書きしない
@@ -11576,7 +11578,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       return best || new V3(0, 1, 0);
     };
     const pushDim = (a, b, lvl) => {
-      if (a.distanceTo(b) < 0.02 || dimExists(a, b)) return;
+      // 短い区間も入れる（ガスケットの3mmなど。2026-08-02 社長指示。旧＝20mm未満は捨てていた）
+      if (a.distanceTo(b) < 0.0015 || dimExists(a, b)) return;
       if (items.some(it => it.st.dimKind !== 'leader' && ((near(it.a, a) && near(it.b, b)) || (near(it.a, b) && near(it.b, a))))) return;
       const d = b.clone().sub(a).normalize();
       const axis = Math.max(Math.abs(d.x), Math.abs(d.y), Math.abs(d.z)) > 0.9999;
@@ -11594,29 +11597,63 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // ラン両端のキーポイント（エルボの工作点・ティーの芯・母管中心・管端）に加えて、
     // **フランジはフェイス面**・バルブ／仮管／ガスケット／フレキ／サイドグラス／レデューサは両端の面を基準にする。
     // 隣り合う基準どうしで寸法を入れる＝端から積み上げず、フランジ面を基準に測れる（2026-08-02 社長指示）。
+    // 拾い方は「つながり」ではなく「ランの芯線の上に乗っているか」で見る（2026-08-02 社長指摘への対策）。
+    // 継手のつながりだけを頼りにすると、ほんの少しの隙間・角度ずれで端のフランジが仲間から外れ、
+    // 寸法が管端（溶接側）で止まって基準がバラバラになっていた。芯線基準なら必ずフェイス面まで届く。
     const STATION_ENDS = ['valve', 'gasket', 'spool', 'flex', 'sight', 'reducer'];
+    const LINE_TOL = 0.004;   // 芯線からのずれ（4mm以内＝このランの部品）
+    const SPAN_GAP = 0.004;   // 区間のつながり（4mmまでの隙間はつながっているとみなす）
     const stationsOf = (rk) => {
       const A = rk.KA.pt, B = rk.KB.pt;
       const d = B.clone().sub(A);
       if (d.lengthSq() < 1e-6) return [];
       d.normalize();
       const tOf = (p) => p.clone().sub(A).dot(d);
+      const perpOf = (p) => { const v = p.clone().sub(A); return v.addScaledVector(d, -v.dot(d)).length(); };
       const tB = tOf(B);
-      const list = [{ t: 0, pt: A.clone() }, { t: tB, pt: B.clone() }];
-      for (const q of rk.r.parts) {
+      // ①このランの芯線に乗っている部品を拾う（フランジ＝フェイス面だけ／繋ぎ物＝両端の面）
+      const cand = [];
+      for (const q of placedParts) {
         const u = q.userData;
-        const ls = u.partType === 'flange' ? [u.faceLocal]
-                 : (STATION_ENDS.includes(u.partType) ? [u.backLocal, u.faceLocal] : null);
-        if (!ls) continue;
-        for (const l of ls) {
-          if (!l) continue;
-          const p = connModelPos(q, l), t = tOf(p);
-          if (t > 0.006 && t < tB - 0.006) list.push({ t, pt: p.clone() });
+        if (u.hidden || !u.placed || !u.faceLocal || !u.backLocal) continue;
+        const isFlange = u.partType === 'flange';
+        if (!isFlange && !STATION_ENDS.includes(u.partType)) continue;
+        const f = connModelPos(q, u.faceLocal), b = connModelPos(q, u.backLocal);
+        if (perpOf(f) > LINE_TOL || perpOf(b) > LINE_TOL) continue;      // 芯線から外れている＝別のラン
+        const tf = tOf(f), tb = tOf(b);
+        cand.push({ lo: Math.min(tf, tb), hi: Math.max(tf, tb), pts: isFlange ? [{ t: tf, pt: f }] : [{ t: tf, pt: f }, { t: tb, pt: b }] });
+      }
+      // ②ランの範囲に触れているものから順に取り込み、範囲を広げる（端のフランジのフェイス面まで伸ばす）
+      let lo = Math.min(0, tB), hi = Math.max(0, tB);
+      const taken = new Set();
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const c of cand) {
+          if (taken.has(c) || c.hi < lo - SPAN_GAP || c.lo > hi + SPAN_GAP) continue;
+          taken.add(c); lo = Math.min(lo, c.lo); hi = Math.max(hi, c.hi); grew = true;
         }
       }
+      // ③基準点＝ランの端（工作点・管端）＋取り込んだ部品の面。範囲が伸びた側は端の代わりに面が基準になる
+      const list = [];
+      const keepA = rk.KA.kind !== 'end' || lo > -0.0005;   // 工作点（エルボの角・ティー芯・母管中心）は必ず残す
+      const keepB = rk.KB.kind !== 'end' || hi < tB + 0.0005;
+      if (keepA) list.push({ t: 0, pt: A.clone() });
+      if (keepB) list.push({ t: tB, pt: B.clone() });
+      for (const c of taken) for (const s of c.pts) list.push({ t: s.t, pt: s.pt.clone() });
+      // ④ボス（枝）の取り付け位置も同じ連なりの基準にする＝枝の位置が端からの積み上げにならない
+      for (const p of placedParts) {
+        const u = p.userData;
+        if (u.hidden || u.partType !== 'sw' || (u.sw || {}).kind !== 'BOSS' || !u.placed) continue;
+        const host = bossHostPipe(p);
+        if (!host || perpOf(host.axisPt) > LINE_TOL) continue;
+        const t = tOf(host.axisPt);
+        if (t > lo - SPAN_GAP && t < hi + SPAN_GAP) list.push({ t, pt: host.axisPt.clone() });
+      }
       list.sort((x, y) => x.t - y.t);
+      // ⑤重なった基準（フランジ面とガスケット面など）だけをひとつにまとめる。
+      //   ガスケットの3mmは基準として残す＝ガスケット・バルブにも寸法が入る（2026-08-02 社長指示）
       const out = [];
-      for (const s of list) if (!out.length || s.t - out[out.length - 1].t > 0.006) out.push(s);   // 6mm以内は同じ基準（ガスケット厚など）
+      for (const s of list) if (!out.length || s.t - out[out.length - 1].t > 0.0005) out.push(s);
       return out;
     };
     const runs = autoDimRuns();
@@ -11625,34 +11662,39 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       // 区間ごとの寸法＝基準（工作点・フランジのフェイス面・バルブ/仮管/ガスケットの面）の隣どうし。
       // これでバルブ・仮管・ガスケットにも必ず寸法が付き、フランジのある所はフェイス面が基準になる。
       const sts = stationsOf(rk);
+      if (sts.length < 2) continue;
       for (let i = 0; i + 1 < sts.length; i++) pushDim(sts[i].pt, sts[i + 1].pt, 1);
-      pushDim(rk.KA.pt, rk.KB.pt, sts.length > 2 ? 2 : 1);                // 芯々の総長（区間があるときは一段外へ）
+      const P0 = sts[0].pt, P1 = sts[sts.length - 1].pt;
+      pushDim(P0, P1, sts.length > 2 ? 2 : 1);                            // 総長（区間があるときは一段外へ）
       const HORZ4 = AXES6.filter(n => Math.abs(n.y) < 0.5);
       const pushEl = (pt, txt, perp) => {
         if (elTaken(txt) || items.some(it => it.st.dimKind === 'leader' && it.st.dimText === txt)) return;
         items.push({ a: pt.clone(), b: pt.clone().addScaledVector(perp, 0.5), st: Object.assign({}, styleFor('dim'), { dimKind: 'leader', dimText: txt }) });
       };
       if (Math.abs(rk.r.dir.y) < 0.02) {                                  // 水平ラン＝COP EL（水平に500逃がす・同じ値は1つだけ）
-        const mid = rk.KA.pt.clone().add(rk.KB.pt).multiplyScalar(0.5);
+        const mid = P0.clone().add(P1).multiplyScalar(0.5);
         const elMm = Math.round(mid.y * 1000);
         pushEl(mid, `COP EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4.filter(n => Math.abs(n.dot(rk.r.dir)) < 0.5), mid));
-      } else if (Math.abs(rk.r.dir.y) > 0.98) {                           // 立面ラン＝端面（フランジ面・管端）にEL（2026-07-31 社長指示）
-        for (const K of [rk.KA, rk.KB]) {
-          if (K.kind !== 'end') continue;
-          const elMm = Math.round(K.pt.y * 1000);
-          pushEl(K.pt, `EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4, K.pt));
+      } else if (Math.abs(rk.r.dir.y) > 0.98) {
+        // 立面ラン＝フランジのフェイス面（＝継手の合わせ面）と端面にEL（2026-08-02 社長図に合わせる）。
+        // 高さの基準はここでしか読めないので、面ごとに入れて同じ値は1つにまとめる。
+        const faceYs = [];
+        for (const q of placedParts) {
+          const u = q.userData;
+          if (u.hidden || !u.placed || u.partType !== 'flange' || !u.faceLocal) continue;
+          const f = connModelPos(q, u.faceLocal);
+          if (Math.hypot(f.x - P0.x, f.z - P0.z) > LINE_TOL) continue;    // このランの芯線上のフランジだけ
+          const t = f.clone().sub(P0).dot(rk.r.dir);
+          const span = P1.clone().sub(P0).dot(rk.r.dir);
+          if (t < Math.min(0, span) - SPAN_GAP || t > Math.max(0, span) + SPAN_GAP) continue;
+          faceYs.push(f);
+        }
+        for (const K of [rk.KA, rk.KB]) if (K.kind === 'end') faceYs.push(K.pt);
+        for (const pt of faceYs) {
+          const elMm = Math.round(pt.y * 1000);
+          pushEl(pt, `EL${elMm >= 0 ? '+' : ''}${elMm}`, bestDirAmong(HORZ4, pt));
         }
       }
-    }
-    for (const p of placedParts) {                                        // ボス＝近い側の基準（工作点/端面）→取り付け位置
-      const u = p.userData;
-      if (u.hidden || u.partType !== 'sw' || (u.sw || {}).kind !== 'BOSS' || !u.placed) continue;
-      const host = bossHostPipe(p);
-      if (!host) continue;
-      const rk = runsK.find(x => x.r.pipes.includes(host.pipe));
-      if (!rk) continue;
-      const K = host.axisPt.distanceTo(rk.KA.pt) <= host.axisPt.distanceTo(rk.KB.pt) ? rk.KA.pt : rk.KB.pt;
-      pushDim(K, host.axisPt);
     }
     autoGenStart(items, '自動採寸');
   }
