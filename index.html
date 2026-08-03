@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0804E — SKT-HD ♦</title>
+<title>配管3D v0804F — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260803l">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260803l">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260803l">
-<meta name="apple-mobile-web-app-title" content="配管3D v0804E">
+<meta name="apple-mobile-web-app-title" content="配管3D v0804F">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -106,6 +106,10 @@
     padding: 5px 7px; border-radius: 6px; border: 1px solid #36436b; background: #0f1830; color: #dbe4f3; }
   #calcOut { text-align: right; font: bold 20px/1.5 Consolas,Meiryo,monospace; color: #7fd1ff;
     min-height: 30px; padding: 0 4px; overflow: hidden; }
+  #calcCopy { font: 11px/1.2 Meiryo,sans-serif; padding: 5px 8px; border: 1px solid #36436b; border-radius: 6px;
+    background: #2a2f45; color: #ffd08a; cursor: pointer; }
+  #calcCopy:active { background: #2f6fd8; color: #fff; }
+  body.light #calcCopy { background: #eef2f8; color: #7a5a1f; border-color: #c4ccda; }
   #calcKeys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 4px; }
   #calcKeys button { font: 15px Meiryo,sans-serif; padding: 9px 0; border: 1px solid #36436b; border-radius: 7px;
     background: #1b2545; color: #dbe4f3; cursor: pointer; }
@@ -769,7 +773,10 @@
     <div class="il-head" id="calcHead" title="ドラッグで移動">電卓<span id="calcClose" title="閉じる（リボンの電卓で再表示）">✕</span></div>
     <div id="calcBody">
       <input id="calcExpr" type="text" inputmode="text" placeholder="100+200*3" autocomplete="off">
-      <div id="calcOut">0</div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button id="calcCopy" title="答えをコピー（切寸などの欄に貼り付けられます）" style="flex:none">コピー</button>
+        <div id="calcOut" style="flex:1">0</div>
+      </div>
       <div id="calcKeys">
         <button class="fn" data-k="C">C</button><button class="fn" data-k="←">←</button>
         <button class="fn" data-k="(">(</button><button class="fn" data-k=")">)</button>

@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-E';
+const APP_VER = 'v0804-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -6043,6 +6043,8 @@ function applyLegInputs() {
   const z = (Math.abs(parseFloat(legZInput.value)) || 0) / 1000 * sz;
   setPartByOrigin(dirDrag.part, new THREE.Vector3(dirDrag.startOrigin.x + x, dirDrag.startOrigin.y, dirDrag.startOrigin.z + z));
   applyGroupDelta(dirDrag.group, dirDrag.part, dirDrag.primaryStartPos);
+  // 一緒に選択している線・寸法も同じだけ動かす（ドラッグ経路と同じ。2026-08-04 社長報告：フォーム入力だと寸法が置き去り）
+  if (dirDrag.annFollow) { const d = dirDrag.part.position.clone().sub(dirDrag.primaryStartPos); window.__annMoveApply(d.x, d.y, d.z); }
   dirDrag.locked = true;
   drawDirGuide();
 }
@@ -6072,6 +6074,8 @@ function applyDistInput() {
                                                   dirDrag.startOrigin.y + dy * D,
                                                   dirDrag.startOrigin.z + dz * D));
   applyGroupDelta(dirDrag.group, dirDrag.part, dirDrag.primaryStartPos);
+  // 一緒に選択している線・寸法も同じだけ動かす（ドラッグ経路と同じ。2026-08-04 社長報告：フォーム入力だと寸法が置き去り）
+  if (dirDrag.annFollow) { const d = dirDrag.part.position.clone().sub(dirDrag.primaryStartPos); window.__annMoveApply(d.x, d.y, d.z); }
   dirDrag.locked = true;
   drawDirGuide();
 }
@@ -6083,7 +6087,8 @@ if (hYInput) {
     else if (pipeSelected()) applyPipeCOP();   // パイプCOP（端クリック＝その端だけ傾け／未選択＝全体）
     else applyHeightInput();
   };
-  hYInput.addEventListener('input', applyHY);    // スピナー長押し・連続増減でも追従
+  // 入力の途中（打鍵ごと）には適用しない＝Enter・フォーカス外し・スピナーの確定(change)でだけ実行
+  // （「300」と打つ途中の3mm/30mmで動いてしまうのを防ぐ。2026-08-04 社長指示「入力確定後に実行」）
   hYInput.addEventListener('change', applyHY);
   if (hDirInput) {                                // 向きを選んだら、その場でその方角へ動かし直す
     hDirInput.addEventListener('change', () => { if (dirActive()) { applyDistInput(); updateForm(); } });
@@ -6105,7 +6110,7 @@ if (hYInput) {
       }
     }
     if (e.key === 'Enter') {
-      if (dirActive()) { applyDistInput(); dirDrag = null; clearMarkers(); updateForm(); }   // 距離確定→ロック解除・補助線消去
+      if (dirActive()) { applyDistInput(); if (dirDrag && dirDrag.annFollow) window.__annMoveEnd(); dirDrag = null; clearMarkers(); updateForm(); }   // 距離確定→ロック解除・補助線消去（追従した線も確定）
       else if (lineElRef()) {
         window.__lineApplyEl(parseFloat(hYInput.value) || 0); updateForm();   // 線分EL確定（起点指定の有無で全体/片側）
         // 構築線：EL決定の後に方位角スピナーを出し、角度Enterで選択ごと閉じる（2026-06-13 社長指示）
@@ -6122,10 +6127,9 @@ if (hYInput) {
 }
 [legXInput, legZInput].forEach(inp => {
   if (!inp) return;
-  inp.addEventListener('input', applyLegInputs);    // スピナー長押し・連続増減でも追従
-  inp.addEventListener('change', applyLegInputs);
+  inp.addEventListener('change', applyLegInputs);   // 確定(change)でだけ実行（2026-08-04 社長指示：入力途中に動かさない）
   inp.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { applyLegInputs(); dirDrag = null; clearMarkers(); updateForm(); inp.blur(); }  // 確定→ロック解除・補助線消去＋キーボードを閉じる（iPad）
+    if (e.key === 'Enter') { applyLegInputs(); if (dirDrag && dirDrag.annFollow) window.__annMoveEnd(); dirDrag = null; clearMarkers(); updateForm(); inp.blur(); }  // 確定→ロック解除・補助線消去＋キーボードを閉じる（iPad）
     e.stopPropagation();
   });
 });
@@ -11899,7 +11903,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   [lnX, lnZ, lnY].forEach(inp => {
     if (!inp) return;
     // 空欄の間は適用しない（全消去しても線を潰さず＝消さず、続けて打ち直せる）
-    inp.addEventListener('input', () => { if (inp.value.trim() === '') return; applyLineLegs(false); });    // スピナー長押し・連続増減でも追従
+    // 確定(change)でだけ適用＝打っている途中の数字で線が動かない（2026-08-04 社長指示）
     inp.addEventListener('change', () => { if (inp.value.trim() === '') return; applyLineLegs(false); });
     inp.addEventListener('keydown', e => {
       e.stopPropagation();
@@ -11909,7 +11913,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   });
   if (lnD) {
     // 空欄の間は適用しない（全消去でも線を残し、続けて入力できる）
-    lnD.addEventListener('input', () => { if (lnD.value.trim() === '') return; applyLineDistance(false); });   // スピナー長押しでも追従
+    // 確定(change)でだけ適用（2026-08-04 社長指示：入力途中に動かさない）
     lnD.addEventListener('change', () => { if (lnD.value.trim() === '') return; applyLineDistance(false); });
     lnD.addEventListener('keydown', e => {
       e.stopPropagation();
@@ -13819,7 +13823,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     rebuildAnn(r); refreshAnnHi();
   };
   let dimValEsc = false;   // Esc＝取消（blurで確定させない）
-  dimValInput.addEventListener('input', () => applyDimVal(false));
+  dimValInput.addEventListener('change', () => applyDimVal(false));   // 確定(change)でだけ適用（2026-08-04 社長指示：入力途中に書き換えない）
   dimValInput.addEventListener('keydown', e => {
     e.stopPropagation();
     if (e.key === 'Enter') { e.preventDefault(); applyDimVal(true); dimValInput.blur(); }
@@ -14826,6 +14830,24 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       head.addEventListener('pointerup', endDrag);
       head.addEventListener('pointercancel', endDrag);
     }
+    // 答えのコピー（2026-08-04 社長要望）：クリップボードへ。切寸などの入力欄へ貼り付けて使う
+    const copyBtn = document.getElementById('calcCopy');
+    if (copyBtn) copyBtn.addEventListener('click', async e => {
+      e.stopPropagation();
+      const t2 = (out.textContent || '').trim();
+      if (!t2 || t2 === '—') { if (window.__toast) window.__toast('コピーできる答えがありません'); return; }
+      let done = false;
+      try { await navigator.clipboard.writeText(t2); done = true; } catch (err) {}
+      if (!done) {   // クリップボードAPIが使えない環境向けの保険
+        try {
+          const ta = document.createElement('textarea'); ta.value = t2;
+          ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+          document.body.appendChild(ta); ta.select();
+          done = document.execCommand('copy'); ta.remove();
+        } catch (err) {}
+      }
+      if (window.__toast) window.__toast(done ? `答えをコピーしました：${t2}` : 'コピーできませんでした');
+    });
     ['pointerdown', 'click', 'wheel'].forEach(ev => panel.addEventListener(ev, e => e.stopPropagation()));
     if (localStorage.getItem('p3d_calc_open') === '1') setOpen(true);
     window.__calcEval = calc;            // e2e検証用
