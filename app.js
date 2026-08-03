@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-C';
+const APP_VER = 'v0804-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3604,7 +3604,10 @@ function beginMoveAfterOrigin(cx, cy) {
   } else if (window.__annHasSel && window.__annHasSel() && typeof startAnnPlace === 'function' && startAnnPlace(true)) {
     // 線・寸法だけの選択も部品と同じ流れ＝まず直線移動、ダブルタップ／長押しで自由移動、タップで確定
     controls.enabled = false;
-    if (annPlaceMode) annPlaceMode.startHit = planeHitAt(cx, cy, annPlaceMode.start.y) || annPlaceMode.start.clone();
+    if (annPlaceMode) {
+      annPlaceMode.startHit = planeHitAt(cx, cy, annPlaceMode.start.y) || annPlaceMode.start.clone();
+      annPlaceMode.downX = cx; annPlaceMode.downY = cy;   // 縦寄り／横寄りの判定用（垂直の直線移動）
+    }
     _annTap = { t: (window.performance ? performance.now() : 0), x: cx, y: cy };   // 続けてのタップ＝ダブルタップ判定用
     clearTimeout(freeHoldTimer);
     freeHoldTimer = setTimeout(() => { annPlaceFree(cx, cy); }, 500);   // 長押し＝自由移動へ
@@ -3693,6 +3696,34 @@ function moveAnnPlace(cx, cy) {
     clearMarkers();
     if (tgt.snapped) addSnapMarker(tgt.point, markerRadiusFor(null, true));   // 吸着した点を見せる
     return;
+  }
+  // 画面での動きが縦寄りなら「垂直の直線移動」＝起点の真上/真下へまっすぐ
+  // （引出し線の肘の伸縮と同じ流儀。水平面の交点では上下に動かせない。2026-08-04 社長要望）
+  if (annPlaceMode.downX != null) {
+    const dxs = cx - annPlaceMode.downX, dys = cy - annPlaceMode.downY;
+    if (Math.abs(dys) > Math.abs(dxs) && Math.hypot(dxs, dys) > 6) {
+      const cam2 = activeCam();
+      const nrm = new THREE.Vector3(); cam2.getWorldDirection(nrm); nrm.y = 0;
+      if (nrm.lengthSq() < 1e-9) nrm.set(0, 0, 1);
+      nrm.normalize();
+      const rect2 = renderer.domElement.getBoundingClientRect();
+      placeNdc.x = ((cx - rect2.left) / rect2.width) * 2 - 1;
+      placeNdc.y = -((cy - rect2.top) / rect2.height) * 2 + 1;
+      placeRay.setFromCamera(placeNdc, cam2);
+      const pl = new THREE.Plane().setFromNormalAndCoplanarPoint(nrm, modelGroup.localToWorld(annPlaceMode.start.clone()));
+      const hitV = new THREE.Vector3();
+      if (placeRay.ray.intersectPlane(pl, hitV)) {
+        const y = Math.round(modelGroup.worldToLocal(hitV).y * 1000) / 1000;   // 1mm刻み
+        const to = new THREE.Vector3(annPlaceMode.start.x, y, annPlaceMode.start.z);
+        const d2 = to.clone().sub(annPlaceMode.ref);
+        window.__annMoveApply(d2.x, d2.y, d2.z);
+        annPlaceMode.cur = to.clone();
+        if (Math.abs(y - annPlaceMode.start.y) > 1e-6) annPlaceMode.moved = true;
+        clearMarkers();
+        addGuideTriangle(annPlaceMode.start.clone(), to, 0xffcc33);
+        return;
+      }
+    }
   }
   // 直線移動＝部品と同じ。指を置いた所からの差分を45°（または指定角）へ丸め、その向きへ真っ直ぐ
   const hit = planeHitAt(cx, cy, annPlaceMode.start.y);
@@ -14532,9 +14563,15 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           placeRay.setFromCamera(placeNdc, cam2);
           const pl = new THREE.Plane().setFromNormalAndCoplanarPoint(nrm, modelGroup.localToWorld(fix.clone()));
           const hitV = new V3();
-          if (placeRay.ray.intersectPlane(pl, hitV)) pos = new V3(fix.x, modelGroup.worldToLocal(hitV).y, fix.z);
-          else pos = new V3(fix.x, pos.y, fix.z);
+          if (placeRay.ray.intersectPlane(pl, hitV)) {
+            // 高さは「ドラッグ開始からの差分」で追う。鉛直面は矢の先(fix)を通るので、
+            // 離れた肘の画面位置から絶対値で拾うと視差ぶん飛ぶ（掴んだ瞬間に下へ落ちる。2026-08-04 社長確認で発覚）
+            const yHit = modelGroup.worldToLocal(hitV).y;
+            if (lineDrag.vBase == null) { lineDrag.vBase = yHit; lineDrag.vStartY = cur.y; }
+            pos = new V3(fix.x, lineDrag.vStartY + (yHit - lineDrag.vBase), fix.z);
+          } else pos = new V3(fix.x, pos.y, fix.z);
         } else {                                             // 横寄り＝水平（東西 or 南北）に伸ばす
+          lineDrag.vBase = null;                             // 縦へ切り替わったら基準を取り直す
           const d = pos.clone().sub(fix);
           pos = (Math.abs(d.x) >= Math.abs(d.z)) ? new V3(pos.x, fix.y, fix.z) : new V3(fix.x, fix.y, pos.z);
         }
