@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-C';
+const APP_VER = 'v0803-D';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1232,16 +1232,20 @@ function makeFlange(opts) {
 
   // フェイス（前面 +Y 側）。RF＝ボルト穴の内側まで広がるガスケット座
   // ※LJはフラット面（ガスケット面はスタブエンドのラップ側が持つ）ため座を付けない
-  if (o.face === 'RF' && o.type !== 'LJ') {
-    const rfH = Math.max(0.0015, thk * 0.12);
+  const rfOn = (o.face === 'RF' && o.type !== 'LJ');
+  const rfH = rfOn ? Math.max(0.0015, thk * 0.12) : 0;   // ガスケット座の高さ（機点＝座の面に置くため外へ出す）
+  if (rfOn) {
     // RF（ガスケット座）外径＝規格の座径 g（JIS B2220 / JPI・ASME）。規格値を最優先で使う。
     // 規格 g は必ずボルト穴の内縁より内側に収まるため、穴かぶりは原理的に起きない。
     // 規格値が無いクラス（JPI 600 等）のみ、ボルト穴内縁の内側に収める安全式でフォールバック。
     const gDia = rfFaceDia(o.cls, o.sizeA);
     const rfOR = gDia != null ? (gDia / 2 / 1000)
                               : Math.max(boreR + 0.002, bcR - holeR - 0.003);
+    // レジューシングはブラインドと同じで「座面が全体にある」＝小径の穴だけを抜いた円板
+    // （2026-08-03 社長指示。旧＝大径のボアまで抜けた輪だったので座が足りなかった）
     const rf = isBlind
       ? plateWithHoles(rfOR, rfH, [])
+      : isRDF ? plateWithHoles(rfOR, rfH, [{ x: rdfX, y: 0, r: rdfOutR }])
       : ringGeo(rfOR, boreR, rfH);
     rf.translate(0, front + rfH / 2, 0); add(rf);
   }
@@ -1260,11 +1264,14 @@ function makeFlange(opts) {
 
   g.userData.partType = 'flange';
   g.userData.flange = { ...o };
-  if (isRDF) {   // 機点＝フェイスは板面の中心／背面は小径の穴の中心（偏心はx寄せ）
-    g.userData.faceLocal = new THREE.Vector3(0, front, 0);
+  if (isRDF) {
+    // 機点のフェイス＝**ガスケット座の面**（他のフランジと同じ高さ）。板面のままだと
+    // ガスケット自動挿入で座と重なる（2026-08-03 社長報告）。背面は小径の穴の中心。
+    const fy = front + rfH;
+    g.userData.faceLocal = new THREE.Vector3(0, fy, 0);
     g.userData.backLocal = new THREE.Vector3(rdfX, back, 0);
-    // 小径の穴の「フェイス側」にも機点を置く＝表からパイプを合わせる時のスナップ先（2026-08-03 社長指示）
-    g.userData.extraLocals = [new THREE.Vector3(rdfX, front, 0)];
+    // 小径の穴の「フェイス側」にも機点＝表からパイプを合わせる時のスナップ先（偏心は寄った位置）
+    g.userData.extraLocals = [new THREE.Vector3(rdfX, fy, 0)];
   }
   return g;
 }
