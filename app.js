@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-B';
+const APP_VER = 'v0803-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1134,9 +1134,10 @@ function makeFlange(opts) {
   const flowR = (isSW || isWN) ? Math.max(boreR - wallM, boreR * 0.4)
               : (o.type === 'LJ' ? boreR + 0.0008 : boreR);   // LJは管に遊嵌＝ボアを少し広げる
   // レジューシング：小径の管が入るボア。偏心なら+X側の外面が大径と揃う位置へ
+  // 小径の穴＝SOP（スリップオン）の中心穴と同じ径（＝小径の管外径）。2026-08-03 社長指示
   const rdfOutR = isRDF ? (FLG_BORE[rdfB] || 34) / 2 / 1000 : 0;
   const rdfX = (isRDF && o.ecc) ? (boreR - rdfOutR) : 0;
-  if (isRDF) holes.push({ x: rdfX, y: 0, r: rdfOutR });   // 小径の管が通る穴＝管外径（Schは要らない）
+  if (isRDF) holes.push({ x: rdfX, y: 0, r: rdfOutR });
   else if (!isBlind) holes.push({ x: 0, y: 0, r: flowR });
 
   // 本体プレート
@@ -1262,6 +1263,8 @@ function makeFlange(opts) {
   if (isRDF) {   // 機点＝フェイスは板面の中心／背面は小径の穴の中心（偏心はx寄せ）
     g.userData.faceLocal = new THREE.Vector3(0, front, 0);
     g.userData.backLocal = new THREE.Vector3(rdfX, back, 0);
+    // 小径の穴の「フェイス側」にも機点を置く＝表からパイプを合わせる時のスナップ先（2026-08-03 社長指示）
+    g.userData.extraLocals = [new THREE.Vector3(rdfX, front, 0)];
   }
   return g;
 }
@@ -5071,8 +5074,11 @@ function pipeEndJoint(pipe, endLocal) {
   for (const q of placedParts) {
     if (q === pipe || q.userData.hidden || q.userData.partType !== 'flange') continue;
     const o = q.userData.flange || {};
-    if (o.type !== 'SOP' && o.type !== 'LJ') continue;
-    const B = connModelPos(q, q.userData.backLocal), F = connModelPos(q, q.userData.faceLocal);
+    if (o.type !== 'SOP' && o.type !== 'LJ' && o.type !== 'RDF') continue;
+    // レジューシングは小径の穴が差し込み口＝背面と（偏心で寄った）フェイス側の機点で領域を見る
+    const B = connModelPos(q, q.userData.backLocal);
+    const F = (o.type === 'RDF' && q.userData.extraLocals && q.userData.extraLocals[0])
+      ? connModelPos(q, q.userData.extraLocals[0]) : connModelPos(q, q.userData.faceLocal);
     const ax = F.clone().sub(B), span = ax.length();
     if (span < 1e-6) continue;
     const d = ax.multiplyScalar(1 / span);
@@ -5084,7 +5090,7 @@ function pipeEndJoint(pipe, endLocal) {
     const otherLocal = (endLocal === pipe.userData.backLocal) ? pipe.userData.faceLocal : pipe.userData.backLocal;
     if (connModelPos(pipe, otherLocal).clone().sub(P).dot(d) > 0) continue;
     const sop = weldValsOf(pp.sizeA, pp.sch).sop;
-    return { kind: 'SOP', with: o.type, depth: Math.round(((span * 1000 - sop) - t * 1000) * 10) / 10 };
+    return { kind: 'SOP', with: o.type === 'RDF' ? 'RF' : o.type, depth: Math.round(((span * 1000 - sop) - t * 1000) * 10) / 10 };
   }
   // フランジのフェイス面上で終わる管（面基準の下流側など）＝面への突き当て。
   // 同じ点でもう一方のパイプ端と重なっていても「パイプ同士のBW」に誤判定しない（2026-07-29 案A対応）
@@ -14885,12 +14891,36 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       edRow(partHeightLabel(p), { get: () => mmv(heightRefModelPos(p).y), set: v => { setPartByHeight(p, v / 1000); updateForm(); }, unit: 'mm', step: 1 });
       if (u.partType === 'pipe' && u.pipe) {
         sec('パイプ');
-        edRow('長さ', { get: () => Math.round(u.pipe.length), set: v => { if (v >= 1) rebuildPipe(p, v, 'face'); updateForm(); }, unit: 'mm', step: 1 });
+        // 長さ＝一覧・CSVと同じ「切寸」で表示・入力する（2026-08-03 社長指示：表記を統一）。
+        // 切寸＝図面長さ＋端の控え（SOP控え・BWギャップ）なので、入力値からその差を引いて図面長さにする。
+        const cutAdj = () => { try { return pipeCutInfo(p).cut - u.pipe.length; } catch (e) { return 0; } };
+        edRow('切寸', { get: () => { try { return pipeCutInfo(p).cut; } catch (e) { return Math.round(u.pipe.length); } },
+                        set: v => { const L = v - cutAdj(); if (L >= 1) rebuildPipe(p, L, 'face'); updateForm(); }, unit: 'mm', step: 1 });
         // 端末の斜め角度切り（0＝直角。±60°まで。切寸は一覧・CSVに最短〜最長で出る）
         edRow('端面角度A(背)', { get: () => Math.round((u.pipe.cutAngBack || 0) * 10) / 10,
           set: v => { u.pipe.cutAngBack = Math.max(-60, Math.min(60, v)); rebuildPipe(p, u.pipe.length, 'face'); updateForm(); }, unit: '°', step: 5 });
         edRow('端面角度B(面)', { get: () => Math.round((u.pipe.cutAngFace || 0) * 10) / 10,
           set: v => { u.pipe.cutAngFace = Math.max(-60, Math.min(60, v)); rebuildPipe(p, u.pipe.length, 'face'); updateForm(); }, unit: '°', step: 5 });
+      }
+      if (u.partType === 'flange' && u.flange && u.flange.type === 'RDF') {
+        // レジューシング＝小径と偏心/同心をプロパティで見えるように（2026-08-03 社長指示）
+        sec('レジューシング(RF)');
+        const rebuildRdf = () => {
+          const np = makeFlange(u.flange); computeConns(np);
+          while (p.children.length) { const c = p.children.pop(); if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); }
+          while (np.children.length) p.add(np.children.pop());
+          p.userData.faceLocal = np.userData.faceLocal; p.userData.backLocal = np.userData.backLocal;
+          p.userData.extraLocals = np.userData.extraLocals; p.userData.boltLocals = np.userData.boltLocals;
+          refreshItemList(); updateForm();
+        };
+        const all = flangeAvailableSizes(u.flange.cls, 'RDF');
+        const idx = all.indexOf(u.flange.sizeA);
+        const small = idx > 0 ? all.slice(0, idx) : all.filter(x => x !== u.flange.sizeA);
+        edRow('小径', { options: small.map(x => [x, x]), get: () => u.flange.sizeB || small[small.length - 1],
+                        set: v => { u.flange.sizeB = v; rebuildRdf(); } });
+        edRow('偏心/同心', { options: [['0', '同心(CONC)'], ['1', '偏心(ECC)']], get: () => (u.flange.ecc ? '1' : '0'),
+                            set: v => { u.flange.ecc = (v === '1'); rebuildRdf(); } });
+        roRow('穴径(SOP同径)', () => `φ${Math.round((FLG_BORE[u.flange.sizeB] || 0) * 10) / 10}`);
       }
       if (u.partType === 'gasket' && u.gasket) {
         sec('ガスケット');
