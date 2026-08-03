@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-F';
+const APP_VER = 'v0803-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -35,7 +35,20 @@ const scene = new THREE.Scene();
 // CAD標準風の中間グレー1本に統一。UIパネルも明るい配色＝背景と調和（2026-07-20 社長要望））
 // 背景＝真っ白（2026-08-02 社長「透明がダメなら真っ白で」）。演出なしの#ffffff一色。
 // 起動下地（index.htmlのbody background）も同色＝立ち上がりから白。
-scene.background = new THREE.Color(0xffffff);
+// パールホワイト＝上から下へごく静かな階調（2026-08-03 社長提案・見比べで③を選択）。
+// 真珠のような柔らかい明暗で、上下の向きの手がかりも残る。印刷は従来どおり真っ白で撮る。
+function makePearlBg() {
+  const cv = document.createElement('canvas'); cv.width = 4; cv.height = 256;
+  const g = cv.getContext('2d'), lg = g.createLinearGradient(0, 0, 0, 256);
+  lg.addColorStop(0, '#fdfcfa');      // 天頂
+  lg.addColorStop(0.55, '#f7f4ef');   // 中ほど
+  lg.addColorStop(1, '#efebe3');      // 足元
+  g.fillStyle = lg; g.fillRect(0, 0, 4, 256);
+  const t = new THREE.CanvasTexture(cv);
+  if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+scene.background = makePearlBg();
 // 霞（フォグ）なし＝遠くの配管も端まで濁らない（2026-08-01 社長「クリアなイメージ」）。
 // 遠近感は格子（buildGrid）と外形線が受け持つ。印刷も同じ条件で澄む。
 scene.fog = null;
