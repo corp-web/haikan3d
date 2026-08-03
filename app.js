@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-A';
+const APP_VER = 'v0804-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -5150,7 +5150,13 @@ function pipeEndJoint(pipe, endLocal) {
     const t = P.clone().sub(B).dot(d);
     const radial = P.clone().sub(B).sub(d.clone().multiplyScalar(t)).length();
     if (radial > TOL) continue;
-    if (t < -TOL || t > span + TOL) continue;
+    // フェイスからの行き過ぎはガスケット厚ぶん（6mm）まで差し込みとみなす。
+    // 実件（2026-08-04 社長のKST-2026-001）＝管端を合いフランジのフェイスへ吸着させたため
+    // 手前のフランジのフェイスを3mm（ガスケット厚）突き抜け、SOP判定から漏れて
+    // 「突き当て」扱い＝控え8.7が引かれず切寸312.3（正解300.6）になっていた。
+    // depth=(全高−控え)−t は行き過ぎ分も自動で差し引くので、切寸は正しく300.6になる。
+    const OVER = 0.006;
+    if (t < -TOL || t > span + OVER) continue;
     // 管の胴が背面側へ伸びている時だけ「差し込み」。フェイス側に突き当てただけの管は対象外
     const otherLocal = (endLocal === pipe.userData.backLocal) ? pipe.userData.faceLocal : pipe.userData.backLocal;
     if (connModelPos(pipe, otherLocal).clone().sub(P).dot(d) > 0) continue;
