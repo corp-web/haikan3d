@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-I';
+const APP_VER = 'v0803-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -42,10 +42,10 @@ const scene = new THREE.Scene();
 function makePearlBg() {
   const cv = document.createElement('canvas'); cv.width = 4; cv.height = 256;
   const g = cv.getContext('2d'), lg = g.createLinearGradient(0, 0, 0, 256);
-  lg.addColorStop(0, '#f7fbff');      // 天頂＝青み
-  lg.addColorStop(0.34, '#fdfaf4');   // 少し下＝暖かい
-  lg.addColorStop(0.62, '#f4f1f6');   // 地平あたり＝ほんのり紫
-  lg.addColorStop(1, '#e9e7ee');      // 足元
+  lg.addColorStop(0, '#f2f8ff');      // 天頂＝青み
+  lg.addColorStop(0.34, '#f8f8f7');   // 少し下＝わずかに暖かい
+  lg.addColorStop(0.62, '#edf0f8');   // 地平あたり＝青紫
+  lg.addColorStop(1, '#e2e6f0');      // 足元＝青灰
   g.fillStyle = lg; g.fillRect(0, 0, 4, 256);
   const t = new THREE.CanvasTexture(cv);
   if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
