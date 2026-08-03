@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-L';
+const APP_VER = 'v0804-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1815,6 +1815,30 @@ function clampTeeSizeB(a) {
 const REDUCER_H = {'15A':38.1,'20A':38.1,'25A':50.8,'32A':50.8,'40A':63.5,'50A':76.2,'65A':88.9,'80A':88.9,
   '90A':88.9,'100A':101.6,'125A':127.0,'150A':139.7,'200A':152.4,'250A':177.8,'300A':203.2,'350A':330.2,
   '400A':355.6,'450A':381.0,'500A':508.0};
+// レジューサ（BW・ASME B16.9/JIS B2312）の規格にある大径×小径の組合せ。大径→[小径]（大きい順）。
+// この表に無い組合せは規格外＝選択できない（2026-08-04 社長指示。ティーのTEE_RT_Mと同じ流儀）。
+const REDUCER_B = {
+  '20A': ['15A'],
+  '25A': ['20A', '15A'],
+  '32A': ['25A', '20A', '15A'],
+  '40A': ['32A', '25A', '20A', '15A'],
+  '50A': ['40A', '32A', '25A', '20A'],
+  '65A': ['50A', '40A', '32A', '25A'],
+  '80A': ['65A', '50A', '40A', '32A'],
+  '90A': ['80A', '65A', '50A', '40A'],
+  '100A': ['90A', '80A', '65A', '50A', '40A'],
+  '125A': ['100A', '90A', '80A', '65A', '50A'],
+  '150A': ['125A', '100A', '90A', '80A', '65A'],
+  '200A': ['150A', '125A', '100A', '90A'],
+  '250A': ['200A', '150A', '125A', '100A'],
+  '300A': ['250A', '200A', '150A', '125A'],
+  '350A': ['300A', '250A', '200A', '150A'],
+  '400A': ['350A', '300A', '250A', '200A'],
+  '450A': ['400A', '350A', '300A', '250A'],
+  '500A': ['450A', '400A', '350A', '300A'],
+};
+// レジューサで選べる小径（規格の組合せのみ・小→大＝ティーのteeBranchSizesと同じ並び）
+function reducerSizeBs(a) { return SIZE_ORDER.filter(s => REDUCER_B[a] && REDUCER_B[a].includes(s)); }
 const SIZE_ORDER = ['15A','20A','25A','32A','40A','50A','65A','80A','90A','100A','125A','150A',
   '200A','250A','300A','350A','400A','450A','500A'];
 function sizesUpTo(sizeA) { const i = SIZE_ORDER.indexOf(sizeA); return i < 0 ? SIZE_ORDER.slice() : SIZE_ORDER.slice(0, i + 1); }
@@ -2883,8 +2907,9 @@ const TOOLS = [
   { type: 'cross', name: 'クロス', curType: 'SW', build() { return famVariant(this).make(); }, variants: [
     { t: 'SW', sizes: SW_SIZE_TBL, sw: true, make: _swBuild('CROSS') } ] },
   { type: 'reducer', name: 'レジューサ', curType: 'BW(C)', build() { return famVariant(this).make(); }, variants: [
-    { t: 'BW(C)', sizes: REDUCER_H, hasB: true, make: () => { const a = clampFitSize(REDUCER_H); return makeReducer({ sch: fittingOpts.sch, sizeA: a, sizeB: clampSizeB(a), ecc: false }); } },
-    { t: 'BW(E)', sizes: REDUCER_H, hasB: true, make: () => { const a = clampFitSize(REDUCER_H); return makeReducer({ sch: fittingOpts.sch, sizeA: a, sizeB: clampSizeB(a), ecc: true }); } } ] },
+    // 呼び径・小径とも規格(B16.9/B2312)の組合せのみ（2026-08-04 社長指示。径違いティーと同じ流儀）
+    { t: 'BW(C)', sizes: REDUCER_B, hasB: true, bSizesOf: reducerSizeBs, make: () => { const a = clampFitSize(REDUCER_B); return makeReducer({ sch: fittingOpts.sch, sizeA: a, sizeB: clampReducerSizeB(a), ecc: false }); } },
+    { t: 'BW(E)', sizes: REDUCER_B, hasB: true, bSizesOf: reducerSizeBs, make: () => { const a = clampFitSize(REDUCER_B); return makeReducer({ sch: fittingOpts.sch, sizeA: a, sizeB: clampReducerSizeB(a), ecc: true }); } } ] },
   { type: 'cap', name: 'キャップ', curType: 'BW', build() { return famVariant(this).make(); }, variants: [
     { t: 'BW', sizes: CAP_E, make: () => makeCap({ sch: fittingOpts.sch, sizeA: clampFitSize(CAP_E) }) },
     { t: 'SW', sizes: SW_SIZE_TBL, sw: true, make: _swBuild('CAP') } ] },
@@ -2938,6 +2963,12 @@ function famVariant(fam) { return (fam.variants && (fam.variants.find(v => v.t =
 function clampSizeB(sizeA) {
   const cand = sizesUpTo(sizeA).slice(0, -1);     // sizeA より小さい呼び径のみ
   if (!cand.length) return sizeA;                 // 最小径なら同径扱い
+  return cand.includes(fittingOpts.sizeB) ? fittingOpts.sizeB : cand[cand.length - 1];
+}
+// レジューサの小径＝規格の組合せ(REDUCER_B)のみ（表に無ければ一段落ちの径へ）
+function clampReducerSizeB(sizeA) {
+  const cand = reducerSizeBs(sizeA);
+  if (!cand.length) return sizeA;
   return cand.includes(fittingOpts.sizeB) ? fittingOpts.sizeB : cand[cand.length - 1];
 }
 
@@ -3546,7 +3577,13 @@ let movePickCursorShown = false;   // 起点の十字を出したまま指を離
 // 複数選択なら、選択した部品ぜんぶ＋選択中の線が この点を中心にまとめて回る。
 // null＝主選択の起点（grip）を使う＝従来どおり。選択をやり直すと消える。
 let selPivot = null;               // modelGroupローカルの点
-function clearSelPivot() { selPivot = null; }
+// 起点を消す時は橙の玉（印）も必ず一緒に片付ける。
+// 旧＝呼び元ごとに __originPickClear を併記していて、選択のやり直し・窓選択・機点変更など
+// 併記漏れの経路で玉だけが残っていた（2026-08-04 社長報告「まだ残る場合がある」の真因）。
+function clearSelPivot() {
+  if (selPivot && window.__originPickClear) window.__originPickClear();
+  selPivot = null;
+}
 // 起点が決まったら、そのまま「掴んだ状態」にする＝スライドで動かし、タップで確定（鏡・回転と同じ流れ）
 function beginMoveAfterOrigin(cx, cy) {
   const part = selectedPart;
@@ -6204,6 +6241,9 @@ function hideSelectedObjects() {   // 選択中の部品＋注釈を隠す。返
   for (const p of parts) hidePartOnly(p);
   const nAnn = window.__annHideSel ? window.__annHideSel() : 0;
   clearMarkers(); updateForm(); refreshItemList();
+  // 非表示も履歴に積む＝これが無いと「非表示→別の操作→元に戻す」で非表示まで巻き戻り、
+  // 再表示を押していないのに表示される（2026-08-04 社長報告の真因）
+  if (window.__scheduleHistory) window.__scheduleHistory();
   return parts.length + nAnn;
 }
 // コマンド実行待ち中にタップされた部品を隠す（グループの一員なら同グループの部品・注釈も一緒に隠す）
@@ -6214,6 +6254,7 @@ function hidePickedPart(obj) {
   let n = targets.length;
   if (gid != null && window.__annHideGroup) n += window.__annHideGroup(gid);
   clearMarkers(); updateForm(); refreshItemList();
+  if (window.__scheduleHistory) window.__scheduleHistory();   // 非表示も履歴に積む（元に戻すで勝手に再表示させない）
   if (window.__toast) window.__toast('非表示：' + n + '件を隠しました（「再表示」で戻せます）');
 }
 function hideCommand() {   // リボン「非表示」ボタン
@@ -6233,6 +6274,7 @@ function showAllHidden() {   // リボン「再表示」ボタン＝隠した全
   for (const p of placedParts) if (p.userData.hidden) { p.userData.hidden = false; p.visible = true; n++; }
   n += window.__annShowAll ? window.__annShowAll() : 0;
   refreshItemList();
+  if (n && window.__scheduleHistory) window.__scheduleHistory();   // 再表示も履歴に積む
   if (window.__toast) window.__toast(n ? '再表示：' + n + '件を表示しました' : '非表示のアイテムはありません');
 }
 
@@ -6324,27 +6366,37 @@ function autoDimRuns() {
   const used = new Array(segs.length).fill(false);
   const runs = [];
   const dirOf = s => s.b.clone().sub(s.a).normalize();
-  for (let i = 0; i < segs.length; i++) {
-    if (used[i] || !segs[i].pipe) continue;               // ランの本体はパイプから始める（繋ぎ物だけのランは対象外）
-    used[i] = true;
-    const d0 = dirOf(segs[i]);
-    let A = segs[i].a.clone(), B = segs[i].b.clone();
-    const pipes = [segs[i].p], parts = [segs[i].p];
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (let j = 0; j < segs.length; j++) {
-        if (used[j]) continue;
-        if (Math.abs(dirOf(segs[j]).dot(d0)) < 0.9995) continue;   // 同一直線の向きだけつなぐ
-        const pairs = [[segs[j].a, segs[j].b], [segs[j].b, segs[j].a]];
-        for (const [pt, other] of pairs) {
-          if (pt.distanceTo(A) < TOL) { A = other.clone(); used[j] = true; parts.push(segs[j].p); if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
-          if (pt.distanceTo(B) < TOL) { B = other.clone(); used[j] = true; parts.push(segs[j].p); if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
+  // pass0＝パイプを本体にしたラン。pass1＝パイプの無い連なり（アイテムにフランジを付けた形。
+  // 例：レジューサの両口にフランジ。2026-08-04 社長指示「アイテム＋片/両フランジは採寸する」。
+  // アイテム単品・フランジ対だけ（アイテム無し）は従来どおり対象外）
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < segs.length; i++) {
+      if (used[i] || (pass === 0 && !segs[i].pipe)) continue;
+      used[i] = true;
+      const d0 = dirOf(segs[i]);
+      let A = segs[i].a.clone(), B = segs[i].b.clone();
+      const pipes = segs[i].pipe ? [segs[i].p] : [], parts = [segs[i].p];
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (let j = 0; j < segs.length; j++) {
+          if (used[j]) continue;
+          if (Math.abs(dirOf(segs[j]).dot(d0)) < 0.9995) continue;   // 同一直線の向きだけつなぐ
+          const pairs = [[segs[j].a, segs[j].b], [segs[j].b, segs[j].a]];
+          for (const [pt, other] of pairs) {
+            if (pt.distanceTo(A) < TOL) { A = other.clone(); used[j] = true; parts.push(segs[j].p); if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
+            if (pt.distanceTo(B) < TOL) { B = other.clone(); used[j] = true; parts.push(segs[j].p); if (segs[j].pipe) pipes.push(segs[j].p); grew = true; break; }
+          }
+          if (grew) break;
         }
-        if (grew) break;
       }
+      if (pass === 1) {
+        const hasFlange = parts.some(q => q.userData.partType === 'flange');
+        const hasItem = parts.some(q => !['flange', 'gasket'].includes(q.userData.partType));
+        if (!hasFlange || !hasItem) continue;   // フランジ付きのアイテムだけ対象（単品は出さない）
+      }
+      runs.push({ A, B, dir: d0, pipes, parts });
     }
-    runs.push({ A, B, dir: d0, pipes, parts });
   }
   return runs;
 }
@@ -9995,11 +10047,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   async function registerDetailRect(x0, y0, x1, y1) {
     const { parts, anns } = itemsInRect(x0, y0, x1, y1);
     if (!parts.length && !anns.length) { if (window.__toast) window.__toast('枠の中にアイテムがありません'); return; }
-    const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
-    if (exist >= 0) {   // 同じ範囲の再囲みでは取り消さない（2026-07-30 社長指示：削除は一覧のプレビューからのみ）
-      if (window.__toast) window.__toast(`この範囲は 詳細${detailAreas[exist].id} として登録済みです（削除は詳細図ボタン長押し→一覧→プレビューから）`);
-      return;
-    }
+    // 同じ範囲でも重ねて登録できる（2026-08-04 社長指示：「登録済みです」の弾きは不要）
     if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
     const rc = renderer.domElement.getBoundingClientRect();
     const nx = (Math.min(x0, x1) - rc.left) / rc.width, ny = (Math.min(y0, y1) - rc.top) / rc.height;
@@ -10016,8 +10064,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   async function addDetailArea() {
     const parts = [...selectedParts], anns = [...selAnns];
     if (parts.length || anns.length) {
-      const exist = detailAreas.findIndex(d => sameSet(d, parts, anns));
-      if (exist >= 0) { if (window.__toast) window.__toast(`この範囲は 詳細${detailAreas[exist].id} として登録済みです（削除は詳細図ボタン長押し→一覧→プレビューから）`); return; }
+      // 同じ範囲でも重ねて登録できる（2026-08-04 社長指示：「登録済みです」の弾きは不要）
       if (detailAreas.length >= DETAIL_IDS.length) { if (window.__toast) window.__toast(`詳細図は${DETAIL_IDS.length}箇所までです`); return; }
       const nr = screenRectOf(parts, anns);
       if (!nr) { if (window.__toast) window.__toast('画面に映っていません（対象が見える向きにしてから登録してください）'); return; }
@@ -12820,15 +12867,25 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const rect = renderer.domElement.getBoundingClientRect(), cam = activeCam();
     cam.updateMatrixWorld();
     const inv = new THREE.Matrix4().copy(cam.matrixWorld).invert();
-    let added = 0;
-    for (const rec of annStore) {
-      if (rec.hidden) continue;                        // 非表示は窓選択に掛からない
-      const seg = annScreenSeg(rec, rect, cam, inv);   // ニアプレーンクリップ済（構築線も正しく判定）
-      if (!seg) continue;
+    const segHits = (Ae, Be) => {
+      const seg = clipProjectSeg(Ae, Be, rect, cam, inv);
+      if (!seg) return false;
       const { pa, pb } = seg;
       const inA = pa.x >= x0 && pa.x <= x1 && pa.y >= y0 && pa.y <= y1;
       const inB = pb.x >= x0 && pb.x <= x1 && pb.y >= y0 && pb.y <= y1;
-      if (inA || inB || segRectCross(pa.x, pa.y, pb.x, pb.y, x0, y0, x1, y1)) {
+      return inA || inB || segRectCross(pa.x, pa.y, pb.x, pb.y, x0, y0, x1, y1);
+    };
+    let added = 0;
+    for (const rec of annStore) {
+      if (rec.hidden) continue;                        // 非表示は窓選択に掛からない
+      // 寸法は「見えている寸法線」だけでなく、測定点どうしの線・両足（補助線）でも掛かるようにする。
+      // ＝窓が測定点の近くや足だけを囲んでも選択できる（2026-08-04 社長報告「寸法がらみが選択されにくい」）。
+      const cand = [annPickEnds(rec)];
+      if (rec.type === 'dim') {
+        const ends = dimLineEnds(rec.a, rec.b, rec.style);
+        if (ends) { cand.push([rec.a, rec.b]); cand.push([rec.a, ends.A2]); cand.push([rec.b, ends.B2]); }
+      }
+      if (cand.some(([Ae, Be]) => segHits(Ae, Be))) {
         if (!selAnns.has(rec)) { selAnns.add(rec); added++; }
       }
     }
@@ -14155,7 +14212,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // 寸法の値（赤文字）・文字をクリック：シングル＝選択（文字はドラッグ移動／寸法は本体クリックと同じ逃げ調整）、
     // ダブルクリック＝値・文字の編集フォーム（2026-07-18 社長要望：寸法の値の編集もダブルクリックに統一）
     {
-      const recT = pickDimTextAt(e.clientX, e.clientY);
+      let recT = pickDimTextAt(e.clientX, e.clientY);
+      // 選択済みの引出し線は、文字より端点（肘・矢の先）を優先する。
+      // 引出しの文字は肘のすぐ横に出るため、文字の当たりが肘を覆い隠して
+      // 「文字ありの引出しだけ肘が掴めない＝置いた後に動かせない」になっていた（2026-08-04 社長報告の真因）。
+      if (recT && recT.style && recT.style.dimKind === 'leader' && lineSel === recT && selAnns.has(recT) &&
+          endpointAt(recT, e.clientX, e.clientY, e.pointerType !== 'mouse') !== null) recT = null;   // 下の端点処理へ譲る
       if (recT) {
         const isDbl = (e.timeStamp - _lnLastT < 350) && Math.hypot(e.clientX - _lnLastX, e.clientY - _lnLastY) < 6 && _lnLastRec === recT;
         _lnLastT = e.timeStamp; _lnLastX = e.clientX; _lnLastY = e.clientY; _lnLastRec = recT;
@@ -14953,9 +15015,22 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
               selSpec('呼び径', 'sizeA', () => Object.keys(ELBOW_90L));
               selSpec('Sch', 'sch', () => FITTING_SCHEDULES);
               break;
-            case 'tee': case 'reducer':
-              selSpec('呼び径', 'sizeA', () => Object.keys(ELBOW_90L));
-              selSpec('小径', 'sizeB', () => Object.keys(ELBOW_90L));
+            case 'tee':
+              // 小径＝同径＋規格(TEE_RT_M)の組合せのみ。呼び径を変えたら小径も規格内へ丸める（2026-08-04 社長指示）
+              edRow('呼び径', { options: Object.keys(TEE_C).map(x => [x, x]), get: () => spec().sizeA,
+                set: v => { const b = spec().sizeB, list = [v, ...teeBranchSizes(v)];
+                            rebuildPartFromSpec(p, { sizeA: v, sizeB: list.includes(b) ? b : v }); } });
+              edRow('小径', { options: [spec().sizeA, ...teeBranchSizes(spec().sizeA).reverse()].map(x => [x, x]),
+                get: () => spec().sizeB, set: v => { rebuildPartFromSpec(p, { sizeB: v }); } });
+              selSpec('Sch', 'sch', () => FITTING_SCHEDULES);
+              break;
+            case 'reducer':
+              // 呼び径・小径とも規格(REDUCER_B)の組合せのみ（2026-08-04 社長指示）
+              edRow('呼び径', { options: Object.keys(REDUCER_B).map(x => [x, x]), get: () => spec().sizeA,
+                set: v => { const b = spec().sizeB, list = reducerSizeBs(v);
+                            rebuildPartFromSpec(p, { sizeA: v, sizeB: list.includes(b) ? b : (list[list.length - 1] || v) }); } });
+              edRow('小径', { options: reducerSizeBs(spec().sizeA).slice().reverse().map(x => [x, x]),
+                get: () => spec().sizeB, set: v => { rebuildPartFromSpec(p, { sizeB: v }); } });
               selSpec('Sch', 'sch', () => FITTING_SCHEDULES);
               break;
             case 'sw':
