@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-D';
+const APP_VER = 'v0804-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -4540,13 +4540,18 @@ function updateFollowPreview(clientX, clientY) {
       }
       followPreview.quaternion.copy(qIns);
       const fu = followPreview.userData;
-      const sopFl = fu.partType === 'flange' && ['SOP', 'LJ'].includes((fu.flange || {}).type);
+      const sopFl = fu.partType === 'flange' && (fu.flange || {}).type === 'SOP';
+      const ljFl = fu.partType === 'flange' && (fu.flange || {}).type === 'LJ';
       if (sopFl) {
         // 面基準（案A）：片フランジ＝フェイス面を指定点へ／合い＝ガスケット中央を指定点へ
         const P = pairGhostSpans();
         const ofs = P ? P.tg / 2 : 0;
         followPreview.position.copy(pt).addScaledVector(dir, -ofs)
           .sub(fu.faceLocal.clone().applyQuaternion(followPreview.quaternion));
+      } else if (ljFl) {
+        // LJ＝スタブエンドの管口（パイプと突き合わせる側）の中心を指定点へ（2026-08-04 社長指示）
+        followPreview.position.copy(pt)
+          .sub(fu.backLocal.clone().applyQuaternion(followPreview.quaternion));
       } else {
         const mid = fu.faceLocal.clone().add(fu.backLocal).multiplyScalar(0.5).applyQuaternion(followPreview.quaternion);
         followPreview.position.copy(pt).sub(mid);   // 軸方向の中央を芯線上の点へ
@@ -5035,13 +5040,14 @@ function buildInsertTrain(obj, pipe) {
   } else {
     train.push({ obj, flip: false });
   }
-  // 面基準（案A・2026-07-29 社長採用）：SOP/LJフランジは長さを消費しない（ハブは管に被さり、フェイスが区切り）。
+  // 面基準（案A・2026-07-29 社長採用）：SOPフランジは長さを消費しない（ハブは管に被さり、フェイスが区切り）。
   // 消費するのはガスケット厚・バルブ等の面間・WN/SWフランジの全高だけ＝面間の寸法が図面のまま揃う。
+  // LJはスタブエンドが管を置き換える＝スタブ全高を消費し、起点は管口（2026-08-04 社長指示）。
   let span = 0;
   for (const it of train) {
     computeConns(it.obj);
     const u2 = it.obj.userData;
-    it.sopFl = u2.partType === 'flange' && ['SOP', 'LJ'].includes((u2.flange || {}).type);
+    it.sopFl = u2.partType === 'flange' && (u2.flange || {}).type === 'SOP';
     it.adv = it.sopFl ? 0 : (u2.faceLocal.y - u2.backLocal.y) * 1000;
     span += it.adv;
   }
@@ -5059,7 +5065,10 @@ function insertItemIntoBentPipe(obj, hit) {
   }
   const plan = buildInsertTrain(obj, pipe);
   const Lmm = bentArcLenMm(pipe);
-  const L1 = hit.tMm - plan.span / 2, L2 = Lmm - hit.tMm - plan.span / 2;
+  // LJが先頭＝指定点はスタブの管口（2026-08-04 社長指示）。他は挿入中心。
+  const ljLead0 = plan.train[0] && plan.train[0].obj.userData.partType === 'flange' &&
+                  ((plan.train[0].obj.userData.flange || {}).type === 'LJ');
+  const L1 = hit.tMm - (ljLead0 ? 0 : plan.span / 2), L2 = Lmm - hit.tMm - (ljLead0 ? plan.span : plan.span / 2);
   if (L1 < 0.5 || L2 < 0.5) {
     for (const it of plan.train) if (it.obj !== obj) disposeOf(it.obj);
     if (window.__toast) window.__toast(`挿入できません：挿入には${Math.ceil(plan.span)}mm必要です（展開${Math.round(Lmm)}mm）。もう少し中寄りに置いてください`);
@@ -5069,7 +5078,7 @@ function insertItemIntoBentPipe(obj, hit) {
   const dir = bentAxisAt(pipe, hit.tMm);
   const qIns = bentQuatAt(pipe, hit.tMm);
   const FLIP2 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
-  let s = -plan.span / 2;                                  // 挿入中心からの距離(mm)
+  let s = ljLead0 ? 0 : -plan.span / 2;                    // 指定点からの距離(mm)。LJ先頭＝管口が指定点
   for (const it of plan.train) {
     const o = it.obj, q = qIns.clone();
     if (it.flip) q.multiply(FLIP2);
@@ -5085,7 +5094,7 @@ function insertItemIntoBentPipe(obj, hit) {
   const R = bent.R;
   const p2 = makeBentPipe({ sizeA: bent.sizeA, sch: bent.sch, R, angleDeg: (L2 / 1000 / R) * 180 / Math.PI });
   computeConns(p2);
-  const phi2 = Math.PI - ((hit.tMm + plan.span / 2) / 1000) / R;
+  const phi2 = Math.PI - ((hit.tMm + (ljLead0 ? plan.span : plan.span / 2)) / 1000) / R;
   p2.quaternion.copy(pipe.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), phi2 - Math.PI));
   p2.position.copy(pipe.position);
   p2.userData.placed = true; p2.userData.orient = pipe.userData.orient || 0; p2.userData.roll = pipe.userData.roll || 0;
@@ -5105,7 +5114,10 @@ function insertItemIntoPipe(obj, hit) {
   const pipe = hit.pipe, pu = pipe.userData.pipe;
   const plan = buildInsertTrain(obj, pipe);
   const L = pu.length;
-  const L1 = hit.tMm - plan.span / 2, L2 = L - hit.tMm - plan.span / 2;
+  // LJが先頭＝指定点はスタブの管口（そこから下流へスタブが伸びる。2026-08-04 社長指示）。他は挿入中心。
+  const ljLead = plan.train[0] && plan.train[0].obj.userData.partType === 'flange' &&
+                 ((plan.train[0].obj.userData.flange || {}).type === 'LJ');
+  const L1 = hit.tMm - (ljLead ? 0 : plan.span / 2), L2 = L - hit.tMm - (ljLead ? plan.span : plan.span / 2);
   const disposeOf = (o) => o.traverse(n => { if (n.geometry) n.geometry.dispose(); if (n.material && n.material.dispose) n.material.dispose(); });
   if (L1 < 0.5 || L2 < 0.5) {
     for (const it of plan.train) if (it.obj !== obj) disposeOf(it.obj);
@@ -5170,7 +5182,7 @@ function pipeEndJoint(pipe, endLocal) {
   for (const q of placedParts) {
     if (q === pipe || q.userData.hidden || q.userData.partType !== 'flange') continue;
     const o = q.userData.flange || {};
-    if (o.type !== 'SOP' && o.type !== 'LJ' && o.type !== 'RDF') continue;
+    if (o.type !== 'SOP' && o.type !== 'RDF') continue;   // LJは差し込みでなくスタブ管口へのBW（下の機点判定で扱う）
     // レジューシングは小径の穴が差し込み口＝背面と（偏心で寄った）フェイス側の機点で領域を見る
     const B = connModelPos(q, q.userData.backLocal);
     const F = (o.type === 'RDF' && q.userData.extraLocals && q.userData.extraLocals[0])
@@ -5211,6 +5223,7 @@ function pipeEndJoint(pipe, endLocal) {
         const o = u.flange || {};
         if (l !== u.backLocal) return { kind: 'none' };            // フェイス側＝管の継手ではない
         if (o.type === 'WN') return { kind: 'BW', with: 'WN' };    // 首の先でBW
+        if (o.type === 'LJ') return { kind: 'BW', with: 'スタブエンド' };   // スタブの管口へ突き合わせ（2026-08-04 社長指示のモデル）
         if (o.type === 'SW') {
           const C = SW_C_E[o.sizeA] || 0;                          // ソケット深さ（規格表）
           return C > 0 ? { kind: 'SW', with: 'SWフランジ', depth: Math.max(C - weldValsOf(pp.sizeA, pp.sch).swc, 0) } : { kind: 'none' };
