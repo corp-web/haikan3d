@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-E';
+const APP_VER = 'v0803-F';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -12871,11 +12871,12 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                  downX: rc.left + (nn.x * 0.5 + 0.5) * rc.width, downY: rc.top + (-nn.y * 0.5 + 0.5) * rc.height };
     if (rec.style && rec.style.dimKind === 'leader') {
       clearTimeout(freeHoldTimer);
-      freeHoldTimer = setTimeout(() => { if (lineDrag && lineDrag.mode === 'dimend') lineDrag.free = true; }, 500);
+      freeHoldTimer = setTimeout(() => { if (lineDrag && lineDrag.mode === 'dimend' && !lineDrag.moved) lineDrag.free = true; }, 500);   // 実操作と同じ＝動かし始めていたら切り替えない
     }
     return true;
   };
   window.__annDimEndFree = () => !!(lineDrag && lineDrag.free);
+  window.__annDimEndMoved = () => !!(lineDrag && lineDrag.moved);   // e2e検証用
   window.__annEndDimEnd = () => { clearTimeout(freeHoldTimer); lineDrag = null; };
   window.__annToggleRec = (rec) => {   // 複数選択へ出し入れ（Ctrl+クリックと同じ。e2e検証用）
     if (!annStore.includes(rec)) return false;
@@ -14198,7 +14199,9 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
             if (lineSel.style && lineSel.style.dimKind === 'leader') {
               clearTimeout(freeHoldTimer);
               freeHoldTimer = setTimeout(() => {
-                if (lineDrag && lineDrag.mode === 'dimend') {
+                // その場で押しっぱなしの時だけ自由移動へ。動かし始めていたら切り替えない
+                // （スライドの途中で勝手に自由移動になってしまうため。2026-08-03 社長指摘）
+                if (lineDrag && lineDrag.mode === 'dimend' && !lineDrag.moved) {
                   lineDrag.free = true;
                   if (window.__toast) window.__toast('引出し：自由移動');
                 }
@@ -14412,6 +14415,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       e.stopImmediatePropagation();
     } else if (lineDrag.mode === 'dimend') {             // 寸法線の起点付け替え：機点・交点へスナップ（無ければ水平面）
       const rec = lineDrag.rec;
+      // 指が動いた＝スライド開始。以後は長押しの切替を待たない（2026-08-03 社長指摘）
+      if (!lineDrag.moved && Math.hypot(e.clientX - lineDrag.downX, e.clientY - lineDrag.downY) > 6) {
+        lineDrag.moved = true;
+        clearTimeout(freeHoldTimer);
+      }
       const cur = lineDrag.end === 0 ? rec.a : rec.b;
       const ex = new Set([rec]);
       const snap = moveSnapForGrip(e.clientX, e.clientY, new Set(), ex);
