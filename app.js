@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-A';
+const APP_VER = 'v0803-B';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1135,9 +1135,8 @@ function makeFlange(opts) {
               : (o.type === 'LJ' ? boreR + 0.0008 : boreR);   // LJは管に遊嵌＝ボアを少し広げる
   // レジューシング：小径の管が入るボア。偏心なら+X側の外面が大径と揃う位置へ
   const rdfOutR = isRDF ? (FLG_BORE[rdfB] || 34) / 2 / 1000 : 0;
-  const rdfInR = isRDF ? Math.max(rdfOutR - pipeWall(rdfB, o.sch) / 1000, rdfOutR * 0.4) : 0;
   const rdfX = (isRDF && o.ecc) ? (boreR - rdfOutR) : 0;
-  if (isRDF) holes.push({ x: rdfX, y: 0, r: rdfInR });
+  if (isRDF) holes.push({ x: rdfX, y: 0, r: rdfOutR });   // 小径の管が通る穴＝管外径（Schは要らない）
   else if (!isBlind) holes.push({ x: 0, y: 0, r: flowR });
 
   // 本体プレート
@@ -1161,19 +1160,10 @@ function makeFlange(opts) {
     }
   }
   if (isRDF) {
-    // レジューシング：小径のハブ（首）を背面へ。偏心なら x へ寄せる
-    const hubH = Math.max(rdfOutR * 0.9, 0.008);
-    const yMid = back - hubH / 2;
-    const outer = new THREE.Mesh(new THREE.CylinderGeometry(rdfOutR, rdfOutR * 1.18, hubH, 48, 1, true), mat);
-    outer.position.set(rdfX, yMid, 0); g.add(outer);
-    const inner = new THREE.Mesh(new THREE.CylinderGeometry(rdfInR, rdfInR, hubH, 40, 1, true), mat);
-    inner.position.set(rdfX, yMid, 0); g.add(inner);
-    const capH = Math.max(0.0015, hubH * 0.06);
-    const cap = ringGeo(rdfOutR, rdfInR, capH);
-    cap.translate(rdfX, back - hubH + capH / 2, 0); g.add(new THREE.Mesh(cap, mat));
+    // レジューシング＝ブラインドに小径の穴をあけた形（首なし・Schも要らない。2026-08-03 社長指示）
     if (o.ecc) {   // 偏心の「フラット側」(+X)に見分け用の目印
       const markR = Math.max(rdfOutR * 0.06, 0.0012);
-      const mk = new THREE.Mesh(new THREE.CylinderGeometry(markR, markR, thk, 8),
+      const mk = new THREE.Mesh(new THREE.CylinderGeometry(markR, markR, thk * 1.02, 8),
         new THREE.MeshBasicMaterial({ color: 0x1f3a93 }));
       mk.position.set(R * 0.94, 0, 0); g.add(mk);
     }
@@ -1269,10 +1259,9 @@ function makeFlange(opts) {
 
   g.userData.partType = 'flange';
   g.userData.flange = { ...o };
-  if (isRDF) {   // 小径側の機点＝ハブの先端中心（偏心はx寄せ）。フェイス側は板面の中心のまま
-    const hubH = Math.max(rdfOutR * 0.9, 0.008);
+  if (isRDF) {   // 機点＝フェイスは板面の中心／背面は小径の穴の中心（偏心はx寄せ）
     g.userData.faceLocal = new THREE.Vector3(0, front, 0);
-    g.userData.backLocal = new THREE.Vector3(rdfX, back - hubH, 0);
+    g.userData.backLocal = new THREE.Vector3(rdfX, back, 0);
   }
   return g;
 }
@@ -3113,7 +3102,7 @@ function updateOptVisibility() {
   const isRDF = flangeOpts.type === 'RDF';
   const rw = document.getElementById('optRdfWrap'); if (rw) rw.style.display = isRDF ? '' : 'none';
   const ew = document.getElementById('optEccWrap'); if (ew) ew.style.display = isRDF ? '' : 'none';
-  const schOn = (flangeOpts.type === 'WN' || flangeOpts.type === 'SW' || flangeOpts.type === 'LJ' || isRDF);
+  const schOn = (flangeOpts.type === 'WN' || flangeOpts.type === 'SW' || flangeOpts.type === 'LJ');   // RDFは板に穴だけ＝Sch不要
   const sw = document.getElementById('optSchWrap'); if (sw) sw.style.display = schOn ? '' : 'none';
   // フェイス欄：LJは無効化（フラット面固定。ガスケット面はスタブ側のつばが持つ）
   const fe = document.getElementById('optFace'); const feLab = fe && fe.closest('label');
@@ -14572,7 +14561,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       else if (k === '←') { expr.value = expr.value.slice(0, -1); }
       else if (k === '=') { equals(); return; }
       else expr.value += k;
-      show(); expr.focus();
+      show();   // キーを押した後もフォーカスしない＝キーボードが立ち上がらない
     });
     let open = false;
     function setOpen(on) {
@@ -14580,7 +14569,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       panel.style.display = open ? 'flex' : 'none';
       if (btn) btn.classList.toggle('active', open);
       try { localStorage.setItem('p3d_calc_open', open ? '1' : '0'); } catch (e) {}
-      if (open) { restorePos(); expr.focus(); show(); }
+      if (open) { restorePos(); show(); }   // 開いただけではフォーカスしない＝iPadのキーボードを出さない
     }
     if (btn) btn.onclick = () => setOpen(!open);
     if (closeBtn) closeBtn.addEventListener('click', e => { e.stopPropagation(); setOpen(false); });
