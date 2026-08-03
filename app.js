@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-U';
+const APP_VER = 'v0803-A';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -739,20 +739,21 @@ const FLANGE_TYPES = [
   { code: 'WN',  name: 'ウェルドネック' },
   { code: 'LJ',  name: 'ルーズ(遊合)' },
   { code: 'BL',  name: 'ブラインド' },
+  { code: 'RDF', name: 'レジューシング(RF)' },   // 大径のフランジ板に小径のボア＝径違いを1枚で受ける
 ];
 // クラスごとに規格上存在するタイプ（淡路マテリアカタログ各ページの規定より）。
 // 高圧クラス(JIS40K/JPI2500LB)は差込み形(SOP/LJ)が無く、WN/SW/BLのみ。
 const TYPES_BY_CLASS = {
-  'JIS 5K':     ['SOP','SW','WN','LJ','BL'],
-  'JIS 10K':    ['SOP','SW','WN','LJ','BL'],
-  'JIS 20K':    ['SOP','SW','WN','LJ','BL'],
+  'JIS 5K':     ['SOP','SW','WN','LJ','BL','RDF'],
+  'JIS 10K':    ['SOP','SW','WN','LJ','BL','RDF'],
+  'JIS 20K':    ['SOP','SW','WN','LJ','BL','RDF'],
   'JIS 40K':    ['SW','WN','BL'],
-  'JPI 150LB':  ['SOP','SW','WN','BL'],
-  'JPI 300LB':  ['SOP','SW','WN','BL'],
-  'JPI 600LB':  ['SOP','SW','WN','BL'],
+  'JPI 150LB':  ['SOP','SW','WN','BL','RDF'],
+  'JPI 300LB':  ['SOP','SW','WN','BL','RDF'],
+  'JPI 600LB':  ['SOP','SW','WN','BL','RDF'],
 };
 function typesForClass(cls) {
-  const ok = TYPES_BY_CLASS[cls] || ['SOP','SW','WN','LJ','BL'];
+  const ok = TYPES_BY_CLASS[cls] || ['SOP','SW','WN','LJ','BL','RDF'];
   return FLANGE_TYPES.filter(t => ok.includes(t.code));
 }
 // 選択可能クラス＝寸法を規格で検証済みのものに限定（社長提供 2013_35-40.pdf でD/C/n/h/t・RF座径g を確認）。
@@ -1097,6 +1098,10 @@ function ringGeo(outerR, innerR, h) {
 // フランジ生成（軸=Y／単位m）。opts={sizeA,type,cls,face}
 function makeFlange(opts) {
   const o = Object.assign({ sizeA: '100A', type: 'SOP', cls: 'JIS 10K', face: 'RF' }, opts || {});
+  // レジューシングフランジ（RDF）＝板・ボルト穴は大径(sizeA)のまま、ボアとハブだけ小径(sizeB)。
+  // 偏心(ecc)＝小径ボアを+X側の外面が揃う位置へ寄せる（偏心レジューサと同じ流儀。2026-08-03 社長要望）
+  const isRDF = o.type === 'RDF';
+  const rdfB = isRDF ? (o.sizeB || o.sizeA) : null;
   const dim = flangeDim(o.cls, o.sizeA);              // 規格寸法(mm)
   const R = dim.D / 2 / 1000;                          // 外径半径(m)
   const boreD = (FLG_BORE[o.sizeA] || 114) / 1000;    // ボア径(m)
@@ -1128,7 +1133,12 @@ function makeFlange(opts) {
   const wallM = pipeWall(o.sizeA, o.sch) / 1000;          // 管肉厚(m)
   const flowR = (isSW || isWN) ? Math.max(boreR - wallM, boreR * 0.4)
               : (o.type === 'LJ' ? boreR + 0.0008 : boreR);   // LJは管に遊嵌＝ボアを少し広げる
-  if (!isBlind) holes.push({ x: 0, y: 0, r: flowR });
+  // レジューシング：小径の管が入るボア。偏心なら+X側の外面が大径と揃う位置へ
+  const rdfOutR = isRDF ? (FLG_BORE[rdfB] || 34) / 2 / 1000 : 0;
+  const rdfInR = isRDF ? Math.max(rdfOutR - pipeWall(rdfB, o.sch) / 1000, rdfOutR * 0.4) : 0;
+  const rdfX = (isRDF && o.ecc) ? (boreR - rdfOutR) : 0;
+  if (isRDF) holes.push({ x: rdfX, y: 0, r: rdfInR });
+  else if (!isBlind) holes.push({ x: 0, y: 0, r: flowR });
 
   // 本体プレート
   add(plateWithHoles(R, thk, holes));
@@ -1150,7 +1160,24 @@ function makeFlange(opts) {
       cap.translate(0, back - h + capH / 2, 0); g.add(new THREE.Mesh(cap, mat));
     }
   }
-  if (o.type === 'SOP') {
+  if (isRDF) {
+    // レジューシング：小径のハブ（首）を背面へ。偏心なら x へ寄せる
+    const hubH = Math.max(rdfOutR * 0.9, 0.008);
+    const yMid = back - hubH / 2;
+    const outer = new THREE.Mesh(new THREE.CylinderGeometry(rdfOutR, rdfOutR * 1.18, hubH, 48, 1, true), mat);
+    outer.position.set(rdfX, yMid, 0); g.add(outer);
+    const inner = new THREE.Mesh(new THREE.CylinderGeometry(rdfInR, rdfInR, hubH, 40, 1, true), mat);
+    inner.position.set(rdfX, yMid, 0); g.add(inner);
+    const capH = Math.max(0.0015, hubH * 0.06);
+    const cap = ringGeo(rdfOutR, rdfInR, capH);
+    cap.translate(rdfX, back - hubH + capH / 2, 0); g.add(new THREE.Mesh(cap, mat));
+    if (o.ecc) {   // 偏心の「フラット側」(+X)に見分け用の目印
+      const markR = Math.max(rdfOutR * 0.06, 0.0012);
+      const mk = new THREE.Mesh(new THREE.CylinderGeometry(markR, markR, thk, 8),
+        new THREE.MeshBasicMaterial({ color: 0x1f3a93 }));
+      mk.position.set(R * 0.94, 0, 0); g.add(mk);
+    }
+  } else if (o.type === 'SOP') {
     // スリップオン：ブラインドに中央穴が開いただけ＝平板のみ（ハブなし）
   } else if (o.type === 'SW') {
     // ソケットウェルド：板背面に円筒ハブ＋背面からパイプを差し込むソケット座ぐり。
@@ -1242,11 +1269,16 @@ function makeFlange(opts) {
 
   g.userData.partType = 'flange';
   g.userData.flange = { ...o };
+  if (isRDF) {   // 小径側の機点＝ハブの先端中心（偏心はx寄せ）。フェイス側は板面の中心のまま
+    const hubH = Math.max(rdfOutR * 0.9, 0.008);
+    g.userData.faceLocal = new THREE.Vector3(0, front, 0);
+    g.userData.backLocal = new THREE.Vector3(rdfX, back - hubH, 0);
+  }
   return g;
 }
 
 // 現在パレットで選択中のフランジ仕様
-const flangeOpts = { sizeA: '25A', type: 'SOP', cls: 'JIS 10K', face: 'RF', sch: 'Sch40', pair: '1' };   // pair: '1'=片フランジ／'2'=合いフランジ(挿入時にガスケットを挟んで2枚)
+const flangeOpts = { sizeA: '25A', type: 'SOP', cls: 'JIS 10K', face: 'RF', sch: 'Sch40', pair: '1', sizeB: '20A', ecc: false };   // sizeB/ecc＝レジューシング(RDF)用   // pair: '1'=片フランジ／'2'=合いフランジ(挿入時にガスケットを挟んで2枚)
 
 // ===================================================================
 //  スタブエンド（ラップジョイント用）BENKAN / JPF SP 001
@@ -3058,13 +3090,30 @@ function syncOptionsUI() {
   rebuildSizeOptions();
   fillSelect('optFace', FLANGE_FACES, flangeOpts.face);
   fillSelect('optSch', schListForType(), flangeOpts.sch);
+  rebuildRdfSizeOptions();
   updateOptVisibility();
+}
+// レジューシングの小径＝大径より小さい呼び径だけ並べる
+function rebuildRdfSizeOptions() {
+  const el = document.getElementById('optRdfSize'); if (!el) return;
+  const all = flangeAvailableSizes(flangeOpts.cls, flangeOpts.type);
+  const idx = all.indexOf(flangeOpts.sizeA);
+  const list = (idx > 0 ? all.slice(0, idx) : all.filter(x => x !== flangeOpts.sizeA));
+  const cur = list.includes(flangeOpts.sizeB) ? flangeOpts.sizeB : list[list.length - 1];
+  flangeOpts.sizeB = cur || flangeOpts.sizeA;
+  while (el.options.length) el.remove(0);
+  for (const sname of list) el.add(new Option(sname, sname));
+  if (cur) el.value = cur;
+  const ee = document.getElementById('optEcc'); if (ee) ee.value = flangeOpts.ecc ? '1' : '0';
 }
 
 // 欄の表示／非表示・有効無効（タイプで出し分け）
 function updateOptVisibility() {
   // スケジュール欄：WN・SW・LJ（LJはドッキングするスタブエンドの肉厚）で表示
-  const schOn = (flangeOpts.type === 'WN' || flangeOpts.type === 'SW' || flangeOpts.type === 'LJ');
+  const isRDF = flangeOpts.type === 'RDF';
+  const rw = document.getElementById('optRdfWrap'); if (rw) rw.style.display = isRDF ? '' : 'none';
+  const ew = document.getElementById('optEccWrap'); if (ew) ew.style.display = isRDF ? '' : 'none';
+  const schOn = (flangeOpts.type === 'WN' || flangeOpts.type === 'SW' || flangeOpts.type === 'LJ' || isRDF);
   const sw = document.getElementById('optSchWrap'); if (sw) sw.style.display = schOn ? '' : 'none';
   // フェイス欄：LJは無効化（フラット面固定。ガスケット面はスタブ側のつばが持つ）
   const fe = document.getElementById('optFace'); const feLab = fe && fe.closest('label');
@@ -3097,6 +3146,9 @@ function onOptChange(srcId) {
   o.sizeA = v('optSize');
   o.face  = v('optFace');
   o.sch   = v('optSch');
+  if (srcId === 'optType' || srcId === 'optSize' || srcId === 'optClass') rebuildRdfSizeOptions();
+  const sb = v('optRdfSize'); if (sb) o.sizeB = sb;
+  const ec = v('optEcc'); if (ec != null) o.ecc = (ec === '1');
   updateOptVisibility();
   refreshThumbs();
   // パレットの変更は配置済みへは効かせない（2026-07-29 社長指示。仕様変更はプロパティで）
@@ -6169,7 +6221,10 @@ function showAllHidden() {   // リボン「再表示」ボタン＝隠した全
 function partColumns(p) {
   const u = p.userData;
   switch (u.partType) {
-    case 'flange': { const o = u.flange || {}; return { kind: 'フランジ', type: o.type || '', size: o.sizeA || '', cls: o.cls || '' }; }
+    case 'flange': { const o = u.flange || {};
+      // レジューシング＝呼び径は「大×小」・型に同心/偏心を添える（2026-08-03 社長要望）
+      if (o.type === 'RDF') return { kind: 'フランジ', type: `RF(${o.ecc ? '偏心' : '同心'})`, size: `${o.sizeA || ''}×${o.sizeB || ''}`, cls: o.cls || '' };
+      return { kind: 'フランジ', type: o.type || '', size: o.sizeA || '', cls: o.cls || '' }; }
     case 'gasket': { const o = u.gasket || {}; return { kind: 'ガスケット', type: `t${o.t != null ? o.t : 3}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'pipe':   { const o = u.pipe || {};
       // 表示はCSVの切寸表と同じ「切寸」に揃える（2026-07-31 社長指示）。未配置（プレビュー等）は図面長のまま
@@ -7871,7 +7926,7 @@ function rebuildClassOptions() {
   flangeOpts.cls = sel.value;
 }
 // 全ドロップダウンに変更リスナーを付与（アクティブ部品の仕様へ反映）
-['optSize', 'optType', 'optClass', 'optFace', 'optSch'].forEach(id => {
+['optSize', 'optType', 'optClass', 'optFace', 'optSch', 'optRdfSize', 'optEcc'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => onOptChange(id));
 });
@@ -14443,6 +14498,131 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (rec.type === 'xline' || rec.type === 'line') updateXlinePts();
     }
   }, true);
+
+  // ================= 電卓（2026-08-03 社長要望・プロパティと同じ浮きパネル） =================
+  // 現場の足し引き・切寸の暗算用。式を打っても、キーを押しても計算できる。
+  // eval は使わず、自前の計算（操車場アルゴリズム）で括弧・優先順位まで解く。
+  (function calcPanel() {
+    const panel = document.getElementById('calcPanel');
+    const head = document.getElementById('calcHead'), btn = document.getElementById('cmdCalc');
+    const expr = document.getElementById('calcExpr'), out = document.getElementById('calcOut');
+    const keys = document.getElementById('calcKeys'), closeBtn = document.getElementById('calcClose');
+    if (!panel || !expr) return;
+    // 式を数と演算子に分けて、優先順位どおりに計算する（+−×÷・括弧・単項の−）
+    function calc(src) {
+      const t = String(src).replace(/[×✕]/g, '*').replace(/[÷]/g, '/').replace(/[−ー]/g, '-')
+                           .replace(/[（]/g, '(').replace(/[）]/g, ')').replace(/\s+/g, '');
+      if (!t) return null;
+      let i = 0;
+      const nums = [], ops = [];
+      const prec = c => (c === '+' || c === '-') ? 1 : (c === '*' || c === '/') ? 2 : 0;
+      const apply = () => {
+        const op = ops.pop(), b2 = nums.pop(), a2 = nums.pop();
+        if (a2 == null || b2 == null) throw 0;
+        nums.push(op === '+' ? a2 + b2 : op === '-' ? a2 - b2 : op === '*' ? a2 * b2
+                : (b2 === 0 ? NaN : a2 / b2));
+      };
+      let prevNum = false;
+      while (i < t.length) {
+        const c = t[i];
+        if (/[0-9.]/.test(c)) {
+          let j = i; while (j < t.length && /[0-9.]/.test(t[j])) j++;
+          const v = parseFloat(t.slice(i, j));
+          if (!isFinite(v)) throw 0;
+          nums.push(v); i = j; prevNum = true; continue;
+        }
+        if (c === '(') { ops.push(c); i++; prevNum = false; continue; }
+        if (c === ')') {
+          while (ops.length && ops[ops.length - 1] !== '(') apply();
+          if (!ops.length) throw 0;
+          ops.pop(); i++; prevNum = true; continue;
+        }
+        if ('+-*/'.includes(c)) {
+          if (!prevNum && (c === '-' || c === '+')) { nums.push(0); }   // 単項の＋−
+          while (ops.length && prec(ops[ops.length - 1]) >= prec(c)) apply();
+          ops.push(c); i++; prevNum = false; continue;
+        }
+        throw 0;
+      }
+      while (ops.length) { if (ops[ops.length - 1] === '(') throw 0; apply(); }
+      if (nums.length !== 1) throw 0;
+      return nums[0];
+    }
+    function show() {
+      const v = expr.value.trim();
+      if (!v) { out.textContent = '0'; return; }
+      let r = null;
+      try { r = calc(v); } catch (e) { r = null; }
+      out.textContent = (r == null || !isFinite(r)) ? '—' : (Math.round(r * 1e6) / 1e6).toString();
+    }
+    expr.addEventListener('input', show);
+    expr.addEventListener('keydown', e => {
+      e.stopPropagation();                       // 3D側のショートカット（Delete/Esc等）へ渡さない
+      if (e.key === 'Enter') { e.preventDefault(); equals(); }
+    });
+    function equals() {
+      let r = null;
+      try { r = calc(expr.value); } catch (e) { r = null; }
+      if (r != null && isFinite(r)) { expr.value = String(Math.round(r * 1e6) / 1e6); show(); }
+    }
+    if (keys) keys.addEventListener('click', e => {
+      const b2 = e.target.closest('button'); if (!b2) return;
+      const k = b2.dataset.k;
+      if (k === 'C') { expr.value = ''; }
+      else if (k === '←') { expr.value = expr.value.slice(0, -1); }
+      else if (k === '=') { equals(); return; }
+      else expr.value += k;
+      show(); expr.focus();
+    });
+    let open = false;
+    function setOpen(on) {
+      open = !!on;
+      panel.style.display = open ? 'flex' : 'none';
+      if (btn) btn.classList.toggle('active', open);
+      try { localStorage.setItem('p3d_calc_open', open ? '1' : '0'); } catch (e) {}
+      if (open) { restorePos(); expr.focus(); show(); }
+    }
+    if (btn) btn.onclick = () => setOpen(!open);
+    if (closeBtn) closeBtn.addEventListener('click', e => { e.stopPropagation(); setOpen(false); });
+    function applyPos(l, t) {
+      const w = panel.offsetWidth || 236;
+      l = Math.max(2, Math.min(l, window.innerWidth - w - 2));
+      t = Math.max(2, Math.min(t, window.innerHeight - 46));
+      panel.style.left = Math.round(l) + 'px'; panel.style.top = Math.round(t) + 'px';
+      panel.style.bottom = 'auto'; panel.style.right = 'auto';
+    }
+    function restorePos() {
+      let saved = null; try { saved = localStorage.getItem('p3d_calc_pos'); } catch (e) {}
+      if (saved) { const [l, t] = saved.split(',').map(Number); if (isFinite(l) && isFinite(t)) applyPos(l, t); }
+    }
+    let hdrDrag = null;
+    if (head) {
+      head.addEventListener('pointerdown', e => {
+        if (closeBtn && (e.target === closeBtn || closeBtn.contains(e.target))) return;
+        const r = panel.getBoundingClientRect();
+        hdrDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+        if (head.setPointerCapture) try { head.setPointerCapture(e.pointerId); } catch (err) {}
+        e.preventDefault(); e.stopPropagation();
+      });
+      head.addEventListener('pointermove', e => {
+        if (!hdrDrag) return;
+        applyPos(e.clientX - hdrDrag.dx, e.clientY - hdrDrag.dy);
+        e.preventDefault(); e.stopPropagation();
+      });
+      const endDrag = () => {
+        if (!hdrDrag) return;
+        hdrDrag = null;
+        try { localStorage.setItem('p3d_calc_pos', `${parseInt(panel.style.left, 10)},${parseInt(panel.style.top, 10)}`); } catch (e) {}
+      };
+      head.addEventListener('pointerup', endDrag);
+      head.addEventListener('pointercancel', endDrag);
+    }
+    ['pointerdown', 'click', 'wheel'].forEach(ev => panel.addEventListener(ev, e => e.stopPropagation()));
+    if (localStorage.getItem('p3d_calc_open') === '1') setOpen(true);
+    window.__calcEval = calc;            // e2e検証用
+    window.__calcOpen = (on) => setOpen(on);
+    window.__calcIsOpen = () => open;
+  })();
 
   // ================= プロパティパネル（2026-07-18 社長要望） =================
   // 選択中オブジェクト（部品・線分・構築線・円・寸法・文字）の値を左下のパネルに一覧表示し、その場で編集できる。

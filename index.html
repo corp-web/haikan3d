@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0802U — SKT-HD ♦</title>
+<title>配管3D v0803A — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260802b">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260802b">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260802b">
-<meta name="apple-mobile-web-app-title" content="配管3D v0802U">
+<meta name="apple-mobile-web-app-title" content="配管3D v0803A">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -93,6 +93,34 @@
   #ppBody .pp-row .pp-unit { flex: 0 0 auto; color: #7f8db0; }
   #ppBody .pp-row .pp-ro { flex: 1 1 auto; color: #dbe6fb; }
   #ppBody .pp-note { color: #7f8db0; margin: 6px 0 2px; line-height: 1.5; }
+  /* 電卓パネル（プロパティと同じ作り：ドラッグで移動・✕で閉じる。2026-08-03 社長要望） */
+  #calcPanel { position: fixed; left: 270px; bottom: 56px; width: 236px;
+    background: rgba(20,28,51,.94); border: 1px solid #36436b; border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.4); display: none; flex-direction: column; overflow: hidden; z-index: 23; }
+  #calcPanel .il-head { position: relative; color: #9fb2d6; font-size: 11px; font-weight: 700; text-align: center;
+    padding: 6px 8px; border-bottom: 1px solid #36436b; letter-spacing: 1px; cursor: move; user-select: none; touch-action: none; }
+  #calcPanel #calcClose { cursor: pointer; padding: 4px 7px; right: 2px; font-size: 12px; position: absolute; }
+  #calcPanel #calcClose:hover { color: #ff8a8a; }
+  #calcBody { padding: 8px; }
+  #calcExpr { width: 100%; box-sizing: border-box; font: 15px/1.4 Consolas,Meiryo,monospace; text-align: right;
+    padding: 5px 7px; border-radius: 6px; border: 1px solid #36436b; background: #0f1830; color: #dbe4f3; }
+  #calcOut { text-align: right; font: bold 20px/1.5 Consolas,Meiryo,monospace; color: #7fd1ff;
+    min-height: 30px; padding: 0 4px; overflow: hidden; }
+  #calcKeys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 4px; }
+  #calcKeys button { font: 15px Meiryo,sans-serif; padding: 9px 0; border: 1px solid #36436b; border-radius: 7px;
+    background: #1b2545; color: #dbe4f3; cursor: pointer; }
+  #calcKeys button:active { background: #2f6fd8; }
+  #calcKeys button.op { background: #24325c; color: #9fd0ff; }
+  #calcKeys button.eq { background: #2f6fd8; color: #fff; }
+  #calcKeys button.fn { background: #2a2f45; color: #ffd08a; }
+  body.light #calcPanel { background: rgba(248,250,253,.96); border-color: #c4ccda; }
+  body.light #calcPanel .il-head { color: #33405c; border-bottom-color: #c4ccda; }
+  body.light #calcExpr { background: #fff; color: #2a3550; border-color: #c4ccda; }
+  body.light #calcOut { color: #1f6fd0; }
+  body.light #calcKeys button { background: #eef2f8; color: #33405c; border-color: #c4ccda; }
+  body.light #calcKeys button.op { background: #e3ebf7; color: #1f4f9c; }
+  body.light #calcKeys button.eq { background: #2f6fd8; color: #fff; }
+  body.light #calcKeys button.fn { background: #f6efe1; color: #8a6a20; }
   body.light #propPanel { background: rgba(248,250,253,.96); border-color: #c4ccda; }
   body.light #propPanel .il-head { color: #33405c; border-bottom-color: #c4ccda; }
   body.light #ppBody { color: #33405c; }
@@ -547,6 +575,7 @@
         <button id="cmdShow" title="非表示にしたアイテムをすべて再表示"><span class="ic">◉</span>再表示</button>
         <button id="cmdHide" title="非表示コマンド：選択中のアイテムを隠す／選択なしで押すと次にタップしたアイテムを隠す（1回で終了・Esc・再押下で取消）"><span class="ic">◌</span>非表示</button>
         <button id="cmdDetail" title="詳細図：押してから拡大したい所を枠で囲むと、印刷の左上に拡大図（詳細A/B/C）が付き、本図には囲んだ枠が入る。同じ範囲をもう一度囲むと取り消し。アイテムを選んでから押しても登録できます"><span class="ic">🔍</span>詳細図</button>
+        <button id="cmdCalc" title="電卓：足し引き・掛け割りができる小さな電卓（ドラッグで移動・✕で閉じる）"><span class="ic">🖩</span>電卓</button>
         <button id="cmdProps" title="プロパティ：選択したオブジェクト（部品・線・寸法・文字・円）の位置や値を一覧で表示・編集"><span class="ic">☰</span>ﾌﾟﾛﾊﾟﾃｨ</button>
       </div>
       <div class="rb-title">編集</div>
@@ -690,6 +719,8 @@
       <label>呼び径<select id="optSize"></select></label>
       <label>クラス<select id="optClass"></select></label>
       <label>フェイス<select id="optFace"></select></label>
+      <label id="optRdfWrap" style="display:none" title="レジューシングフランジの小径側（大径より小さい呼び径）">小径<select id="optRdfSize"></select></label>
+      <label id="optEccWrap" style="display:none" title="偏心＝小径のボアを片側に寄せる（外面が揃う）／同心＝中心">偏心<select id="optEcc"><option value="0">同心(CONC)</option><option value="1">偏心(ECC)</option></select></label>
       <label id="optSchWrap">Sch<select id="optSch"></select></label>
       <label title="パイプの芯線上へ置いて挿入する時の枚数。合い＝ガスケットを挟んで2枚">枚数<select id="optPair"><option value="1">片ﾌﾗﾝｼﾞ</option><option value="2">合い(ｶﾞｽｹｯﾄ付)</option></select></label>
     </div>
@@ -732,6 +763,22 @@
   <div id="propPanel">
     <div class="il-head" id="ppHead" title="ドラッグで移動">プロパティ<span class="il-caret" id="ppClose" title="閉じる（リボンのプロパティで再表示）">✕</span></div>
     <div id="ppBody"></div>
+  </div>
+  <!-- 電卓（プロパティと同じ浮きパネル。現場の足し引き・切寸の暗算用。2026-08-03 社長要望） -->
+  <div id="calcPanel">
+    <div class="il-head" id="calcHead" title="ドラッグで移動">電卓<span id="calcClose" title="閉じる（リボンの電卓で再表示）">✕</span></div>
+    <div id="calcBody">
+      <input id="calcExpr" type="text" inputmode="text" placeholder="100+200*3" autocomplete="off">
+      <div id="calcOut">0</div>
+      <div id="calcKeys">
+        <button class="fn" data-k="C">C</button><button class="fn" data-k="←">←</button>
+        <button class="fn" data-k="(">(</button><button class="fn" data-k=")">)</button>
+        <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button><button class="op" data-k="/">÷</button>
+        <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button><button class="op" data-k="*">×</button>
+        <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button><button class="op" data-k="-">−</button>
+        <button data-k="0">0</button><button data-k=".">.</button><button class="eq" data-k="=">=</button><button class="op" data-k="+">＋</button>
+      </div>
+    </div>
   </div>
   <!-- 設置アイテム一覧（右側・表形式） -->
   <div id="itemList">
