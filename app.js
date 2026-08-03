@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-D';
+const APP_VER = 'v0803-E';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3112,6 +3112,11 @@ function updateOptVisibility() {
   const isRDF = flangeOpts.type === 'RDF';
   const rw = document.getElementById('optRdfWrap'); if (rw) rw.style.display = isRDF ? '' : 'none';
   const ew = document.getElementById('optEccWrap'); if (ew) ew.style.display = isRDF ? '' : 'none';
+  // 枚数（片／合い）＝ブラインド・レジューシングは1枚もので使うので出さない（2026-08-03 社長指示）
+  const pw = document.getElementById('optPair');
+  const pwLab = pw && pw.closest('label');
+  if (pwLab) pwLab.style.display = (isRDF || flangeOpts.type === 'BL') ? 'none' : '';
+  if (pw && (isRDF || flangeOpts.type === 'BL')) { pw.value = '1'; flangeOpts.pair = '1'; }
   const schOn = (flangeOpts.type === 'WN' || flangeOpts.type === 'SW' || flangeOpts.type === 'LJ');   // RDFは板に穴だけ＝Sch不要
   const sw = document.getElementById('optSchWrap'); if (sw) sw.style.display = schOn ? '' : 'none';
   // フェイス欄：LJは無効化（フラット面固定。ガスケット面はスタブ側のつばが持つ）
@@ -12855,6 +12860,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   window.__annDeselect = () => deselectLine();   // 構築線のEL→角度連鎖の「閉じ」用
   window.__annSelectRec = (rec) => { if (annStore.includes(rec)) selectLine(rec); };   // 寸法確定後に選択して「値」フォームを出す用
+  // 引出し・寸法の端をつまんだ状態にする（e2e検証用。実操作と同じ lineDrag を作る）
+  window.__annStartDimEnd = (rec, end) => {
+    if (!annStore.includes(rec)) return false;
+    selectLine(rec);
+    const rc = renderer.domElement.getBoundingClientRect();
+    const pt = (end === 0 ? rec.a : rec.b).clone();
+    const nn = modelGroup.localToWorld(pt).project(activeCam());
+    lineDrag = { mode: 'dimend', rec, end, moved: false, free: false,
+                 downX: rc.left + (nn.x * 0.5 + 0.5) * rc.width, downY: rc.top + (-nn.y * 0.5 + 0.5) * rc.height };
+    if (rec.style && rec.style.dimKind === 'leader') {
+      clearTimeout(freeHoldTimer);
+      freeHoldTimer = setTimeout(() => { if (lineDrag && lineDrag.mode === 'dimend') lineDrag.free = true; }, 500);
+    }
+    return true;
+  };
+  window.__annDimEndFree = () => !!(lineDrag && lineDrag.free);
+  window.__annEndDimEnd = () => { clearTimeout(freeHoldTimer); lineDrag = null; };
   window.__annToggleRec = (rec) => {   // 複数選択へ出し入れ（Ctrl+クリックと同じ。e2e検証用）
     if (!annStore.includes(rec)) return false;
     if (selAnns.has(rec)) { selAnns.delete(rec); if (lineSel === rec) { lineSel = null; clearLineHandles(); } }
@@ -13159,6 +13181,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   };
   // 線分をプログラムから追加（配管化などのe2e検証用。a/b=[x,y,z]・単位m）
   window.__annAddLine = (a, b) => { addAnnotation('line', new V3(a[0], a[1], a[2]), new V3(b[0], b[1], b[2]), null); return annStore.length - 1; };
+  window.__annAddDim = (a, b, st) => { addAnnotation('dim', new V3(a[0], a[1], a[2]), new V3(b[0], b[1], b[2]), Object.assign({}, styleFor('dim'), st || {})); return annStore[annStore.length - 1]; };   // e2e検証用
   window.__annStoreForTest = () => annStore;   // e2e検証用
   // ---- プロパティパネル用（単一選択の注釈の値の取得・適用。2026-07-18 社長要望） ----
   window.__annPropsGet = () => {
@@ -14170,7 +14193,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
                 s.dimFixPt = { x: m.x, y: m.y, z: m.z };
               }
             }
-            lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false };
+            lineDrag = { mode: 'dimend', rec: lineSel, end, downX: e.clientX, downY: e.clientY, moved: false, free: false };
+            // 引出し線は通常「水平／垂直に伸ばし縮み」。長押し(0.5秒)で自由移動へ（2026-08-03 社長指示）
+            if (lineSel.style && lineSel.style.dimKind === 'leader') {
+              clearTimeout(freeHoldTimer);
+              freeHoldTimer = setTimeout(() => {
+                if (lineDrag && lineDrag.mode === 'dimend') {
+                  lineDrag.free = true;
+                  if (window.__toast) window.__toast('引出し：自由移動');
+                }
+              }, 500);
+            }
             e.stopImmediatePropagation(); return;
           }
           startEndpointEdit(lineSel, end);
@@ -14384,6 +14417,30 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       const snap = moveSnapForGrip(e.clientX, e.clientY, new Set(), ex);
       let pos = snap;
       if (!pos) { const hit = planeHitAt(e.clientX, e.clientY, cur.y); if (!hit) return; pos = hit; }
+      // 引出し線＝通常は水平／垂直だけに伸ばし縮み（長押しで自由移動に切替。2026-08-03 社長指示）。
+      // 画面での動き方が縦寄りなら「垂直」＝鉛直面で拾い直す（水平面の交点だけでは上下に伸ばせない）。
+      if (!lineDrag.free && rec.style && rec.style.dimKind === 'leader') {
+        const fix = lineDrag.end === 0 ? rec.b : rec.a;
+        const rect2 = renderer.domElement.getBoundingClientRect();
+        // 「つまんだ所からどちらへ動かしたか」で水平／垂直を決める（動かし方どおりに伸びる）
+        const dxs = e.clientX - lineDrag.downX, dys = e.clientY - lineDrag.downY;
+        if (Math.abs(dys) > Math.abs(dxs)) {                 // 縦寄り＝上下（Y）に伸ばす
+          const cam2 = activeCam();
+          const nrm = new V3(); cam2.getWorldDirection(nrm); nrm.y = 0;
+          if (nrm.lengthSq() < 1e-9) nrm.set(0, 0, 1);
+          nrm.normalize();
+          placeNdc.x = ((e.clientX - rect2.left) / rect2.width) * 2 - 1;
+          placeNdc.y = -((e.clientY - rect2.top) / rect2.height) * 2 + 1;
+          placeRay.setFromCamera(placeNdc, cam2);
+          const pl = new THREE.Plane().setFromNormalAndCoplanarPoint(nrm, modelGroup.localToWorld(fix.clone()));
+          const hitV = new V3();
+          if (placeRay.ray.intersectPlane(pl, hitV)) pos = new V3(fix.x, modelGroup.worldToLocal(hitV).y, fix.z);
+          else pos = new V3(fix.x, pos.y, fix.z);
+        } else {                                             // 横寄り＝水平（東西 or 南北）に伸ばす
+          const d = pos.clone().sub(fix);
+          pos = (Math.abs(d.x) >= Math.abs(d.z)) ? new V3(pos.x, fix.y, fix.z) : new V3(fix.x, fix.y, pos.z);
+        }
+      }
       cur.copy(pos);
       rebuildAnn(rec);
       refreshAnnHi(); refreshHandles();
@@ -14419,6 +14476,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   window.addEventListener('pointercancel', () => {   // ジェスチャ取消＝線ドラッグの後始末（操作不能の残留防止）
     _lnEmptyDown = null;
     if (!lineDrag) return;
+    clearTimeout(freeHoldTimer);
     lineDrag = null;
     clearMarkers();
     if (typeof hideLineBoxes === 'function') hideLineBoxes();
@@ -14432,6 +14490,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       if (!wasDrag) deselectLine();
     }
     if (drawActive() || e.button !== 0 || !lineDrag) return;
+    clearTimeout(freeHoldTimer);   // 引出しの「長押しで自由移動」の待ちを解除
     const mode = lineDrag.mode, moved = lineDrag.moved, nearEnd = lineDrag.nearEnd;
     const translated = lineDrag._translated;
     lineDrag = null;
