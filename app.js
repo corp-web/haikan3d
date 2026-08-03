@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0803-G';
+const APP_VER = 'v0803-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -35,14 +35,17 @@ const scene = new THREE.Scene();
 // CAD標準風の中間グレー1本に統一。UIパネルも明るい配色＝背景と調和（2026-07-20 社長要望））
 // 背景＝真っ白（2026-08-02 社長「透明がダメなら真っ白で」）。演出なしの#ffffff一色。
 // 起動下地（index.htmlのbody background）も同色＝立ち上がりから白。
-// パールホワイト＝上から下へごく静かな階調（2026-08-03 社長提案・見比べで③を選択）。
-// 真珠のような柔らかい明暗で、上下の向きの手がかりも残る。印刷は従来どおり真っ白で撮る。
+// パールメタリック＝車のパール塗装のように、上から下へ色がわずかに移ろう階調
+// （2026-08-03 社長提案・見比べで③「虹色の移ろい」を選択）。
+// 天頂＝青みのパール／少し下＝暖かいパール／地平あたり＝ほんのり紫／足元＝沈む。
+// 図面の邪魔にならない淡さに留める。印刷は従来どおり真っ白で撮る。
 function makePearlBg() {
   const cv = document.createElement('canvas'); cv.width = 4; cv.height = 256;
   const g = cv.getContext('2d'), lg = g.createLinearGradient(0, 0, 0, 256);
-  lg.addColorStop(0, '#fdfcfa');      // 天頂
-  lg.addColorStop(0.55, '#f7f4ef');   // 中ほど
-  lg.addColorStop(1, '#efebe3');      // 足元
+  lg.addColorStop(0, '#f7fbff');      // 天頂＝青み
+  lg.addColorStop(0.34, '#fdfaf4');   // 少し下＝暖かい
+  lg.addColorStop(0.62, '#f4f1f6');   // 地平あたり＝ほんのり紫
+  lg.addColorStop(1, '#e9e7ee');      // 足元
   g.fillStyle = lg; g.fillRect(0, 0, 4, 256);
   const t = new THREE.CanvasTexture(cv);
   if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
