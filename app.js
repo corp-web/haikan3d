@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0802-T';
+const APP_VER = 'v0802-U';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -1358,6 +1358,7 @@ function makePipe(opts) {
   //   o.branch = { hostR: 合わせ半径(mm), side:'inner'|'outer', axis:{x,y,z} 母管の軸（この管のローカル系） }
   //   length は「母管の芯から先端まで」。背面の機点＝母管の芯に置く。
   const br = (o.branch && o.branch.hostR > 0) ? o.branch : null;
+  let boredSmooth = false;   // 貫通穴を開けた時に元の法線を引き継げたか
   // 端面の斜め切り（開先角ではなく「管を斜めに切る」角度・度）。0=直角。±60°まで
   const angF = Math.max(-60, Math.min(60, Number(o.cutAngFace) || 0));   // フェイス側(+Y)
   const angB = Math.max(-60, Math.min(60, Number(o.cutAngBack) || 0));   // 背面側(-Y)
@@ -1436,31 +1437,53 @@ function makePipe(opts) {
     }).filter(bo => bo.r > 0);
     if (bs.length) {
       const g2 = geo.index ? geo.toNonIndexed() : geo;
-      const pos = g2.attributes.position;
-      const out = [];
-      const v = new THREE.Vector3();
-      for (let i = 0; i < pos.count; i += 3) {
-        const cx = (pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3;
-        const cy = (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3;
-        const cz = (pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3;
-        let hole = false;
+      const pos = g2.attributes.position, nor = g2.attributes.normal;
+      // 穴の中に入る頂点は、そのまま捨てるとフチがギザギザになる（2026-08-03 社長指摘）。
+      // 同じ回り角θのまま、交線（枝の円筒と母管の壁の交わり）まで軸方向へ寄せてからフチにする。
+      //   壁の点 p=(x, y, z)、枝の芯は(0,at,0)を通り向きax・半径r。u=y−at として
+      //   (1−ay²)u² − 2A·ay·u + (x²+z²−A²−r²) = 0   （A = x·ax.x + z·ax.z）
+      const snapped = new Float32Array(pos.count);        // 1=穴の中だった（＝フチへ寄せた）
+      const ys = new Float32Array(pos.count);
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        ys[i] = y;
         for (const bo of bs) {
-          v.set(cx, cy - bo.at, cz);
-          const along = v.dot(bo.ax);
-          if (along < -0.001) continue;                     // 枝が伸びる側だけ抜く（反対の壁は残す）
-          if (v.addScaledVector(bo.ax, -along).length() < bo.r) { hole = true; break; }
+          const u = y - bo.at, A = x * bo.ax.x + z * bo.ax.z;
+          const s = A + u * bo.ax.y;
+          if (s < -0.001) continue;                       // 枝が伸びる側だけ
+          const d2 = x * x + z * z + u * u - s * s;
+          if (d2 >= bo.r * bo.r) continue;                // 穴の外
+          const aq = 1 - bo.ax.y * bo.ax.y;
+          if (aq < 1e-9) continue;
+          const bq = -2 * A * bo.ax.y, cq = x * x + z * z - A * A - bo.r * bo.r;
+          const disc = bq * bq - 4 * aq * cq;
+          if (disc <= 0) continue;
+          const sq = Math.sqrt(disc);
+          const u1 = (-bq - sq) / (2 * aq), u2 = (-bq + sq) / (2 * aq);
+          ys[i] = bo.at + (Math.abs(u - u1) <= Math.abs(u - u2) ? u1 : u2);   // 近い側のフチへ
+          snapped[i] = 1;
+          break;
         }
-        if (hole) continue;
-        for (let k = 0; k < 3; k++) out.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+      }
+      const outP = [], outN = [];
+      for (let i = 0; i < pos.count; i += 3) {
+        if (snapped[i] && snapped[i + 1] && snapped[i + 2]) continue;   // 3頂点とも穴の中＝この面は要らない
+        for (let k = 0; k < 3; k++) {
+          const j = i + k;
+          outP.push(pos.getX(j), ys[j], pos.getZ(j));
+          if (nor) outN.push(nor.getX(j), nor.getY(j), nor.getZ(j));
+        }
       }
       const ng = new THREE.BufferGeometry();
-      ng.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+      ng.setAttribute('position', new THREE.Float32BufferAttribute(outP, 3));
+      if (nor) ng.setAttribute('normal', new THREE.Float32BufferAttribute(outN, 3));   // 元の滑らかな法線を保つ
       if (g2 !== geo) g2.dispose();
       geo.dispose();
       geo = ng;
+      boredSmooth = !!nor;
     }
   }
-  geo.computeVertexNormals();
+  if (!boredSmooth) geo.computeVertexNormals();   // 穴あけで法線を引き継いだ時は掛け直さない（面がカクつく）
   const mat = FLANGE_MAT.clone(); mat.side = THREE.DoubleSide; mat.needsUpdate = true;
   const g = new THREE.Group();
   g.add(new THREE.Mesh(geo, mat));
@@ -3582,6 +3605,8 @@ function moveAnnPlace(cx, cy) {
 function dropAnnPlace() {
   if (!annPlaceMode) return;
   window.__annMoveEnd(); annPlaceMode = null; clearMarkers();
+  clearSelPivot();                // 起点（オレンジの玉）も片付ける（2026-08-03 社長報告）
+  if (window.__originPickClear) window.__originPickClear();
   if (window.__scheduleHistory) window.__scheduleHistory();
 }
 function cancelAnnPlace() {
@@ -5201,6 +5226,8 @@ function dropMovingPart() {           // ドラッグを離して（またはク
   movingPart.userData.orient = movingOrient;
   movingPart.userData.roll = movingRoll;
   autoInsertGasket(movingPart);   // 移動でフランジ面どうしが合った時もガスケットを挟む
+  clearSelPivot();                // 決めていた起点（オレンジの玉）は移動が終わったら片付ける
+  if (window.__originPickClear) window.__originPickClear();
   // 動かした先が母管の上なら被り付きにする（2026-08-03 社長指示：置いた時だけでなく動かした時も）
   if (typeof applyBranchIfOnPipe === 'function' && applyBranchIfOnPipe(movingPart) && window.__toast)
     window.__toast('被り付きにしました（母管の内面でカット・母管は貫通）');
@@ -7158,6 +7185,8 @@ renderer.domElement.addEventListener('pointerup', e => {
     const wasHover = dirDrag.hover;
     dirDrag = null; clearMarkers(); _idleSig = null; updateForm();
     autoInsertGasket(moved);   // 確定した位置でフランジ面どうしならガスケットを挟む
+    clearSelPivot();           // 決めていた起点（オレンジの玉）は移動が終わったら片付ける
+    if (window.__originPickClear) window.__originPickClear();
     if (typeof applyBranchIfOnPipe === 'function' && applyBranchIfOnPipe(moved) && window.__toast)
       window.__toast('被り付きにしました（母管の内面でカット・母管は貫通）');   // 直線移動で母管の上へ動かした時
     if (wasHover) {            // 起点を決めて行う直線移動＝自由移動と同じ後始末（2026-07-28 社長指摘）
