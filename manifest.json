@@ -1,16 +1,16 @@
 ﻿{
-  "name": "配管3D v0803K",
-  "short_name": "配管3D v0803K",
+  "name": "配管3D v0803L",
+  "short_name": "配管3D v0803L",
   "description": "現場で採寸しながらアイソメ図を作る配管3Dアプリ（志基テクノ）",
   "lang": "ja",
   "start_url": "./",
   "scope": "./",
   "display": "browser",
-  "background_color": "#e7edf7",
+  "background_color": "#dde6f4",
   "theme_color": "#1c3157",
   "icons": [
-    { "src": "icon-192.png?v=20260803k", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icon-512.png?v=20260803k", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "icon-1024.png?v=20260803k", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
+    { "src": "icon-192.png?v=20260803l", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png?v=20260803l", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-1024.png?v=20260803l", "sizes": "1024x1024", "type": "image/png", "purpose": "any" }
   ]
 }
