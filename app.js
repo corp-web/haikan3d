@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-B';
+const APP_VER = 'v0804-C';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -10369,7 +10369,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // アイテムリスト（画面と同じ列）
     const rows = partsRows();
     let ilRows = rows.map(r => `<tr><td class="n">${r.no}</td><td>${esc(r.kind)}</td><td>${esc(r.type)}</td><td>${esc(r.size)}</td><td>${esc(r.cls)}</td><td class="q">${r.qty}</td><td>${esc(r.mat) || '—'}</td></tr>`).join('');
-    if (!ilRows) ilRows = `<tr><td colspan="7" style="text-align:center;color:#888;padding:3mm">（部品なし）</td></tr>`;
+    if (!ilRows) ilRows = `<tr><td colspan="7" style="text-align:center;color:#888;padding:calc(var(--u)*3)">（部品なし）</td></tr>`;
     const specPairs = [
       ['法規', sv('law')], ['クラス', sv('cls')], ['設計温度℃', sv('tempD')], ['常用温度℃', sv('tempN')],
       ['設計圧力', sv('presD')], ['常用圧力', sv('presN')], ['試験 耐圧', sv('testP')], ['気密', sv('testA')],
@@ -10400,38 +10400,44 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const ilCollapsed = !prIl;
     const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>配管図 ${no || name || ''}</title>
 <style>
+  /* 寸法はぜんぶ「紙の幅の1/420」を1単位（--u）にした相対値で書く（2026-08-04 社長報告への対策）。
+     旧＝mm直書きだと、iPadのAirPrintは@pageの用紙指定(A3)を無視して実際の用紙に刷るため、
+     A4に刷るとアイテムリスト・詳細図・図面情報だけが（絶対mmのまま＝）倍近く大きく崩れていた。
+     --u基準ならA3でも A4でも、プレビューどおりの割合で紙いっぱいに縮小印刷される。
+     プレビュー（iframe幅1587px）では --u≒1mm@96dpi なので見た目は従来と同一。 */
   *{box-sizing:border-box;margin:0;padding:0;}
+  html{--u:calc(100vw / 420);}
   html,body{height:100%;background:#fff;}
   body{font-family:"Meiryo","Hiragino Kaku Gothic ProN",sans-serif;color:#111;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .pg{position:relative;width:100%;height:100%;overflow:hidden;background:#fff;}
   /* 図面は外枠の内側に収める＝構築線など長い線が枠から飛び出さない（2026-07-21 社長指摘） */
-  .dwg{position:absolute;inset:7.6mm;overflow:hidden;}
+  .dwg{position:absolute;inset:calc(var(--u)*7.6);overflow:hidden;}
   .dwg>img{width:100%;height:100%;object-fit:contain;display:block;}
   .dwg>svg.sl{position:absolute;inset:0;width:100%;height:100%;}
-  .frame{position:absolute;inset:7mm;border:0.5mm solid #111;border-radius:2.5mm;pointer-events:none;}
-  .north{position:absolute;left:10mm;top:9mm;width:24mm;height:24mm;}
+  .frame{position:absolute;inset:calc(var(--u)*7);border:calc(var(--u)*0.5) solid #111;border-radius:calc(var(--u)*2.5);pointer-events:none;}
+  .north{position:absolute;left:calc(var(--u)*10);top:calc(var(--u)*9);width:calc(var(--u)*24);height:calc(var(--u)*24);}
   /* 詳細図（部分拡大）：左上に積む。本図には丸印＋記号を重ねる（2026-07-21 社長要望） */
-  .detail{position:absolute;width:86mm;background:#fff;border:0.3mm solid #111;border-radius:1mm;overflow:hidden;}
-  .detail .dttl{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:0.8mm;border-bottom:0.2mm solid #111;}
-  .detail img{display:block;width:100%;height:52mm;object-fit:fill;}
-  .dmark{position:absolute;border:0.4mm solid #111;border-radius:1mm;pointer-events:none;}
-  .dmarkt{position:absolute;font-size:4mm;font-weight:700;color:#111;}
+  .detail{position:absolute;width:calc(var(--u)*86);background:#fff;border:calc(var(--u)*0.3) solid #111;border-radius:calc(var(--u)*1);overflow:hidden;}
+  .detail .dttl{font-size:calc(var(--u)*3);font-weight:700;text-align:center;background:#f0f0f0;padding:calc(var(--u)*0.8);border-bottom:calc(var(--u)*0.2) solid #111;}
+  .detail img{display:block;width:100%;height:calc(var(--u)*52);object-fit:fill;}
+  .dmark{position:absolute;border:calc(var(--u)*0.4) solid #111;border-radius:calc(var(--u)*1);pointer-events:none;}
+  .dmarkt{position:absolute;font-size:calc(var(--u)*4);font-weight:700;color:#111;}
   /* アイテムリスト・図面仕様・図面情報（右下） */
-  .panel{position:absolute;right:9mm;bottom:9mm;width:124mm;max-height:calc(100% - 19mm);background:#fff;border:0.12mm solid #111;border-radius:1mm 1mm 2.5mm 1mm;overflow:hidden;display:flex;flex-direction:column;}
-  .panel .hd{font-size:3mm;font-weight:700;text-align:center;background:#f0f0f0;padding:1mm;letter-spacing:.5mm;border-bottom:0.12mm solid #111;}
-  .panel .sc{overflow:hidden;border-bottom:0.12mm solid #111;}
-  .panel table{width:100%;border-collapse:collapse;font-size:2.7mm;}
+  .panel{position:absolute;right:calc(var(--u)*9);bottom:calc(var(--u)*9);width:calc(var(--u)*124);max-height:calc(100% - var(--u)*19);background:#fff;border:calc(var(--u)*0.12) solid #111;border-radius:calc(var(--u)*1) calc(var(--u)*1) calc(var(--u)*2.5) calc(var(--u)*1);overflow:hidden;display:flex;flex-direction:column;}
+  .panel .hd{font-size:calc(var(--u)*3);font-weight:700;text-align:center;background:#f0f0f0;padding:calc(var(--u)*1);letter-spacing:calc(var(--u)*.5);border-bottom:calc(var(--u)*0.12) solid #111;}
+  .panel .sc{overflow:hidden;border-bottom:calc(var(--u)*0.12) solid #111;}
+  .panel table{width:100%;border-collapse:collapse;font-size:calc(var(--u)*2.7);}
   .panel table.items{border-style:hidden;}   /* 外枠はパネル枠に任せ二重線を防ぐ */
-  .panel td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;}
+  .panel td{border:calc(var(--u)*0.12) solid #111;padding:calc(var(--u)*0.7) calc(var(--u)*1.4);white-space:nowrap;}
   .panel td.hcell{background:#f0f0f0;font-weight:700;text-align:left;}
   .panel td.n{text-align:right;color:#555;} .panel td.q{text-align:right;}
   table.kv.info td.k{width:auto;}   /* 情報表は colgroup(12分割)で幅を決める */
-  table.kv td.company{font-weight:700;font-size:3.2mm;text-align:center;}
-  .sec{padding:1.6mm 2.5mm;}
-  .sec .t{font-size:2.9mm;font-weight:700;margin-bottom:1.2mm;}
-  table.kv{width:100%;border-collapse:collapse;font-size:2.6mm;table-layout:fixed;}
-  table.kv td{border:0.12mm solid #111;padding:0.7mm 1.4mm;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  table.kv td.k{background:#f4f4f4;color:#333;width:22mm;}
+  table.kv td.company{font-weight:700;font-size:calc(var(--u)*3.2);text-align:center;}
+  .sec{padding:calc(var(--u)*1.6) calc(var(--u)*2.5);}
+  .sec .t{font-size:calc(var(--u)*2.9);font-weight:700;margin-bottom:calc(var(--u)*1.2);}
+  table.kv{width:100%;border-collapse:collapse;font-size:calc(var(--u)*2.6);table-layout:fixed;}
+  table.kv td{border:calc(var(--u)*0.12) solid #111;padding:calc(var(--u)*0.7) calc(var(--u)*1.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  table.kv td.k{background:#f4f4f4;color:#333;width:calc(var(--u)*22);}
   /* 余白は目一杯（margin:0）。ブラウザが余白に入れるURL・日付・ページ番号もこれで出なくなる */
   @media print{@page{size:A3 landscape;margin:0;}}
 </style></head><body>
@@ -10439,8 +10445,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     <div class="dwg"><img src="${img}">${slSvg}</div>
     ${(() => { let bot = 10; return details.map(d => {   /* 詳細図＝左下から上へ積み上げ（2026-07-30 社長指示） */
         const dw = 86, dih = Math.max(34, Math.min(70, dw / (d.aspect || 1.4)));
-        const html = `<div class="detail" style="left:${INSET + 2}mm;bottom:${bot}mm;width:${dw}mm">
-      <div class="dttl">${esc(d.name)}</div><img src="${d.url}" style="height:${dih.toFixed(0)}mm">
+        const html = `<div class="detail" style="left:calc(var(--u)*${INSET + 2});bottom:calc(var(--u)*${bot});width:calc(var(--u)*${dw})">
+      <div class="dttl">${esc(d.name)}</div><img src="${d.url}" style="height:calc(var(--u)*${dih.toFixed(0)})">
     </div>`;
         bot += dih + 14; return html; }).join(''); })()}
     ${axisSvg}
