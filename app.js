@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-I';
+const APP_VER = 'v0804-J';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2289,6 +2289,69 @@ function valveEndFlange(cls, sizeA, mat, noHub) {
   if (!noHub) { const hubG = ringGeo(neckR, boreR, hub); hubG.translate(0, -t - rfH - hub / 2, 0); g.add(new THREE.Mesh(hubG, mat)); }  // ハブ（背面）
   return g;
 }
+// ===== アクチュエータ（自動弁＝CV）2026-08-04 社長要望 =====
+// PGのサイフォン管と同じ流儀で、プロパティのオン/オフで手動ハンドル⇄アクチュエータを切り替える。
+// 操作部の軸は +Z（手動と同じ）。弁種ごとに実物に合わせて頭の形を変える：
+//   ball ＝ラック＆ピニオン（横置きシリンダ＋中央のピニオン室）
+//   gate ＝遮断弁ふう＝縦に長いピストンシリンダ
+//   globe＝縦に長いダイヤフラム（皿を重ねた頭）
+// z0＝取り付け高さ（ステム上端 or ボンネット上端）。面間は変えない＝切寸・寸法に影響しない。
+function vActuator(g, kind, z0, bodyR, halfL, rPipe, bodyMat, opMat) {
+  const mk = (geo, mat, z, rotZ) => { const m = new THREE.Mesh(geo, mat); m.position.z = z; if (rotZ) m.rotation.z = rotZ; g.add(m); return m; };
+  const disc = (r, t, z, mat) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, t, 24), mat); m.rotation.x = Math.PI / 2; m.position.z = z; g.add(m); return m; };
+  if (kind === 'ball') {
+    // ラック＆ピニオン＝四角い箱形のシリンダ（2026-08-04 社長指示：四角く・大きく・首も太く）
+    const neckR = Math.max(bodyR * 0.5, VMM(16));                         // 太い首
+    const yokeTop = z0 + Math.max(bodyR * 0.55, VMM(14));
+    g.add(vCylZ(neckR, z0, yokeTop, opMat));                              // 取付ブラケット（首）
+    disc(neckR * 1.35, Math.max(bodyR * 0.14, VMM(5)), yokeTop, bodyMat); // 取付フランジ
+    const bH = Math.max(bodyR * 1.5, VMM(46));                            // 箱の高さ
+    const bW = Math.max(bodyR * 4.0, halfL * 1.9);                        // 箱の長さ（流れ方向と直角＝X）
+    const bD = Math.max(bodyR * 1.55, VMM(48));                           // 箱の奥行き
+    const box = new THREE.Mesh(new THREE.BoxGeometry(bW, bD, bH), opMat);
+    box.position.z = yokeTop + bH / 2; g.add(box);
+    for (const s of [-1, 1]) {                                            // 両端のキャップ（少し出っ張らせる）
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(bW * 0.07, bD * 1.06, bH * 1.06), opMat);
+      cap.position.set(s * bW / 2, 0, yokeTop + bH / 2); g.add(cap);
+    }
+    const pin = new THREE.Mesh(new THREE.BoxGeometry(bW * 0.2, bD * 1.12, bH * 1.12), opMat);   // 中央のピニオン室
+    pin.position.z = yokeTop + bH / 2; g.add(pin);
+    mk(new THREE.CylinderGeometry(neckR * 0.4, neckR * 0.4, bH * 0.35, 12), opMat, yokeTop + bH * 1.14);   // 位置表示の軸
+    return;
+  }
+  if (kind === 'gate') {
+    // 遮断弁＝縦に長いピストンシリンダ（2026-08-04 社長指示：もう少し太く・首も太く）
+    const neckR = Math.max(bodyR * 0.42, VMM(14));                        // 太い首
+    const yokeTop = z0 + Math.max(bodyR * 0.7, VMM(16));
+    g.add(vCylZ(neckR, z0, yokeTop, opMat));                              // ヨーク（首）
+    disc(Math.max(bodyR * 0.95, VMM(26)), Math.max(bodyR * 0.18, VMM(6)), yokeTop, bodyMat);   // 取付フランジ
+    const cyR = Math.max(bodyR * 0.95, VMM(30));                          // 太いシリンダ
+    const cyH = Math.max(halfL * 1.7, bodyR * 3.2);                       // 縦に長い
+    const zTop = yokeTop + cyH;
+    g.add(vCylZ(cyR, yokeTop, zTop, opMat));                              // シリンダ本体
+    disc(cyR * 1.1, cyR * 0.16, yokeTop + cyR * 0.08, opMat);             // 下端板
+    disc(cyR * 1.1, cyR * 0.16, zTop - cyR * 0.08, opMat);                // 上端板
+    mk(new THREE.CylinderGeometry(cyR * 0.16, cyR * 0.16, cyR * 0.7, 12), opMat, zTop + cyR * 0.3);   // 頂部の軸（開度表示）
+    return;
+  }
+  // globe＝縦に長いドーム状のダイヤフラム頭（2026-08-04 社長指示：ドーム状に・首を太く）
+  const neckR = Math.max(bodyR * 0.4, VMM(13));                           // 太い首
+  const yokeTop = z0 + Math.max(halfL * 0.95, bodyR * 1.9);               // 縦に長いヨーク
+  g.add(vCylZ(neckR, z0, yokeTop, opMat));                                // ステム（首）
+  for (const s of [-1, 1]) {                                              // ヨークの支柱2本
+    const col = new THREE.Mesh(new THREE.CylinderGeometry(rPipe * 0.14, rPipe * 0.14, yokeTop - z0, 10), opMat);
+    col.rotation.x = Math.PI / 2;
+    col.position.set(s * bodyR * 0.5, 0, (z0 + yokeTop) / 2); g.add(col);
+  }
+  const dR = Math.max(bodyR * 1.35, VMM(38));                             // ダイヤフラム室の半径
+  const rimT = Math.max(bodyR * 0.2, VMM(6));
+  disc(dR * 1.05, rimT, yokeTop + rimT * 0.5, opMat);                     // 合わせ目のリム（フランジ）
+  const low = new THREE.Mesh(new THREE.SphereGeometry(dR, 26, 14, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), opMat);
+  low.rotation.x = -Math.PI / 2; low.position.z = yokeTop + rimT * 0.5; g.add(low);        // 下の椀（ドーム）
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(dR, 26, 16, 0, Math.PI * 2, 0, Math.PI / 2), opMat);
+  dome.rotation.x = -Math.PI / 2; dome.position.z = yokeTop + rimT * 0.5; g.add(dome);     // 上のドーム
+  mk(new THREE.CylinderGeometry(dR * 0.13, dR * 0.13, dR * 0.42, 12), opMat, yokeTop + rimT * 0.5 + dR * 1.1);   // 頂部の呼吸口
+}
 // ハンドル車（軸=+Z）。リム＋4本スポーク＋ハブ＋ステムナット。R=リム半径(m)（2026-07-19 リアル化）
 function vHandwheel(R, mat) {
   const g = new THREE.Group();
@@ -2355,7 +2418,7 @@ function vCylY(r, y0, y1, mat, r2) { const h = y1 - y0; const m = new THREE.Mesh
 // バルブ生成。opts={kind, sizeA, rating}
 function makeValve(opts) {
   const V3 = THREE.Vector3;
-  const o = Object.assign({ kind: 'gate', sizeA: '50A', rating: 'JIS 10K' }, opts || {});
+  const o = Object.assign({ kind: 'gate', sizeA: '50A', rating: 'JIS 10K', act: false }, opts || {});
   const sizeA = VALVE_SIZES.includes(o.sizeA) ? o.sizeA : '50A';
   const cls = VALVE_RATINGS.includes(o.rating) ? o.rating : 'JIS 10K';
   const bodyMat = valveBodyMat(), opMat = valveOpMat();
@@ -2365,6 +2428,8 @@ function makeValve(opts) {
   const D = flangeDim(cls, sizeA).D;            // フランジ外径(mm)
   const halfL = VMM(valveFtF(o.kind, sizeA, cls)) / 2;
   const k = o.kind;
+  // アクチュエータ（自動弁＝CV）＝ボール/ゲート/グローブだけ。面間は変わらない（2026-08-04 社長要望）
+  const act = !!o.act && ['ball', 'gate', 'globe'].includes(k);
 
   // 中心ボアの半径。valveEndFlange が板に開ける穴と同じ値にして、面から穴がまっすぐ見えるようにする。
   const boreR = VMM(od * 0.42);
@@ -2392,17 +2457,23 @@ function makeValve(opts) {
       // 首＝フランジの縁よりほんの少し上（2026-07-27 社長要望）。旧＝bodyR + VMM(8 + od*0.18)
       const stemTop = Math.max(vLeverStemTop(D, sizeA), bodyR + VMM(10));
       g.add(vCylZ(rPipe * 0.28, bodyR * 0.7, stemTop, opMat));
-      g.add(vLever(VMM(D), rPipe, stemTop, opMat));
+      if (act) vActuator(g, 'ball', stemTop, bodyR, halfL, rPipe, bodyMat, opMat);   // CV＝ラック＆ピニオン
+      else g.add(vLever(VMM(D), rPipe, stemTop, opMat));
     } else {
       // ゲート/グローブ：ボンネット＋ハンドル車
       const bonR = bodyR * 0.52, bonTop = bodyR + halfL * 0.55;
       const bfl = new THREE.Mesh(new THREE.CylinderGeometry(bodyR * 0.7, bodyR * 0.7, VMM(_vdn(sizeA) * 0.12 + 4), 20), bodyMat);
       bfl.rotation.x = Math.PI / 2; bfl.position.z = bodyR * 0.92; g.add(bfl);     // ボンネットフランジ
       g.add(vCylZ(bonR, bodyR * 0.6, bonTop, bodyMat));                            // ボンネット
-      const wheelZ = bonTop + bodyR * 0.45, wheelR = Math.max(bodyR * 0.85, halfL * 0.7);
-      g.add(vCylZ(rPipe * 0.18, bonTop, wheelZ, opMat));                           // ステム
-      const hw = vHandwheel(wheelR, opMat); hw.position.z = wheelZ; g.add(hw);
-      vDressBonnet(g, bodyR, bonR, bodyR * 0.92, bonTop, wheelZ, wheelR, rPipe * 0.18, bodyMat, opMat);   // ヨーク・グランド・ボルト（リアル化）
+      if (act) {
+        // CV＝ゲートは遮断弁ふうの縦に長いピストン頭／グローブは縦に長いダイヤフラム頭（2026-08-04 社長指示）
+        vActuator(g, k, bonTop, bodyR, halfL, rPipe, bodyMat, opMat);
+      } else {
+        const wheelZ = bonTop + bodyR * 0.45, wheelR = Math.max(bodyR * 0.85, halfL * 0.7);
+        g.add(vCylZ(rPipe * 0.18, bonTop, wheelZ, opMat));                           // ステム
+        const hw = vHandwheel(wheelR, opMat); hw.position.z = wheelZ; g.add(hw);
+        vDressBonnet(g, bodyR, bonR, bodyR * 0.92, bonTop, wheelZ, wheelR, rPipe * 0.18, bodyMat, opMat);   // ヨーク・グランド・ボルト（リアル化）
+      }
     }
     g.userData.faceNormal = new V3(0, 1, 0); g.userData.backNormal = new V3(0, -1, 0);
     g.userData.faceLocal = new V3(0, halfL, 0); g.userData.backLocal = new V3(0, -halfL, 0);
@@ -2488,7 +2559,7 @@ function makeValve(opts) {
   }
 
   g.userData.partType = 'valve';
-  g.userData.valve = { kind: k, sizeA: sizeA, rating: cls, style: (k === 'butterfly' ? (o.style || 'flange') : undefined), sizeB: (k === 'safety' ? ((VALVE_SIZES.includes(o.sizeB) ? o.sizeB : sizeA)) : undefined) };
+  g.userData.valve = { kind: k, sizeA: sizeA, rating: cls, style: (k === 'butterfly' ? (o.style || 'flange') : undefined), sizeB: (k === 'safety' ? ((VALVE_SIZES.includes(o.sizeB) ? o.sizeB : sizeA)) : undefined), act: act || undefined };
   // フランジ形（真っ直ぐ両端）＝端フランジのボルト穴を起点・スナップ対象に（フランジ単体と同様。2026-07-31 社長要望）
   if (['gate', 'globe', 'ball', 'check', 'strainer'].includes(k) || (k === 'butterfly' && o.style !== 'wafer')) {
     g.userData.boltLocals = flangeBoltRing(cls, sizeA, halfL).concat(flangeBoltRing(cls, sizeA, -halfL));
@@ -6406,7 +6477,7 @@ function partColumns(p) {
     case 'tee':    { const o = u.tee || {};    const rt = (o.sizeB && o.sizeB !== o.sizeA); return { kind: 'ティー', type: rt ? 'BW(RT)' : 'BW(T)', size: rt ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: o.sch || '' }; }
     case 'reducer':{ const o = u.reducer || {};return { kind: 'レジューサ', type: o.ecc ? 'BW(E)' : 'BW(C)', size: `${o.sizeA || ''}×${o.sizeB || ''}`, cls: o.sch || '' }; }
     case 'sw':     { const o = u.sw || {}; const nm = {'90E':'90°エルボ','45E':'45°エルボ','T':'ティー','TR':'ティー','CROSS':'クロス','FC':'カップリング','HC':'カップリング','FCR':'カップリング','BOSS':'ボス','CAP':'キャップ','UNION':'ユニオン'}; const tp = {'FC':'FC','HC':'HC','FCR':'FCR','T':'SW(T)','TR':'SW(RT)'}[o.kind] || 'SW'; const rb = (o.sizeB && o.sizeB !== o.sizeA); return { kind: nm[o.kind] || 'SW継手', type: tp, size: rb ? `${o.sizeA}×${o.sizeB}` : (o.sizeA || ''), cls: 'Sch80' }; }
-    case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'コンパクトバルブ',swglobe:'コンパクトバルブ'}; let tp = '', cls = '', sz = o.sizeA || ''; if (o.kind === 'butterfly') { tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); cls = o.rating || ''; } else if (o.kind === 'swgate' || o.kind === 'swglobe') { tp = (o.kind === 'swgate' ? 'ゲート' : 'グローブ'); cls = 'Class800'; } else { cls = o.rating || ''; } if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls }; }
+    case 'valve':  { const o = u.valve || {}; const nm = {ball:'ボールバルブ',gate:'ゲートバルブ',globe:'グローブバルブ',check:'チェッキバルブ',strainer:'ストレーナー(Y)',butterfly:'バタフライバルブ',safety:'安全弁(アングル)',swgate:'コンパクトバルブ',swglobe:'コンパクトバルブ'}; let tp = '', cls = '', sz = o.sizeA || ''; if (o.kind === 'butterfly') { tp = (o.style === 'wafer' ? 'ウエハー' : 'フランジ'); cls = o.rating || ''; } else if (o.kind === 'swgate' || o.kind === 'swglobe') { tp = (o.kind === 'swgate' ? 'ゲート' : 'グローブ'); cls = 'Class800'; } else { cls = o.rating || ''; } if (o.kind === 'safety' && o.sizeB) sz = `${o.sizeA}×${o.sizeB}`; if (o.act) tp = (tp ? tp + ' ' : '') + 'CV'; return { kind: nm[o.kind] || 'バルブ', type: tp, size: sz, cls }; }   // CV＝アクチュエータ付き（2026-08-04 社長要望）
     case 'flex':   { const o = u.flex || {};   return { kind: 'フレキシブル', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'spool':  { const o = u.spool || {};  return { kind: '仮管', type: `${o.type === 'スペーサー' ? 'SP' : 'FLG'} L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
     case 'sight':  { const o = u.sight || {};  return { kind: 'サイドグラス', type: `L${Math.round(o.length || 0)}`, size: o.sizeA || '', cls: o.cls || '' }; }
@@ -15259,6 +15330,11 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
             case 'valve':
               selSpec('呼び径', 'sizeA', () => FLANGE_SIZES);
               selSpec('クラス', 'rating', () => VALVE_RATINGS);
+              // アクチュエータ（自動弁＝CV）：ボール/ゲート/グローブだけ。PGのサイフォン管と同じオン・オフ
+              //（2026-08-04 社長要望。ball＝ラック＆ピニオン／gate＝遮断弁の縦長／globe＝縦長ダイヤフラム）
+              if (['ball', 'gate', 'globe'].includes(spec().kind))
+                edRow('アクチュエータ', { options: [['0', 'なし（手動）'], ['1', 'あり（CV）']],
+                  get: () => (spec().act ? '1' : '0'), set: v => { rebuildPartFromSpec(p, { act: v === '1' }); } });
               break;
             case 'flex': case 'sight':
               selSpec('呼び径', 'sizeA', () => EQUIP_SIZES);
