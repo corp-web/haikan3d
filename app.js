@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-K';
+const APP_VER = 'v0804-L';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2301,10 +2301,10 @@ function vActuator(g, kind, z0, bodyR, halfL, rPipe, bodyMat, opMat) {
   const disc = (r, t, z, mat) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, t, 24), mat); m.rotation.x = Math.PI / 2; m.position.z = z; g.add(m); return m; };
   if (kind === 'ball') {
     // ラック＆ピニオン＝四角い箱形のシリンダ（2026-08-04 社長指示：四角く・大きく・首も太く）
-    const neckR = Math.max(bodyR * 0.5, VMM(16));                         // 太い首
+    const neckR = Math.max(bodyR * 0.8, VMM(26));                         // 太い首（2026-08-04 社長「細い」→さらに太く）
     const yokeTop = z0 + Math.max(bodyR * 0.55, VMM(14));
     g.add(vCylZ(neckR, z0, yokeTop, opMat));                              // 取付ブラケット（首）
-    disc(neckR * 1.35, Math.max(bodyR * 0.14, VMM(5)), yokeTop, bodyMat); // 取付フランジ
+    disc(neckR * 1.25, Math.max(bodyR * 0.18, VMM(6)), yokeTop, bodyMat); // 取付フランジ
     const bH = Math.max(bodyR * 1.5, VMM(46));                            // 箱の高さ
     const bW = Math.max(bodyR * 4.0, halfL * 1.9);                        // 箱の長さ（流れ方向と直角＝X）
     const bD = Math.max(bodyR * 1.55, VMM(48));                           // 箱の奥行き
@@ -2343,14 +2343,14 @@ function vActuator(g, kind, z0, bodyR, halfL, rPipe, bodyMat, opMat) {
     col.rotation.x = Math.PI / 2;
     col.position.set(s * bodyR * 0.5, 0, (z0 + yokeTop) / 2); g.add(col);
   }
-  const dR = Math.max(bodyR * 1.35, VMM(38));                             // ダイヤフラム室の半径
-  const rimT = Math.max(bodyR * 0.2, VMM(6));
-  disc(dR * 1.05, rimT, yokeTop + rimT * 0.5, opMat);                     // 合わせ目のリム（フランジ）
-  const low = new THREE.Mesh(new THREE.SphereGeometry(dR, 26, 14, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), opMat);
-  low.rotation.x = -Math.PI / 2; low.position.z = yokeTop + rimT * 0.5; g.add(low);        // 下の椀（ドーム）
-  const dome = new THREE.Mesh(new THREE.SphereGeometry(dR, 26, 16, 0, Math.PI * 2, 0, Math.PI / 2), opMat);
-  dome.rotation.x = -Math.PI / 2; dome.position.z = yokeTop + rimT * 0.5; g.add(dome);     // 上のドーム
-  mk(new THREE.CylinderGeometry(dR * 0.13, dR * 0.13, dR * 0.42, 12), opMat, yokeTop + rimT * 0.5 + dR * 1.1);   // 頂部の呼吸口
+  // ダイヤフラム室＝皿を重ねた形（2026-08-04 社長指示でドーム案から差し戻し。首の太さは残す）
+  const dR = Math.max(bodyR * 1.25, VMM(34));                             // ダイヤフラム皿の半径
+  const dT = Math.max(bodyR * 0.30, VMM(9));
+  disc(dR, dT, yokeTop + dT * 0.5, opMat);                                // 下皿
+  disc(dR, dT, yokeTop + dT * 1.6, opMat);                                // 上皿（合わせ目のリム）
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(dR * 0.92, 24, 14, 0, Math.PI * 2, 0, Math.PI / 2), opMat);
+  dome.rotation.x = -Math.PI / 2; dome.position.z = yokeTop + dT * 2.1; g.add(dome);   // 上のドーム
+  mk(new THREE.CylinderGeometry(dR * 0.14, dR * 0.14, dR * 0.5, 12), opMat, yokeTop + dT * 2.1 + dR * 0.9);   // 頂部の呼吸口
 }
 // ハンドル車（軸=+Z）。リム＋4本スポーク＋ハブ＋ステムナット。R=リム半径(m)（2026-07-19 リアル化）
 function vHandwheel(R, mat) {
@@ -6773,30 +6773,7 @@ function refreshItemList() {
     const mk = (cls, txt) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = txt; td.title = txt; return td; };
     tr.appendChild(mk('c-no', i + 1));
     tr.appendChild(mk('', c.kind));
-    // タイプ欄：ボール/ゲート/グローブのバルブは、ここを押すだけで 手動⇄CV を切り替えられる
-    //（2026-08-04 社長要望：プロパティを開かなくても一覧で切り替えたい）。行の選択とは別扱い。
-    const CV_KINDS = ['ball', 'gate', 'globe'];
-    const isCvRow = g.parts.length && g.parts.every(p => p.userData.partType === 'valve' && CV_KINDS.includes((p.userData.valve || {}).kind));
-    if (isCvRow) {
-      const tdT = document.createElement('td'); tdT.className = 'c-type';
-      const on = !!(g.parts[0].userData.valve || {}).act;
-      const chip = document.createElement('button');
-      chip.type = 'button'; chip.className = 'cv-chip' + (on ? ' on' : '');
-      chip.textContent = on ? 'CV' : '手動';
-      chip.title = '押すと 手動⇄CV（アクチュエータ）を切り替えます';
-      ['click', 'mousedown', 'dblclick', 'pointerdown'].forEach(ev => chip.addEventListener(ev, e => e.stopPropagation()));
-      chip.addEventListener('click', () => {
-        const next = [];
-        for (const p of [...g.parts]) {
-          const np = window.__rebuildPartFromSpec ? window.__rebuildPartFromSpec(p, { act: !on }) : null;
-          if (np) next.push(np);
-        }
-        if (next.length && typeof selectMany === 'function') selectMany(next);
-        refreshItemList();
-        if (window.__toast) window.__toast(!on ? 'アクチュエータ（CV）を付けました' : '手動（ハンドル）に戻しました');
-      });
-      tdT.appendChild(chip); tr.appendChild(tdT);
-    } else tr.appendChild(mk('c-type', c.type));
+    tr.appendChild(mk('c-type', c.type));
     tr.appendChild(mk('c-size', c.size));
     tr.appendChild(mk('c-cls', c.cls));
     tr.appendChild(mk('c-qty', g.parts.length));
