@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-L';
+const APP_VER = 'v0804-M';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2297,60 +2297,44 @@ function valveEndFlange(cls, sizeA, mat, noHub) {
 //   globe＝縦に長いダイヤフラム（皿を重ねた頭）
 // z0＝取り付け高さ（ステム上端 or ボンネット上端）。面間は変えない＝切寸・寸法に影響しない。
 function vActuator(g, kind, z0, bodyR, halfL, rPipe, bodyMat, opMat) {
-  const mk = (geo, mat, z, rotZ) => { const m = new THREE.Mesh(geo, mat); m.position.z = z; if (rotZ) m.rotation.z = rotZ; g.add(m); return m; };
   const disc = (r, t, z, mat) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, t, 24), mat); m.rotation.x = Math.PI / 2; m.position.z = z; g.add(m); return m; };
+  // 首・根本は3種とも共通（2026-08-04 社長「各CV首や根本は同じで良さそう」）。
+  // まっすぐな太い首＋取付フランジ。手動のような細い軸は出さない。
+  const neckR = Math.max(bodyR * 0.42, VMM(14));
+  const yokeTop = z0 + Math.max(bodyR * 0.9, VMM(20));
+  g.add(vCylZ(neckR, z0, yokeTop, opMat));                                // 首（ストレート）
+  disc(Math.max(bodyR * 0.95, VMM(26)), Math.max(bodyR * 0.18, VMM(6)), yokeTop, bodyMat);   // 取付フランジ
   if (kind === 'ball') {
-    // ラック＆ピニオン＝四角い箱形のシリンダ（2026-08-04 社長指示：四角く・大きく・首も太く）
-    const neckR = Math.max(bodyR * 0.8, VMM(26));                         // 太い首（2026-08-04 社長「細い」→さらに太く）
-    const yokeTop = z0 + Math.max(bodyR * 0.55, VMM(14));
-    g.add(vCylZ(neckR, z0, yokeTop, opMat));                              // 取付ブラケット（首）
-    disc(neckR * 1.25, Math.max(bodyR * 0.18, VMM(6)), yokeTop, bodyMat); // 取付フランジ
+    // ラック＆ピニオン＝四角い箱形のシリンダ
     const bH = Math.max(bodyR * 1.5, VMM(46));                            // 箱の高さ
     const bW = Math.max(bodyR * 4.0, halfL * 1.9);                        // 箱の長さ（流れ方向と直角＝X）
     const bD = Math.max(bodyR * 1.55, VMM(48));                           // 箱の奥行き
     const box = new THREE.Mesh(new THREE.BoxGeometry(bW, bD, bH), opMat);
     box.position.z = yokeTop + bH / 2; g.add(box);
-    for (const s of [-1, 1]) {                                            // 両端のキャップ（少し出っ張らせる）
+    for (const s of [-1, 1]) {                                            // 両端のキャップ
       const cap = new THREE.Mesh(new THREE.BoxGeometry(bW * 0.07, bD * 1.06, bH * 1.06), opMat);
       cap.position.set(s * bW / 2, 0, yokeTop + bH / 2); g.add(cap);
     }
     const pin = new THREE.Mesh(new THREE.BoxGeometry(bW * 0.2, bD * 1.12, bH * 1.12), opMat);   // 中央のピニオン室
     pin.position.z = yokeTop + bH / 2; g.add(pin);
-    mk(new THREE.CylinderGeometry(neckR * 0.4, neckR * 0.4, bH * 0.35, 12), opMat, yokeTop + bH * 1.14);   // 位置表示の軸
     return;
   }
   if (kind === 'gate') {
-    // 遮断弁＝縦に長いピストンシリンダ（2026-08-04 社長指示：もう少し太く・首も太く）
-    const neckR = Math.max(bodyR * 0.42, VMM(14));                        // 太い首
-    const yokeTop = z0 + Math.max(bodyR * 0.7, VMM(16));
-    g.add(vCylZ(neckR, z0, yokeTop, opMat));                              // ヨーク（首）
-    disc(Math.max(bodyR * 0.95, VMM(26)), Math.max(bodyR * 0.18, VMM(6)), yokeTop, bodyMat);   // 取付フランジ
-    const cyR = Math.max(bodyR * 0.95, VMM(30));                          // 太いシリンダ
-    const cyH = Math.max(halfL * 1.7, bodyR * 3.2);                       // 縦に長い
+    // 遮断弁＝縦に長い太いピストンシリンダ
+    const cyR = Math.max(bodyR * 0.95, VMM(30));
+    const cyH = Math.max(halfL * 1.7, bodyR * 3.2);
     const zTop = yokeTop + cyH;
     g.add(vCylZ(cyR, yokeTop, zTop, opMat));                              // シリンダ本体
     disc(cyR * 1.1, cyR * 0.16, yokeTop + cyR * 0.08, opMat);             // 下端板
     disc(cyR * 1.1, cyR * 0.16, zTop - cyR * 0.08, opMat);                // 上端板
-    mk(new THREE.CylinderGeometry(cyR * 0.16, cyR * 0.16, cyR * 0.7, 12), opMat, zTop + cyR * 0.3);   // 頂部の軸（開度表示）
     return;
   }
-  // globe＝縦に長いドーム状のダイヤフラム頭（2026-08-04 社長指示：ドーム状に・首を太く）
-  const neckR = Math.max(bodyR * 0.4, VMM(13));                           // 太い首
-  const yokeTop = z0 + Math.max(halfL * 0.95, bodyR * 1.9);               // 縦に長いヨーク
-  g.add(vCylZ(neckR, z0, yokeTop, opMat));                                // ステム（首）
-  for (const s of [-1, 1]) {                                              // ヨークの支柱2本
-    const col = new THREE.Mesh(new THREE.CylinderGeometry(rPipe * 0.14, rPipe * 0.14, yokeTop - z0, 10), opMat);
-    col.rotation.x = Math.PI / 2;
-    col.position.set(s * bodyR * 0.5, 0, (z0 + yokeTop) / 2); g.add(col);
-  }
-  // ダイヤフラム室＝皿を重ねた形（2026-08-04 社長指示でドーム案から差し戻し。首の太さは残す）
-  const dR = Math.max(bodyR * 1.25, VMM(34));                             // ダイヤフラム皿の半径
-  const dT = Math.max(bodyR * 0.30, VMM(9));
-  disc(dR, dT, yokeTop + dT * 0.5, opMat);                                // 下皿
-  disc(dR, dT, yokeTop + dT * 1.6, opMat);                                // 上皿（合わせ目のリム）
-  const dome = new THREE.Mesh(new THREE.SphereGeometry(dR * 0.92, 24, 14, 0, Math.PI * 2, 0, Math.PI / 2), opMat);
-  dome.rotation.x = -Math.PI / 2; dome.position.z = yokeTop + dT * 2.1; g.add(dome);   // 上のドーム
-  mk(new THREE.CylinderGeometry(dR * 0.14, dR * 0.14, dR * 0.5, 12), opMat, yokeTop + dT * 2.1 + dR * 0.9);   // 頂部の呼吸口
+  // globe＝ダイヤフラム室（分厚い皿。半丸・頂部の棒は付けない。2026-08-04 社長指示）
+  const dR = Math.max(bodyR * 1.3, VMM(36));                              // 皿の半径
+  const dT = Math.max(bodyR * 0.62, VMM(20));                             // 分厚く
+  disc(dR, dT, yokeTop + dT * 0.5, opMat);                                // 下側の皿
+  disc(dR, dT, yokeTop + dT * 1.5, opMat);                                // 上側の皿（合わせ目のリム）
+  disc(dR * 0.55, dT * 0.35, yokeTop + dT * 2.0 + dT * 0.175, opMat);     // 天板（中央の座）
 }
 // ハンドル車（軸=+Z）。リム＋4本スポーク＋ハブ＋ステムナット。R=リム半径(m)（2026-07-19 リアル化）
 function vHandwheel(R, mat) {
@@ -2455,10 +2439,15 @@ function makeValve(opts) {
       // レバーは流れ軸(Y)と直角＝「閉」の姿勢を既定にする（2026-07-27 社長指示）。
       // 従来は流れ方向に寝ていたため、長さが面間を越えて両端フランジに食い込んでいた。
       // 首＝フランジの縁よりほんの少し上（2026-07-27 社長要望）。旧＝bodyR + VMM(8 + od*0.18)
-      const stemTop = Math.max(vLeverStemTop(D, sizeA), bodyR + VMM(10));
-      g.add(vCylZ(rPipe * 0.28, bodyR * 0.7, stemTop, opMat));
-      if (act) vActuator(g, 'ball', stemTop, bodyR, halfL, rPipe, bodyMat, opMat);   // CV＝ラック＆ピニオン
-      else g.add(vLever(VMM(D), rPipe, stemTop, opMat));
+      if (act) {
+        // CV＝ラック＆ピニオン。細いステムは出さず、ゲート/グローブと同じ太いストレートの首にする
+        //（2026-08-04 社長指示）。首は本体の上から直接立ち上げる。
+        vActuator(g, 'ball', bodyR * 0.7, bodyR, halfL, rPipe, bodyMat, opMat);
+      } else {
+        const stemTop = Math.max(vLeverStemTop(D, sizeA), bodyR + VMM(10));
+        g.add(vCylZ(rPipe * 0.28, bodyR * 0.7, stemTop, opMat));
+        g.add(vLever(VMM(D), rPipe, stemTop, opMat));
+      }
     } else {
       // ゲート/グローブ：ボンネット＋ハンドル車
       const bonR = bodyR * 0.52, bonTop = bodyR + halfL * 0.55;
