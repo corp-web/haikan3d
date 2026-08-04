@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-J';
+const APP_VER = 'v0804-K';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -3039,12 +3039,18 @@ const TOOLS = [
   // 一般工業用バルブ：タイプ(接続形)＝variant、クラス(圧力区分 JIS10K/20K/JPI150/300)＝optFitClass(valveOpts.cls)。
   //   ボール/ゲート/グローブ/チェッキ/ストレーナー/安全弁＝接続形は1種(タイプ欄なし)。バタフライのみ フランジ/ウエハー の2タイプ。
   //   SW形(800)はクラス=Class800固定で rating を使わない。curType='—' は「タイプ無し」を表す内部値。
-  { type: 'vBall', name: 'ボールバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
-    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'ball', sizeA: clampValveSize(), rating: valveCls() }) } ] },
-  { type: 'vGate', name: 'ゲートバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
-    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'gate', sizeA: clampValveSize(), rating: valveCls() }) } ] },
-  { type: 'vGlobe', name: 'グローブバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
-    { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'globe', sizeA: clampValveSize(), rating: valveCls() }) } ] },
+  // タイプで 手動／CV（アクチュエータ付き）を選ぶ＝置く前にパレットで決められる（2026-08-04 社長要望）
+  { type: 'vBall', name: 'ボールバルブ', curType: '手動', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '手動', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'ball', sizeA: clampValveSize(), rating: valveCls() }) },
+    { t: 'CV', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'ball', sizeA: clampValveSize(), rating: valveCls(), act: true }) } ] },
+  // タイプで 手動／CV（アクチュエータ付き）を選ぶ＝置く前にパレットで決められる（2026-08-04 社長要望）
+  { type: 'vGate', name: 'ゲートバルブ', curType: '手動', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '手動', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'gate', sizeA: clampValveSize(), rating: valveCls() }) },
+    { t: 'CV', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'gate', sizeA: clampValveSize(), rating: valveCls(), act: true }) } ] },
+  // タイプで 手動／CV（アクチュエータ付き）を選ぶ＝置く前にパレットで決められる（2026-08-04 社長要望）
+  { type: 'vGlobe', name: 'グローブバルブ', curType: '手動', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
+    { t: '手動', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'globe', sizeA: clampValveSize(), rating: valveCls() }) },
+    { t: 'CV', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'globe', sizeA: clampValveSize(), rating: valveCls(), act: true }) } ] },
   { type: 'vCheck', name: 'チェッキバルブ', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
     { t: '—', single: true, sizes: VALVE_SIZE_TBL, noSch: true, make: () => makeValve({ kind: 'check', sizeA: clampValveSize(), rating: valveCls() }) } ] },
   { type: 'vStrainer', name: 'ストレーナー(Y)', curType: '—', valve: true, vclasses: VALVE_CLASSES, build() { return famVariant(this).make(); }, variants: [
@@ -3540,6 +3546,8 @@ function variantTOfPart(p) {
   if (u.partType === 'sw') return ({ FC: 'FC', HC: 'HC', FCR: 'FCR', T: 'SW(T)', TR: 'SW(RT)', '90E': 'SW', '45E': 'SW', CROSS: 'SW', BOSS: 'SW', CAP: 'SW', UNION: 'SW' })[(u.sw && u.sw.kind) || ''] || 'SW';
   if (u.partType === 'valve' && u.valve && u.valve.kind === 'butterfly') return u.valve.style === 'wafer' ? 'ウエハー' : 'フランジ';
   // コンパクトバルブ（Class800のSW形）＝タイプでゲート／グローブを選ぶ
+  // ボール/ゲート/グローブ＝手動／CV（アクチュエータ）
+  if (u.partType === 'valve' && u.valve && ['ball', 'gate', 'globe'].includes(u.valve.kind)) return u.valve.act ? 'CV' : '手動';
   if (u.partType === 'valve' && u.valve && u.valve.kind === 'swgate') return 'ゲート';
   if (u.partType === 'valve' && u.valve && u.valve.kind === 'swglobe') return 'グローブ';
   return null;
@@ -6765,7 +6773,30 @@ function refreshItemList() {
     const mk = (cls, txt) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = txt; td.title = txt; return td; };
     tr.appendChild(mk('c-no', i + 1));
     tr.appendChild(mk('', c.kind));
-    tr.appendChild(mk('c-type', c.type));
+    // タイプ欄：ボール/ゲート/グローブのバルブは、ここを押すだけで 手動⇄CV を切り替えられる
+    //（2026-08-04 社長要望：プロパティを開かなくても一覧で切り替えたい）。行の選択とは別扱い。
+    const CV_KINDS = ['ball', 'gate', 'globe'];
+    const isCvRow = g.parts.length && g.parts.every(p => p.userData.partType === 'valve' && CV_KINDS.includes((p.userData.valve || {}).kind));
+    if (isCvRow) {
+      const tdT = document.createElement('td'); tdT.className = 'c-type';
+      const on = !!(g.parts[0].userData.valve || {}).act;
+      const chip = document.createElement('button');
+      chip.type = 'button'; chip.className = 'cv-chip' + (on ? ' on' : '');
+      chip.textContent = on ? 'CV' : '手動';
+      chip.title = '押すと 手動⇄CV（アクチュエータ）を切り替えます';
+      ['click', 'mousedown', 'dblclick', 'pointerdown'].forEach(ev => chip.addEventListener(ev, e => e.stopPropagation()));
+      chip.addEventListener('click', () => {
+        const next = [];
+        for (const p of [...g.parts]) {
+          const np = window.__rebuildPartFromSpec ? window.__rebuildPartFromSpec(p, { act: !on }) : null;
+          if (np) next.push(np);
+        }
+        if (next.length && typeof selectMany === 'function') selectMany(next);
+        refreshItemList();
+        if (window.__toast) window.__toast(!on ? 'アクチュエータ（CV）を付けました' : '手動（ハンドル）に戻しました');
+      });
+      tdT.appendChild(chip); tr.appendChild(tdT);
+    } else tr.appendChild(mk('c-type', c.type));
     tr.appendChild(mk('c-size', c.size));
     tr.appendChild(mk('c-cls', c.cls));
     tr.appendChild(mk('c-qty', g.parts.length));

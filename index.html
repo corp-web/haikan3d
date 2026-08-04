@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>配管3D v0804J — SKT-HD ♦</title>
+<title>配管3D v0804K — SKT-HD ♦</title>
 <!-- ホーム画面アイコン（絵柄＝格子舞台（文字なし））。iOSはapple-touch-iconを使う。
      ※iOSはアイコンをURL単位で強くキャッシュし、絵柄を変えても「ホーム画面に追加」の画面には
        古いアイコンが出続ける（2026-07-27 社長報告）。URLに版を付けて別物として取り直させる。
@@ -12,7 +12,7 @@
 <link rel="apple-touch-icon-precomposed" sizes="180x180" href="apple-touch-icon.png?v=20260803l">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png?v=20260803l">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png?v=20260803l">
-<meta name="apple-mobile-web-app-title" content="配管3D v0804J">
+<meta name="apple-mobile-web-app-title" content="配管3D v0804K">
 <meta name="theme-color" content="#1c3157">
 <link rel="manifest" href="manifest.json">
 <style>
@@ -173,6 +173,13 @@
     border: 1px solid #3a4a6e; color: #e6ecf7; border-radius: 4px; padding: 2px 4px; font-size: 11px; }
   #itemList .c-mat input.mat-input:focus { outline: none; border-color: #2f7bff; }
   #itemList .c-mat input.mat-input::placeholder { color: #5c6b8a; }
+  /* アイテムリストのタイプ欄で 手動⇄CV を切り替えるボタン（2026-08-04 社長要望） */
+  #itemList .cv-chip { font: 11px/1.2 inherit; padding: 2px 7px; border-radius: 9px; cursor: pointer;
+    background: #1b2540; border: 1px solid #3a4a6e; color: #9fb2d6; }
+  #itemList .cv-chip:hover { border-color: #7fa8e8; }
+  #itemList .cv-chip.on { background: #2f6fd8; border-color: #2f6fd8; color: #fff; font-weight: 700; }
+  body.light #itemList .cv-chip { background: #fff; border-color: #c4ccda; color: #5a6a86; }
+  body.light #itemList .cv-chip.on { background: #1f6fd0; border-color: #1f6fd0; color: #fff; }
   #itemList .c-del { width: 18px; text-align: center; color: #c98; opacity: 0; font-weight: 700; }
   #itemList tbody tr:hover .c-del { opacity: .85; }
   #itemList .c-del:hover { color: #ff6b6b; }
