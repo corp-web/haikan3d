@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-H';
+const APP_VER = 'v0804-I';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -2212,15 +2212,59 @@ const _vdn = s => parseInt(s, 10) || 50;
 const VMM = v => v / 1000;
 function valveBodyMat() { return new THREE.MeshStandardMaterial({ color: 0x97a0ab, metalness: 0.58, roughness: 0.42, side: THREE.DoubleSide }); }
 function valveOpMat() { return new THREE.MeshStandardMaterial({ color: 0x5f6873, metalness: 0.62, roughness: 0.40, side: THREE.DoubleSide }); }   // ハンドル・ステム等
-// 面間(中心-端の半分=halfL を使う)。標準寸法の近似（mm）。
-function valveFtF(kind, sizeA) {
+// ===== バルブの面間寸法 face-to-face（mm）＝規格表（2026-08-04 社長指示で近似式から差し替え）=====
+// 出典：JIS B2002（一般機械装置用バルブの面間寸法）／ASME B16.10（Class150=JIS10K相当・Class300=JIS20K相当）。
+//   ・JIS 10K のフランジ形＝ASME Class150 と同一の系列（仕切弁=系列6／玉形弁=系列20）。
+//     社長の実務基準であるキッツの「キッツ標準」もこの系列（例：50A 10K ボール＝178mm）で一致を確認済み。
+//   ・JIS 20K のフランジ形＝仕切弁=系列10（ASME Class300 と同一）／玉形弁=系列24。
+//   ・ボール弁は同クラスの仕切弁と同じ面間（規格・カタログとも一致）。大口径のみ専用値。
+// 配列は VALVE_SIZES の並び（15A,20A,25A,32A,40A,50A,65A,80A,100A,125A,150A,200A）。
+// null＝規格表に値が無いマス（推測で埋めない）。その場合は同クラスの仕切弁の値を使う（fallback）。
+const VALVE_FTF = {
+  'JIS 10K': {   // ＝ASME Class150 系列
+    gate:  [108, 117, 127, 140, 165, 178, 190, 203, 229, 254, 267, 292],
+    ball:  [108, 117, 127, 140, 165, 178, 190, 203, 229, null, 394, 457],
+    globe: [108, 117, 127, 140, 165, 203, 216, 241, 292, 356, 406, 495],
+    check: [140, 152, 165, 184, 203, 229, 279, 318, 368, null, 470, 597],
+  },
+  'JIS 20K': {   // 仕切弁＝系列10／玉形弁＝系列24
+    gate:  [140, 152, 165, 178, 190, 216, 241, 283, 305, 381, 403, 419],
+    ball:  [140, 152, 165, 178, 190, 216, 241, 283, 305, 381, 403, 502],
+    globe: [152, 178, 216, 229, 241, 267, 292, 318, 356, 400, 444, 559],
+    check: [null, null, 216, 229, 241, 267, 292, 318, 356, 400, 444, 533],
+  },
+  'JPI 150LB': {   // ASME B16.10 Class150（JIS 10K と同一系列）
+    gate:  [108, 117, 127, 140, 165, 178, 190, 203, 229, 254, 267, 292],
+    ball:  [108, 117, 127, 140, 165, 178, 190, 203, 229, null, 394, 457],
+    globe: [108, 117, 127, 140, 165, 203, 216, 241, 292, 356, 406, 495],
+    check: [140, 152, 165, 184, 203, 229, 279, 318, 368, null, 470, 597],
+  },
+  'JPI 300LB': {   // ASME B16.10 Class300
+    gate:  [140, 152, 165, 178, 190, 216, 241, 282, 305, 381, 403, 419],
+    ball:  [140, 152, 165, 178, 190, 216, 241, 282, 305, null, 403, 502],
+    globe: [null, null, 203, 216, 229, 267, 292, 318, 356, 400, 444, 559],
+    check: [null, null, 216, 229, 241, 267, 292, 318, 356, 400, 444, 533],
+  },
+};
+// 面間(中心-端の半分=halfL を使う)(mm)。規格表にある弁種・クラスは表から、無いものは従来の近似式。
+// ※ストレーナ・バタフライ・鍛造SW弁はメーカー標準（規格表なし）＝近似のまま。カタログが出れば差し替える。
+function valveFtF(kind, sizeA, rating) {
+  const tbl = VALVE_FTF[rating] || VALVE_FTF['JIS 10K'];
+  const i = VALVE_SIZES.indexOf(sizeA);
+  if (i >= 0 && tbl[kind]) {
+    const v = tbl[kind][i];
+    if (v != null) return v;
+    const g = tbl.gate[i];                      // 規格表に無いマスは同クラスの仕切弁で代用
+    if (g != null) return g;
+  }
   const dn = _vdn(sizeA);
   if (kind === 'butterfly') return 40 + dn * 0.18;
   if (kind === 'check') return 90 + dn * 1.0;
   if (kind === 'strainer') return 95 + dn * 1.05;
   if (kind === 'swgate' || kind === 'swglobe') return 46 + dn * 0.55;   // 鍛造SW弁はコンパクト：面間を短くして両端ソケットを中央ボディへ寄せる（社長指示・実物カタログに合わせ）
-  return 110 + dn * 0.95;   // gate/globe/ball
+  return 110 + dn * 0.95;   // 規格表に無い弁種
 }
+window.__valveFtF = valveFtF;   // e2e検証用
 // 規格フランジ端（軸Y・フランジ面 y=0・本体側 -Y）。中空（ボア貫通）＋レイズドフェイス＋ハブ。
 //   noHub=true：背面のハブ（首）を付けない。面間が短いバルブ（バタフライ＝ウエハー/ルグ形）用。
 //     ハブ長は呼び径比例で伸びるため、面間の短いバルブで付けると大口径で中心を突き抜けて反対側へ飛び出す。
@@ -2319,7 +2363,7 @@ function makeValve(opts) {
   const od = FLG_BORE[sizeA] || 60;            // 管外径(mm)
   const rPipe = VMM(od) / 2;                    // 管半径(m)
   const D = flangeDim(cls, sizeA).D;            // フランジ外径(mm)
-  const halfL = VMM(valveFtF(o.kind, sizeA)) / 2;
+  const halfL = VMM(valveFtF(o.kind, sizeA, cls)) / 2;
   const k = o.kind;
 
   // 中心ボアの半径。valveEndFlange が板に開ける穴と同じ値にして、面から穴がまっすぐ見えるようにする。
@@ -2427,7 +2471,7 @@ function makeValve(opts) {
   } else if (k === 'swgate' || k === 'swglobe') {
     const sw = ['15A', '20A', '25A', '32A', '40A', '50A'].includes(sizeA) ? sizeA : '25A';
     const sS = VMM(SW_S[sw] || 34.5) / 2, sD = VMM(SW_D[sw] || 27.2) / 2, sC = VMM(SW_C_E[sw] || 15);
-    const bodyR = VMM(Math.max(od * 0.6, 22)), hubR = VMM(od / 2 + 5), hl = VMM(valveFtF(k, sizeA)) / 2;
+    const bodyR = VMM(Math.max(od * 0.6, 22)), hubR = VMM(od / 2 + 5), hl = VMM(valveFtF(k, sizeA, cls)) / 2;
     const leg1 = swLeg(hubR, sS, sD, hl, sC, bodyMat); swOrient(leg1, new V3(0, 1, 0)); g.add(leg1);
     const leg2 = swLeg(hubR, sS, sD, hl, sC, bodyMat); swOrient(leg2, new V3(0, -1, 0)); g.add(leg2);
     if (k === 'swglobe') g.add(new THREE.Mesh(new THREE.SphereGeometry(bodyR, 20, 14), bodyMat));
