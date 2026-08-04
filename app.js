@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-F';
+const APP_VER = 'v0804-G';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -10603,7 +10603,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   // 寸法の現在の種別（リボン「寸法」右クリックで選択）。平行=現行の2点間距離。
   //   parallel=平行／angle=角度／radius=半径／diameter=直径／leader=引出。操作の基本仕様は全種別とも平行と同じ。
   let dimKind = 'linear';   // 既定＝長さ寸法（2026-07-19 社長要望。CADのDIMLINEAR相当）
-  const DIM_KIND_LABEL = { linear: '長さ', parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出' };
+  const DIM_KIND_LABEL = { linear: '長さ', parallel: '平行', angle: '角度', radius: '半径', diameter: '直径', leader: '引出', flow: '流れ' };
   // 文字の既定書式（リボン「文字」右クリックで設定）。色＝シアン／飾り＝枠なし
   const textOpts = { color: 0x4a9bff, deco: 'none' };   // deco: none/box/underline/double（既定色＝線の青と統一・2026-07-20 社長）
   function styleFor(type) {
@@ -10913,7 +10913,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     }
     if (kind === 'radius') return 'R' + mm;
     if (kind === 'diameter') return 'φ' + mm;
-    if (kind === 'leader' || kind === 'text') return '';   // 引出・文字は既定文字なし（入力した文字だけ表示）
+    if (kind === 'leader' || kind === 'text' || kind === 'flow') return '';   // 引出・文字・流れは既定文字なし（入力した文字だけ表示）
     if (style && style.dimFixDir && style.dimDir) {   // リニア寸法は逃げ方向に垂直な成分の長さ＝寸法線の実長（足を下ろした水平/垂直の寸法値）
       const dn = new V3(style.dimDir.x, style.dimDir.y, style.dimDir.z);
       if (dn.lengthSq() > 1e-9) { dn.normalize(); const ab = b.clone().sub(a); return fmtDim1(ab.addScaledVector(dn, -ab.dot(dn)).length() * 1000); }
@@ -11002,6 +11002,30 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           const dt = sp.userData.dimText; dt.a.copy(b); dt.b.copy(shelfEnd);   // 文字を棚に沿わせ中央上に
           sp.position.copy(b.clone().add(shelfEnd).multiplyScalar(0.5)).addScaledVector(new V3(0, 1, 0), dt.h / 2 + 0.004);
           grp.add(sp);
+        }
+      } else if (kind === 'flow') {
+        // 流れ方向（2026-08-04 社長採用・案1）：a=矢の根元／b=矢の先＝流れの向き。
+        // 管の少し上に浮かせた軸線＋大きめの塗りつぶし矢じり。ライン名（dimText）があれば矢の上に沿わせる。
+        grp.add(glowSeg(a, b));
+        const fd = b.clone().sub(a);
+        if (fd.lengthSq() > 1e-12) {
+          fd.normalize();
+          const len = 0.038, rad = 0.012;   // 寸法の矢印より大きい＝流れが一目で分かる
+          const cone = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 14),
+            new THREE.MeshBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
+          cone.quaternion.setFromUnitVectors(new V3(0, 1, 0), fd);
+          cone.position.copy(b.clone().addScaledVector(fd, -len / 2));
+          cone.userData.baseColor = DIM_COLOR;
+          cone.renderOrder = 998;
+          grp.add(cone);
+        }
+        if (shown !== '') {
+          const sp = dimTextSprite(shown, a, b.clone(), new V3(0, 1, 0));
+          if (sp) {
+            const dt = sp.userData.dimText; dt.a.copy(a); dt.b.copy(b);   // 文字は矢に沿わせ中央の上に
+            sp.position.copy(a.clone().add(b).multiplyScalar(0.5)).addScaledVector(new V3(0, 1, 0), (dt.h || 0.02) / 2 + 0.005);
+            grp.add(sp);
+          }
         }
       } else if (kind === 'angle') {
         // 角度寸法：a=頂点V／b=P1／style.angP2=P2。Vから両方向へ補助線を出し、半径 arcR の円弧＋矢印＋度数を描く。
@@ -11545,6 +11569,17 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
   }
   // {p, snapped} を返す（スナップ印の表示判定に使う）
   function pickFirstPoint(clientX, clientY) {
+    // 流れ矢印の1点目＝パイプの胴をタップしたら芯線上の点を拾う（機点だけだと管の途中に置けない。2026-08-04）
+    if (drawState.mode === 'dim' && dimKind === 'flow' && typeof pipeAxisTargetAt === 'function') {
+      const hit = pipeAxisTargetAt(clientX, clientY, 24);
+      if (hit && hit.pipe) {
+        const u = hit.pipe.userData;
+        if (u.partType === 'bentpipe') return { p: bentPointAt(hit.pipe, hit.tMm), snapped: true };
+        const A = connModelPos(hit.pipe, u.backLocal), B = connModelPos(hit.pipe, u.faceLocal);
+        const d = B.clone().sub(A).normalize();
+        return { p: A.clone().addScaledVector(d, hit.tMm / 1000), snapped: true };
+      }
+    }
     const snap = drawSnapPoint(clientX, clientY);
     if (snap) return { p: snap, snapped: true };
     const t = resolveTarget(clientX, clientY, null, defaultElY(), true);   // noNear＝近接の再判定はしない（drawSnapPoint で済み）。高さ＝既定EL
@@ -12134,6 +12169,53 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (window.__openDimValueForm) window.__openDimValueForm(!!label);
     if (window.__focusDimValueInput) window.__focusDimValueInput();
   }
+  // 流れ方向（2026-08-04 社長採用・案1）：1点目=置く位置（近くのパイプ芯線に吸着）／2点目=流れの向き。
+  // 矢印は管の少し上（立て管は横）に浮かせて置く＝管の中に隠れない。確定後にライン名の入力を開く（空＝矢印だけ）。
+  function commitFlow() {
+    if (!drawState.first || !drawState.cur || drawState.cur.distanceTo(drawState.first) <= 1e-6) { clearDrawTemp(); return; }
+    const P = drawState.first.clone(), Q = drawState.cur.clone();
+    let ax = null;
+    for (const p of placedParts) {                     // 近くのパイプ＝矢印を管に沿わせる
+      const u = p.userData;
+      if (u.hidden || u.partType !== 'pipe' || !u.faceLocal || !u.placed) continue;
+      const A = connModelPos(p, u.backLocal), B = connModelPos(p, u.faceLocal);
+      const d = B.clone().sub(A), L = d.length();
+      if (L < 1e-6) continue;
+      d.multiplyScalar(1 / L);
+      const t = P.clone().sub(A).dot(d);
+      if (t < -0.005 || t > L + 0.005) continue;
+      const rad = P.clone().sub(A).addScaledVector(d, -t).length();
+      const r = (FLG_BORE[(u.pipe || {}).sizeA] || 60) / 2000;
+      if (rad < r + 0.03 && (!ax || rad < ax.rad)) ax = { d: d.clone(), rad, pt: A.clone().addScaledVector(d, t), r };
+    }
+    const LEN = 0.1;                                   // 矢の長さ100mm
+    let a2, b2;
+    if (ax) {
+      // 向きは「画面上でどちらへタップしたか」で決める（立て管は水平面の交点だと上下が決まらないため）
+      const rect = renderer.domElement.getBoundingClientRect();
+      const scr = (w) => { const n = modelGroup.localToWorld(w.clone()).project(activeCam());
+        return { x: (n.x * 0.5 + 0.5) * rect.width, y: (-n.y * 0.5 + 0.5) * rect.height }; };
+      const s0 = scr(P), s1 = scr(Q), sa = scr(P.clone().addScaledVector(ax.d, 0.1));
+      const sgn = ((s1.x - s0.x) * (sa.x - s0.x) + (s1.y - s0.y) * (sa.y - s0.y)) >= 0 ? 1 : -1;
+      const d = ax.d.clone().multiplyScalar(sgn);
+      let off = Math.abs(d.y) < 0.7 ? new V3(0, 1, 0)
+              : (() => { const cr = new V3().setFromMatrixColumn(activeCam().matrixWorld, 0); cr.y = 0; return cr.lengthSq() > 1e-9 ? cr.normalize() : new V3(1, 0, 0); })();
+      off.addScaledVector(d, -off.dot(d));
+      if (off.lengthSq() < 1e-9) off.set(0, 1, 0); else off.normalize();
+      const c = ax.pt.clone().addScaledVector(off, ax.r + 0.03);   // 管の外面＋30mm
+      a2 = c.clone().addScaledVector(d, -LEN / 2);
+      b2 = c.clone().addScaledVector(d, LEN / 2);
+    } else {                                           // パイプが無い所＝指した2点の向きへそのまま
+      const d = Q.clone().sub(P).normalize();
+      a2 = P.clone(); b2 = P.clone().addScaledVector(d, LEN);
+    }
+    const st = Object.assign({}, styleFor('dim'), { dimKind: 'flow' });
+    addAnnotation('dim', a2, b2, st);
+    const rec = annStore[annStore.length - 1];
+    cancelDraw();
+    selectLine(rec);
+    if (window.__openDimValueForm) window.__openDimValueForm(false);   // ライン名の入力（空のまま＝矢印だけ）
+  }
   // ===== 自動生成（自動採寸・溶接番号）＝下書きを一括提示→タップで除外→確定（2026-07-31 社長採用） =====
   // 機械はあくまで下書き。確定後はふつうの寸法・引出しになるので、消す・直す・動かすは人が自由にできる。
   let autoGen = null;   // { items:[{a,b,st,obj,excluded}], label, box }
@@ -12462,6 +12544,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
       if (r.p) { drawState.cur = r.p; drawState.vert = sh; drawState.snapped = r.snapped; }
       if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
+      else if (drawState.mode === 'dim' && dimKind === 'flow') commitFlow();   // 流れ＝2点目（向き）で確定
       else if (drawState.mode === 'dim') startDimAdjust();                    // 平行寸法は確定せず逃げ調整へ
       else {
         // タッチ＝2点目確定で即完了。確定待ち(locked)に残さず、十字カーソルと同時に長さフォームも閉じる
@@ -12666,12 +12749,14 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (armed) {                                        // 起点を立てた押下
       if (moved > 6) {
         if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();   // 引出＝肘で確定（2点）
+      else if (drawState.mode === 'dim' && dimKind === 'flow') commitFlow();   // 流れ＝2点目（向き）で確定
         else if (drawState.mode === 'dim') startDimAdjust();      // 平行寸法は確定せず逃げ調整へ
         else if (!commitGuide()) abortDrawPoint();                // ②ドラッグして離した＝確定
       }
       // ドラッグ無し（単純クリック）＝①の1回目。起点は残し、2回目クリックを待つ
     } else {                                            // ①の2回目クリック＝終点で確定
       if (drawState.mode === 'dim' && dimKind === 'leader') commitLeader();     // 引出＝肘で確定（2点）
+      else if (drawState.mode === 'dim' && dimKind === 'flow') commitFlow();    // 流れ＝2点目（向き）で確定
       else if (drawState.mode === 'dim') startDimAdjust();        // 平行寸法は確定せず逃げ調整へ
       else commitGuide();                               // 同一点でゼロ長なら確定されず、起点を保持して継続
     }
@@ -13334,7 +13419,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       o.dimOff = st.dimOff || 0; o.dimSkew = st.dimSkew || 0;
       o.dimText = st.dimText || ''; o.meas = dimMeasuredStr(r.a, r.b, st);
       const k = st.dimKind || 'parallel';
-      if (k !== 'angle' && k !== 'leader') {   // 実測値（mm・編集可）：長さ/リニアは軸直交成分、他は2点間距離
+      if (k !== 'angle' && k !== 'leader' && k !== 'flow') {   // 実測値（mm・編集可）：長さ/リニアは軸直交成分、他は2点間距離
         if (st.dimFixDir && st.dimDir) {
           const dn = new V3(st.dimDir.x, st.dimDir.y, st.dimDir.z);
           if (dn.lengthSq() > 1e-9) { dn.normalize(); const ab = r.b.clone().sub(r.a); o.measMm = Math.round(ab.addScaledVector(dn, -ab.dot(dn)).length() * 10000) / 10; }
@@ -13727,7 +13812,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     const L = mm / 1000;
     if (!(L > 0) || rec.type !== 'dim') return false;
     const st = rec.style || {}, kind = st.dimKind || 'parallel';
-    if (kind === 'angle' || kind === 'leader' || kind === 'text') return false;
+    if (kind === 'angle' || kind === 'leader' || kind === 'text' || kind === 'flow') return false;
     const ab = rec.b.clone().sub(rec.a);
     if (kind === 'diameter') {                    // 中心を保って両端をφ=Lへ
       const C = rec.a.clone().add(rec.b).multiplyScalar(0.5);
@@ -13809,7 +13894,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     // モデル空間での数値入力＝実測値の変更（測定点bを動かす・2026-07-19 社長要望）。
     // 入力途中（1→15→150…）で測定点が飛ばないよう、確定（Enter/フォーカス外し）時だけ適用する。
     const st = r.style || {}, kind = st.dimKind || 'parallel';
-    const measurable = !(kind === 'angle' || kind === 'leader' || kind === 'text');
+    const measurable = !(kind === 'angle' || kind === 'leader' || kind === 'text' || kind === 'flow');
     if (measurable && DIM_MEAS_RE.test(s)) {
       if (commit && setDimMeasured(r, parseFloat(s))) {
         r.style.dimText = null;                              // 実測を変えたら上書きは解除
@@ -13890,7 +13975,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (ndc.z >= 1) { dimValForm.style.display = 'none'; return; }
     const sx = rect.left + (ndc.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-ndc.y * 0.5 + 0.5) * rect.height;
     dimValForm.style.display = 'flex';
-    dimValLabel.textContent = (r.style && (r.style.dimKind === 'leader' || r.style.dimKind === 'text')) ? (dimValEditing ? '編集' : '入力') : '値';   // 引出・文字＝編集/入力・他は値
+    dimValLabel.textContent = (r.style && ['leader', 'text', 'flow'].includes(r.style.dimKind)) ? (dimValEditing ? '編集' : '入力') : '値';   // 引出・文字・流れ＝編集/入力・他は値
     if (document.activeElement !== dimValInput) {
       dimValInput.value = (r.style.dimText != null && r.style.dimText !== '') ? String(r.style.dimText) : dimMeasuredStr(r.a, r.b, r.style);
     }
@@ -14287,7 +14372,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           drawState.dimReadjust = null; clearLineGuide();  // 半径/直径/角度の再調整中なら終える
           if (window.__openDimValueForm) window.__openDimValueForm(true);
           if (window.__focusDimValueInput) window.__focusDimValueInput();
-        } else if (recT.style && recT.style.dimKind !== 'text' && recT.style.dimKind !== 'leader') {
+        } else if (recT.style && !['text', 'leader', 'flow'].includes(recT.style.dimKind)) {
           // 寸法の値ドラッグ＝値だけを動かす（本体ドラッグ＝逃げ調整・値ダブル＝編集。2026-07-18 社長承認の割当て）
           let spr = null; recT.obj.traverse(o => { if (!spr && o.userData.dimText) spr = o; });
           lineDrag = { mode: 'dimtext', rec: recT, spr, downX: e.clientX, downY: e.clientY, moved: false };
@@ -15573,6 +15658,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     ['radius',   '半径', '中心→縁＝R'],
     ['diameter', '直径', '差し渡し＝⌀'],
     ['leader',   '引出', '注記の引出線'],
+    ['flow',     '流れ', '流れ方向の矢印（ライン名も書ける）'],
   ];
   const dimKindMenu = document.createElement('div');
   dimKindMenu.id = 'dimKindMenu';
