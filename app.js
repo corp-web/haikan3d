@@ -9,7 +9,7 @@
 
 // 版数表示：app.js 側に置くことで Date.now() 取得で毎回最新になり、普通の再読込で版数も更新される
 // （index.html はキャッシュされるので版数を埋めない）。左上ブランドへ動的に付与し、古い版数spanは掃除する。
-const APP_VER = 'v0804-G';
+const APP_VER = 'v0804-H';
 (function showVer() {
   const brand = document.querySelector('.brand');
   if (!brand) return;
@@ -11006,18 +11006,23 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       } else if (kind === 'flow') {
         // 流れ方向（2026-08-04 社長採用・案1）：a=矢の根元／b=矢の先＝流れの向き。
         // 管の少し上に浮かせた軸線＋大きめの塗りつぶし矢じり。ライン名（dimText）があれば矢の上に沿わせる。
-        grp.add(glowSeg(a, b));
-        const fd = b.clone().sub(a);
-        if (fd.lengthSq() > 1e-12) {
-          fd.normalize();
-          const len = 0.038, rad = 0.012;   // 寸法の矢印より大きい＝流れが一目で分かる
-          const cone = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 14),
-            new THREE.MeshBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
-          cone.quaternion.setFromUnitVectors(new V3(0, 1, 0), fd);
-          cone.position.copy(b.clone().addScaledVector(fd, -len / 2));
-          cone.userData.baseColor = DIM_COLOR;
-          cone.renderOrder = 998;
-          grp.add(cone);
+        // 矢印なし（flowNoArrow）＝ライン名だけを管に沿わせて出す（2026-08-04 社長要望。
+        // ただし名前も無いと何も見えなくなるので、その時は矢印を残す）
+        const noArrow = !!style.flowNoArrow && shown !== '';
+        if (!noArrow) {
+          grp.add(glowSeg(a, b));
+          const fd = b.clone().sub(a);
+          if (fd.lengthSq() > 1e-12) {
+            fd.normalize();
+            const len = 0.038, rad = 0.012;   // 寸法の矢印より大きい＝流れが一目で分かる
+            const cone = new THREE.Mesh(new THREE.ConeGeometry(rad, len, 14),
+              new THREE.MeshBasicMaterial({ color: DIM_COLOR, depthTest: false, transparent: true, opacity: 0.95 }));
+            cone.quaternion.setFromUnitVectors(new V3(0, 1, 0), fd);
+            cone.position.copy(b.clone().addScaledVector(fd, -len / 2));
+            cone.userData.baseColor = DIM_COLOR;
+            cone.renderOrder = 998;
+            grp.add(cone);
+          }
         }
         if (shown !== '') {
           const sp = dimTextSprite(shown, a, b.clone(), new V3(0, 1, 0));
@@ -11170,7 +11175,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     return best;
   }
   function addAnnotation(type, a, b, style) {
-    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat, arcA0: style.arcA0, arcA1: style.arcA1, textOff: style.textOff ? { t: style.textOff.t, n: style.textOff.n } : undefined, weldTag: style.weldTag || undefined } : styleFor(type);
+    const st = style ? { color: style.color, ltype: style.ltype, width: style.width, dimOff: style.dimOff, dimDir: style.dimDir, dimSkew: style.dimSkew, dimText: style.dimText, dimKind: style.dimKind, dimLead: style.dimLead, dimFixDir: style.dimFixDir ? { x: style.dimFixDir.x, y: style.dimFixDir.y, z: style.dimFixDir.z } : undefined, dimFixPt: style.dimFixPt ? { x: style.dimFixPt.x, y: style.dimFixPt.y, z: style.dimFixPt.z } : undefined, angP2: style.angP2 ? style.angP2.slice() : undefined, arcR: style.arcR, angReflex: style.angReflex, angReach: style.angReach ? style.angReach.slice() : undefined, textColor: style.textColor, textDeco: style.textDeco, textRot: style.textRot, rx: style.rx, rz: style.rz, quat: style.quat, arcA0: style.arcA0, arcA1: style.arcA1, textOff: style.textOff ? { t: style.textOff.t, n: style.textOff.n } : undefined, weldTag: style.weldTag || undefined, flowNoArrow: style.flowNoArrow || undefined } : styleFor(type);
     const grp = buildAnn(type, a, b, st);
     annGroup.add(grp);
     annStore.push({ type, a: a.clone(), b: b.clone(), style: st, obj: grp });
@@ -13428,6 +13433,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
       }
     }
     if (st.dimKind === 'text') { o.text = st.dimText || ''; o.textRot = st.textRot || 0; }
+    if (st.dimKind === 'flow') o.flowArrow = st.flowNoArrow ? '0' : '1';   // 矢印あり/なし（なし＝ライン名だけ）
     return o;
   };
   window.__annPropsSet = (patch) => {
@@ -13474,6 +13480,7 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
     if (patch.dimOff != null) r.style.dimOff = patch.dimOff;
     if (patch.dimSkew != null) r.style.dimSkew = patch.dimSkew;
     if (patch.dimText !== undefined) r.style.dimText = (patch.dimText === '' || patch.dimText === dimMeasuredStr(r.a, r.b, r.style)) ? null : patch.dimText;
+    if (patch.flowArrow !== undefined) r.style.flowNoArrow = (patch.flowArrow === '0' || patch.flowArrow === 0) ? 1 : null;   // 流れ矢印のあり/なし
     if (patch.text !== undefined) r.style.dimText = patch.text === '' ? null : patch.text;
     if (patch.textRot != null) r.style.textRot = patch.textRot;
     rebuildAnn(r);
@@ -15336,6 +15343,8 @@ refreshItemList();    // 設置アイテム一覧を初期化（空表示）
           edRow('実測値', { get: () => (window.__annPropsGet() || {}).measMm || 0, set: v => { if (v > 0) window.__annPropsSet({ meas: v }); }, unit: 'mm', step: 1 });
         else roRow('実測値', () => (window.__annPropsGet() || {}).meas || '');   // 角度・引出＝読み取りのみ
         edRow('値(上書き)', { type: 'text', get: () => (window.__annPropsGet() || {}).dimText || '', set: v => window.__annPropsSet({ dimText: String(v) }) });
+        if (a.kind === 'flow') edRow('矢印', { options: [['1', 'あり'], ['0', 'なし（ライン名だけ）']],
+          get: () => (window.__annPropsGet() || {}).flowArrow || '1', set: v => window.__annPropsSet({ flowArrow: v }) });
         if (a.dimOff != null) edRow('逃げ', { get: () => { const g = window.__annPropsGet(); return g ? Math.round((g.dimOff || 0) * 1000) : 0; }, set: v => window.__annPropsSet({ dimOff: v / 1000 }), unit: 'mm', step: 1 });
         if (a.dimOff != null) edRow('スライド角', { get: () => (window.__annPropsGet() || {}).dimSkew || 0, set: v => window.__annPropsSet({ dimSkew: Math.max(-80, Math.min(80, v)) }), unit: '°', step: 1 });
       }
